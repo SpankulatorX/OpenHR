@@ -1,170 +1,136 @@
 # OpenHR
 
-**Open-source HR-system for svenska regioner och kommuner.**
+**Öppen källkod-HR-system för svenska regioner och kommuner.**
 
-OpenHR ar ett personalhanteringssystem byggt for att ersatta HEROMA och andra proprietara HR-system inom svensk offentlig sektor. Byggt med oppen kallkod (AGPL-3.0), svensk arbetsratt, kollektivavtal och GDPR.
+OpenHR är ett personalhanteringssystem byggt för att ersätta HEROMA och andra proprietära HR-system inom svensk offentlig sektor. Byggt med öppen källkod (AGPL-3.0), svensk arbetsrätt, kollektivavtal och GDPR.
 
-> **OpenHR 2.2** — 38 moduler, 214 sidor, 240 domanfiler, **2 165 tester (alla grona)**, 329/330 i18n-nycklar (sv+en). Bygg: `dotnet test RegionHR.sln`.
+> **OpenHR 2.2** — 38 moduler, 214 sidor, 240 domänfiler, **2 165 tester (alla gröna)**, 329/330 i18n-nycklar (sv+en). Bygg: `dotnet test RegionHR.sln`.
 
-## Status & begransningar (las forst)
+## Status & begränsningar (läs först)
 
-OpenHR ar en **fungerande, testad demonstrator** — inte en skarp driftsatt Heroma-ersattare an, men tacker nu regionens nio funktionella delprojekt OCH storre delen av integrationslandskapet (IT-arkitektur "Personalstod v7"). Vad som ar pa riktigt vs demo:
+OpenHR är en **fungerande, testad demonstrator** — inte en skarp driftsatt Heroma-ersättare än, men täcker nu regionens nio funktionella delprojekt OCH större delen av integrationslandskapet (IT-arkitektur "Personalstöd v7"). Vad som är på riktigt vs demo:
 
-- **Pa riktigt:** loneberakning med korrekta 2026-varden (skattetabell, AB O-tillagg, arbetsgivaravgift, traktamente); hela HR-livscykeln (anstalla→schema→tid→lon→utbetalningsfil); rollbaserad URL-behorighet (Anstalld nar aldrig lon/audit/admin); lonefloden (utmatning/fackavgift, tolkersattning, ersattning fortroendevalda); AKAP-KR-pension; LAS auto-kedja; behovsstyrd vardschema-automatik; e-arkiv (arkivlagen); SCORM/e-learning; web push; BI/DW-export + realtids-beslutsstod; KLASSA-informationsklassning; **integrationsramverk** (register + SFTP-transport + jobb-runner + korningslogg + overvakning) med filgeneratorer/adaptrar for AGI, pain.001, KPA-pension, FK-anmalan, SIE/Raindance-kontering, folkbokforing-import, KOLL-export, SCB/SKR-statistik. 2 165 grona tester.
-- **Demo/simulering (kraver externa avtal for skarp drift):** inloggning (BankID/SITHS simulerad; Entra/OIDC ar config-ready via `appsettings` "Oidc"); HSA-katalogen (sandbox); skarp natverkstransport till bank/Forsakringskassan/KPA/Skatteverket-Navet/Inera/Health Connect — filformaten ar byggda + config-ready, bara den avtalsbundna kopplingen fattas. Se `docs/drift-reservloneplan.md`.
-- **Aterstar for produktion:** horisontell skalning for 11 000 anvandare (lasttest: ~1,1 MiB/circuit, median 14 ms → en 2 GB-instans klarar ~1 500 samtidiga; 11k = 2–4 instanser bakom lastbalanserare), skarpa integrationer (avtal), formell KLASSA-riskanalys, drift-SLA. Se [gap-analys](docs/gap-analysis-enterprise-hr.md).
+- **På riktigt:** löneberäkning med korrekta 2026-värden (skattetabell, AB O-tillägg, arbetsgivaravgift, traktamente); hela HR-livscykeln (anställa→schema→tid→lön→utbetalningsfil); rollbaserad URL-behörighet (Anställd når aldrig lön/audit/admin); löneflöden (utmätning/fackavgift, tolkersättning, ersättning förtroendevalda); AKAP-KR-pension; LAS auto-kedja; behovsstyrd vårdschema-automatik; e-arkiv (arkivlagen); SCORM/e-learning; web push; BI/DW-export + realtids-beslutsstöd; KLASSA-informationsklassning; **integrationsramverk** (register + SFTP-transport + jobb-runner + körningslogg + övervakning) med filgeneratorer/adaptrar för AGI, pain.001, KPA-pension, FK-anmälan, SIE/Raindance-kontering, folkbokföring-import, KOLL-export, SCB/SKR-statistik. 2 165 gröna tester.
+- **Demo/simulering (kräver externa avtal för skarp drift):** inloggning (BankID/SITHS simulerad; Entra/OIDC är config-ready via `appsettings` "Oidc"); HSA-katalogen (sandbox); skarp nätverkstransport till bank/Försäkringskassan/KPA/Skatteverket-Navet/Inera/Health Connect — filformaten är byggda + config-ready, bara den avtalsbundna kopplingen fattas. Se `docs/drift-reservloneplan.md`.
+- **Återstår för produktion:** horisontell skalning för 11 000 användare (lasttest: ~1,1 MiB/circuit, median 14 ms → en 2 GB-instans klarar ~1 500 samtidiga; 11k = 2–4 instanser bakom lastbalanserare), skarpa integrationer (avtal), formell KLASSA-riskanalys, drift-SLA. Se [gap-analys](docs/gap-analysis-enterprise-hr.md).
 
 ## Funktionsstatus
 
-### Berakningsmotorer (kopplade till UI, korrekta 2026-varden)
-Riktiga berakningar med svensk lagstiftning, anropade direkt fran lonekorningen:
+### Beräkningsmotorer (kopplade till UI, korrekta 2026-värden)
+Riktiga beräkningar med svensk lagstiftning, anropade direkt från lönekörningen:
 
-- **PayrollCalculationEngine** — brutto→netto via seedad **skattetabell** (Skatteverket tabell 34); arbetsgivaravgift 31,42% (aldre 10,21% for fodda ≤1958; 1937− = 0%; temporar ungdomsnedsattning 20,81%); statlig skatt over skiktgrans 643 000 kr/ar
-- **CollectiveAgreementRulesEngine** — AB §21 O-tillagg (kvall 25,60 / natt 56,70 / helg 66,10 / storhelg 126,90 kr/h), overtid §20, semester §27 per alder; arsversionerat
-- **TraktamentsCalculator** — inrikes 300/150 kr + maltidsavdrag enligt Skatteverket 2026 (SKV 354); arsversionerat
+- **PayrollCalculationEngine** — brutto→netto via seedad **skattetabell** (Skatteverket tabell 34); arbetsgivaravgift 31,42 % (äldre 10,21 % för födda ≤1958; 1937− = 0 %; temporär ungdomsnedsättning 20,81 %); statlig skatt över skiktgräns 643 000 kr/år
+- **CollectiveAgreementRulesEngine** — AB §21 O-tillägg (kväll 25,60 / natt 56,70 / helg 66,10 / storhelg 126,90 kr/h), övertid §20, semester §27 per ålder; årsversionerat
+- **TraktamentsCalculator** — inrikes 300/150 kr + måltidsavdrag enligt Skatteverket 2026 (SKV 354); årsversionerat
 - **ConstraintScheduleSolver + ArbetstidslagenValidator** — schemaoptimering med ATL-kontroll (dygnsvila 11h, veckovila 36h)
-- **Integrationsformat** — AGI-XML (Skatteverket SKV 269, faltkod + specifikationsnummer), pain.001.001.03 (ISO 20022, riktiga person-/bankuppgifter), nedladdas via /lon/export
+- **Integrationsformat** — AGI-XML (Skatteverket SKV 269, fältkod + specifikationsnummer), pain.001.001.03 (ISO 20022, riktiga person-/bankuppgifter), nedladdas via /lon/export
 
-### Karnmoduler (DB-backed, domanlogik)
-Fullstandig datamodell med entities, domanmetoder, EF Core-konfiguration, migrationer och seed:
+### Kärnmoduler (DB-backed, domänlogik)
+Fullständig datamodell med entities, domänmetoder, EF Core-konfiguration, migrationer och seed:
 
-| Modul | Entities | Domanflode | Routes |
+| Modul | Entities | Domänflöde | Routes |
 |-------|----------|------------|--------|
-| **Personalregister** | Employee, Employment, OrganizationUnit | Skapa, anstall, organisationstrad | `/anstallda`, `/anstallda/ny`, `/organisation` |
-| **Ledighet** | LeaveRequest, VacationBalance, SickLeaveNotification | Skapa→SkickaIn→Godkann/Avvisa | `/ledighet/*` (7 routes) |
-| **Lon/Payroll** | PayrollRun, PayrollResult, PayrollResultLine, SalaryCode | Skapa→Paborja→LaggTillResultat→Beraknad→Godkand→Utbetald | `/lon/*` (5 routes) |
-| **Schema/Tid** | Schedule, ScheduledShift, Timesheet, TimeClockEvent, ShiftSwapRequest, StaffingTemplate | Schema→Pass, Stampla In/Ut, Tidrapport→Godkann. **Shift Bidding**: OpenShift, ShiftBid, ShiftBidResult — budgivning pa oppna pass | `/schema/*`, `/tidrapporter/*`, `/stampling` |
-| **Arenden** | Case, CaseApproval, CaseComment | SkapaFranvaroarende→Godkann. **Grievance Management**: Grievance, GrievanceInvestigation, GrievanceHearing, GrievanceAppeal — formell klagomal-process med utredning och overklagan | `/arenden/*`, `/godkannanden` |
-| **MBL** | MBLNegotiation | Skapa→Paborja→Avsluta→RegistreraProtokoll | `/arenden/mbl` |
-| **LAS** | LASAccumulation, LASPeriod, LASEvent | Perioder, statusberakning, foretradesratt | `/las` |
-| **HalsoSAM/Rehab** | RehabCase, RehabUppfoljning | Skapa, milstolpar (dag 14/90/180/365) | `/halsosam/*` |
-| **Kompetens** | Skill, EmployeeSkill, PositionSkillRequirement, Certification, MandatoryTraining | Gap-analys, certifieringsstatus | `/kompetens/*` |
-| **Medarbetarsamtal** | PerformanceReview | Skapa→Sjalvbedomning→Chefsbedomning→Genomford | `/medarbetarsamtal/*` |
-| **360-feedback** | FeedbackRound, FeedbackResponse | Skapa→Oppna→Stang, betyg 1-5 | `/medarbetarsamtal/360` |
-| **Pulsundersokning** | PulseSurvey, PulseSurveyQuestion, PulseSurveyResponse, PulseSurveyAnswer | Skapa→Oppna→Svara→Stang. Anonyma svar. | `/admin/pulsundersokning/*` |
-| **Policyer** | Policy, PolicyConfirmation | Skapa→Publicera→Arkivera, bekraftelse per anstalld | `/dokument/policyer/*` |
-| **Dokument** | Document, DocumentTemplate | Filuppladdning, metadata, mallgenerering | `/dokument/*` |
-| **Notiser** | Notification, NotificationTemplate, NotificationPreference, **PushSubscription** | Skapa, MarkAsRead, personliga preferenser, **push-prenumeration** (Web Push) | `/notiser/*` |
+| **Personalregister** | Employee, Employment, OrganizationUnit | Skapa, anställ, organisationsträd | `/anstallda`, `/anstallda/ny`, `/organisation` |
+| **Ledighet** | LeaveRequest, VacationBalance, SickLeaveNotification | Skapa→SkickaIn→Godkänn/Avvisa; drar semestersaldo + avbokar schemapass vid godkännande | `/ledighet/*` (7 routes) |
+| **Lön/Payroll** | PayrollRun, PayrollResult, PayrollResultLine, SalaryCode | Skapa→Påbörja→LäggTillResultat→Beräknad→Godkänd→Utbetald (riktig motor); retroaktiv körning | `/lon/*` |
+| **Schema/Tid** | Schedule, ScheduledShift, Timesheet, TimeClockEvent, ShiftSwapRequest, StaffingTemplate, FlexBalance | Grundschema + visuell redigering, ATL-varning, stämpling, flexsaldo. Behovsstyrd automatik. **Shift Bidding**: OpenShift, ShiftBid | `/schema/*`, `/tidrapporter/*`, `/stampling`, `/minsida/stampling` |
+| **Ärenden** | Case, CaseApproval, CaseComment | SkapaFrånvaroärende→Godkänn. **Grievance Management**: Grievance, GrievanceInvestigation, GrievanceHearing, GrievanceAppeal — formell klagomålsprocess med utredning och överklagan | `/arenden/*`, `/godkannanden` |
+| **MBL** | MBLNegotiation | Skapa→Påbörja→Avsluta→RegistreraProtokoll | `/arenden/mbl` |
+| **LAS** | LASAccumulation, LASPeriod, LASEvent | Perioder, statusberäkning, företrädesrätt; auto-kedja via anställningsevents; HR-varningar | `/las` |
+| **HälsoSAM/Rehab** | RehabCase, RehabUppfoljning | Milstolpar förankrade i sjukdag 1 (dag 14/90/180/365), auto-triggning, FK-anmälan | `/halsosam/*` |
+| **Kompetens** | Skill, EmployeeSkill, PositionSkillRequirement, Certification, MandatoryTraining | Gap-analys, certifieringsstatus, kopplad till medarbetarsamtal→utvecklingsplan | `/kompetens/*` |
+| **Medarbetarsamtal** | PerformanceReview | Skapa→Självbedömning→Chefsbedömning→Genomförd | `/medarbetarsamtal/*` |
+| **360-feedback** | FeedbackRound, FeedbackResponse | Skapa→Öppna→Stäng, betyg 1-5 | `/medarbetarsamtal/360` |
+| **Pulsundersökning** | PulseSurvey, PulseSurveyQuestion, PulseSurveyResponse, PulseSurveyAnswer | Skapa→Öppna→Svara→Stäng. Anonyma svar. | `/admin/pulsundersokning/*` |
+| **Policyer** | Policy, PolicyConfirmation | Skapa→Publicera→Arkivera, bekräftelse per anställd | `/dokument/policyer/*` |
+| **Dokument & e-arkiv** | Document, DocumentTemplate, ArchivedDocument | Filuppladdning, mallgenerering; oföränderligt e-arkiv (arkivlagen) + gallringsfrist + legal hold | `/dokument/*`, `/dokument/earkiv` |
+| **Notiser** | Notification, NotificationTemplate, NotificationPreference, **PushSubscription** | Skapa, markera läst, personliga preferenser, **web push** (VAPID) till mobil/webbläsare | `/notiser/*` |
 | **Positioner** | Position, PositionHistorik, HeadcountPlan | Skapa→Tillsatt/Vakant/Frys | `/positioner` |
-| **Successionsplanering** | SuccessionPlan | Position→Kandidat, beredskapsniva | `/admin/succession` |
-| **Rekrytering** | Vacancy, Application, OnboardingChecklist, Scorecard, InterviewSchedule, ReferenceCheck | Publicera→TaEmotAnsokan→Pipeline→Tillsatt | `/rekrytering/*` |
-| **Resor** | TravelClaim, ExpenseItem | Skapa→SattTraktamente→SkickaIn→Attestera | `/resor` |
-| **Offboarding** | OffboardingCase, OffboardingItem | Skapa (auto 8 steg)→MarkeraSomPagar→Slutfor | `/offboarding/*` |
-| **Loneoversyn** | SalaryReviewRound, SalaryProposal | Skapa→FackligAvstemning→Godkand→Genomford | `/loneoversyn` |
-| **Benefits** | Benefit, EmployeeBenefit | Anmala→Godkann | `/formaner/*` |
-| **Friskvard** | WellnessClaim | Skapa→Godkann/Avvisa, max 5000 kr/ar | `/formaner/friskvard` |
-| **Forsakringar** | InsuranceCoverage | TGL, AGS, TFA, AFA, PSA | `/formaner/forsakringar` |
-| **Anslagstavla** | Announcement | Skapa→Publicera→Arkivera, prioritetsniver | `/admin/anslagstavla` |
-| **Peer Recognition** | Recognition | Ge berom till kollega med kategori | `/admin/berom` |
-| **Delegering** | DelegatedAccess | Skapa→ArGiltig→Avsluta | `/admin/delegering` |
-| **E-learning** | Course, CourseEnrollment, LearningPath | Anmala→Paborja→Genomford | `/utbildning/*` |
-| **GDPR** | DataSubjectRequest, RetentionRecord | Skapa→Tilldela→Slutfor, registerutdrag | `/gdpr` |
+| **Successionsplanering** | SuccessionPlan | Position→Kandidat, beredskapsnivå | `/admin/succession` |
+| **Rekrytering** | Vacancy, Application, OnboardingChecklist, Scorecard, InterviewSchedule, ReferenceCheck | Publicera→TaEmotAnsökan→Pipeline→Tillsätt→**skapar riktig anställd + onboarding** | `/rekrytering/*` |
+| **Resor** | TravelClaim, ExpenseItem | Skapa→SättTraktamente→SkickaIn→Attestera (ingen självattest); kvittouppladdning; utlandstraktamente | `/resor` |
+| **Offboarding** | OffboardingCase, OffboardingItem | Skapa (auto 8 steg)→MarkeraSomPågår→Slutför | `/offboarding/*` |
+| **Löneöversyn** | SalaryReviewRound, SalaryProposal | Skapa→FackligAvstämning→Godkänd→Genomförd (applicerar ny lön); filimport av förslag | `/loneoversyn` |
+| **Löneflöden** | Loneutmatning, Fackavgift, Facktillhorighet, Tolkersattning, ArvodePolitiker | Utmätning (KFM) + fackavgift i lönekörningen; tolkersättning; ersättning förtroendevalda | `/lon/utmatning`, `/lon/facktillhorighet`, `/lon/tolkersattning`, `/lon/fritidspolitiker` |
+| **Pension** | (beräknad tjänst) | AKAP-KR premie (6 %/31,5 %, IBB 2026) + pensionsredovisningsfil | `/lon/pension` |
+| **Benefits** | Benefit, EmployeeBenefit | Anmäl→Godkänn | `/formaner/*` |
+| **Friskvård** | WellnessClaim | Skapa→Godkänn/Avvisa, max 5000 kr/år | `/formaner/friskvard` |
+| **Försäkringar** | InsuranceCoverage | TGL, AGS, TFA, AFA, PSA | `/formaner/forsakringar` |
+| **Anslagstavla** | Announcement | Skapa→Publicera→Arkivera, prioritetsnivåer | `/admin/anslagstavla` |
+| **Peer Recognition** | Recognition | Ge beröm till kollega med kategori | `/admin/berom` |
+| **Delegering** | DelegatedAccess | Skapa→ÄrGiltig→Avsluta | `/admin/delegering` |
+| **E-learning** | Course, CourseEnrollment, LearningPath, Lesson, ScormPackage, ExternalParticipant | Anmäl→Påbörja→Genomförd; kursinnehåll/SCORM + externa deltagare | `/utbildning/*` |
+| **GDPR** | DataSubjectRequest, RetentionRecord | Skapa→Tilldela→Slutför, registerutdrag | `/gdpr` |
+| **KLASSA** | Informationsklassning (K/R/T nivå 1-4) | Informationssäkerhetsklassning av känsliga datamängder | `/admin/klassa` |
 | **Audit** | AuditEntry | Create/Update/Delete-logg | `/audit` |
-| **Talangpool** | TalentPoolEntry | Kandidater for framtida rekrytering | `/rekrytering/talangpool` |
-| **Flight Risk** | (beraknad tjanst) | 4 signaler: tenure, anstallningsform, bristyrke, deltid | `/rapporter/flight-risk` |
-| **Workforce Planning** | HeadcountPlan | Budget per enhet per ar. **Workforce Planning Scenarios** — scenariomodellering med what-if-analys | `/rapporter/workforce-plan` |
+| **Talangpool** | TalentPoolEntry | Kandidater för framtida rekrytering | `/rekrytering/talangpool` |
+| **Flight Risk** | (beräknad tjänst) | 4 signaler: tenure, anställningsform, bristyrke, deltid | `/rapporter/flight-risk` |
+| **Workforce Planning** | HeadcountPlan | Budget per enhet per år. **Scenarios** — what-if-analys | `/rapporter/workforce-plan` |
 | **Provisionering** | ProvisioningRule, ProvisioningEvent | Lokal registrering (ej extern AD/SCIM) | `/admin/provisionering` |
 | **Journeys** | JourneyTemplate, JourneyInstance | Onboarding/offboarding-mallar med steg | `/journeys/*` |
-| **Migreringsmotor** | MigrationProject, MigrationMapping, MigrationRun, m.fl. | PAXml 2.0, HEROMA, Personec P, Hogia, Fortnox, SIE 4i, Workday, SAP, Oracle, generisk CSV | `/admin/migrering/*` |
-| **Automatiseringsramverk** | AutomationRule, AutomationExecution, AutomationSchedule | Notify/Suggest/Autopilot, 22 regler, konfigurerbar per kategori | `/admin/automatisering/*` |
-| **Pluggbara kollektivavtal** | CollectiveAgreement, AgreementRule, AgreementVersion | 10 avtal (AB, HOK, Teknikavtalet, m.fl.), DB-driven | `/admin/avtal/*` |
-| **Compensation Suite** | SalaryBand, BonusProgram, TotalRewardsStatement, CompensationModel | Loneband, bonus, total rewards, modellering | `/kompensation/*` |
+| **Migreringsmotor** | MigrationProject, MigrationMapping, MigrationRun, m.fl. | PAXml 2.0, HEROMA (import→riktiga anställda), Personec P, Hogia, Fortnox, SIE 4i, Workday, SAP, Oracle, generisk CSV | `/admin/migration/*` |
+| **Automatiseringsramverk** | AutomationRule, AutomationExecution, AutomationSchedule | Notify/Suggest/Autopilot, 22 regler, konfigurerbar per kategori | `/admin/automation/*` |
+| **Pluggbara kollektivavtal** | CollectiveAgreement, AgreementRule, LokalAvtalsAvvikelse | AB, HÖK m.fl. DB-driven; lokala avtalsavvikelser per enhet | `/admin/avtal/*` |
+| **Compensation Suite** | SalaryBand, BonusProgram, TotalRewardsStatement, CompensationModel | Löneband, bonus, total rewards, modellering | `/kompensation/*` |
 | **Benefits Engine** | BenefitPlan, EligibilityRule, LifeEvent, EnrollmentWindow, BenefitStatement | Eligibility rules, life events, enrollment, statements | `/formaner/engine/*` |
-| **Enterprise Analytics** | KpiDefinition, PredictiveModel, AnalyticsDashboard | 10 KPI:er, prediktiva modeller, self-service rapportbyggare. **Workforce Planning Scenarios** for headcount-prognoser | `/analytics/*` |
-| **VMS/Inhyrd personal** | Vendor, FrameworkAgreement, RateCard, ContingentWorker, SpendAnalytics | Leverantorer, ramavtal, rate cards, spend analytics. **F-skatt Compliance** — verifiering av F-skattsedel for inhyrda | `/vms/*` |
-| **Avancerad WFM** | DemandForecast, FatigueScore, OptimizationRun, ShiftBid | Demand forecasting, fatigue scoring, optimering | `/schema/wfm/*` |
-| **Talent Marketplace** | CareerPath, InternalPosting, Mentorship, SkillIntelligence | Karrarsvagar, intern mobilitet, mentorskap, skills intelligence | `/talang/*` |
-| **Plattform** | WebhookSubscription, WebhookDelivery, ApiKey, CustomObjectDefinition, MarketplacePlugin | Webhooks (HMAC-SHA256), API-nycklar, custom objects, marketplace | `/admin/plattform/*` |
-| **HR Service Delivery** | ServiceRequest, ServiceCategory, SLADefinition, HRQueue, CaseTemplate, CaseSatisfaction | Arenderutt med SLA, agentarbetsyta, CSAT-matning, mallar | `/helpdesk/*` |
-| **AI HR-assistent** | KnowledgeArticle, KnowledgeCategory, ConversationSession, ConversationMessage, AssistantAction | 20 kunskapsartiklar, konversationspersistens, atgardsforslag | `/kunskapsbas/*` |
-| **Manager Effectiveness** | (integrerad i chefsportalen) | 1:1-moten, scorecard, coaching-nudges for chefer | `/chef/*` |
-| **ONA** | (beraknad tjanst) | Organisational Network Analysis — samarbetsmonster och kommunikationsfloden | `/rapporter/ona` |
+| **Enterprise Analytics & BI** | KpiDefinition, PredictiveModel, AnalyticsDashboard | KPI:er, prediktiva modeller, self-service rapportbyggare, **BI/DW-export** + realtids-beslutsstöd | `/analytics/*`, `/rapporter/beslutsstod` |
+| **VMS/Inhyrd personal** | Vendor, FrameworkAgreement, RateCard, ContingentWorker | Leverantörer, ramavtal, rate cards. **F-skatt Compliance** | `/vms/*` |
+| **Avancerad WFM** | DemandForecast, FatigueScore, SchedulingRun, ShiftBid | Demand forecasting, fatigue scoring, optimering | `/schema/wfm/*` |
+| **Talent Marketplace** | CareerPath, InternalPosting, Mentorship, SkillIntelligence | Karriärvägar, intern mobilitet, mentorskap | `/talang/*` |
+| **Plattform** | WebhookSubscription, WebhookDelivery, ApiKey, CustomObject | Webhooks (HMAC-SHA256), API-nycklar, custom objects | `/admin/plattform/*` |
+| **Integrationsramverk** | IntegrationDefinition, IntegrationRunLog, OutboxMessage | Register över 27 integrationer, SFTP-transport, jobb-runner, körningslogg, övervakning + omkörning | `/integrationer/oversikt` |
+| **HR Service Delivery** | ServiceRequest, ServiceCategory, SLADefinition, HRQueue, CaseTemplate | Ärenderutt med SLA, agentarbetsyta, CSAT-mätning, mallar | `/helpdesk/*` |
+| **AI HR-assistent** | KnowledgeArticle, ConversationSession, AssistantAction | Kunskapsartiklar, konversationspersistens, åtgärdsförslag | `/kunskapsbas/*` |
+| **ONA** | (beräknad tjänst) | Organisational Network Analysis — samarbetsmönster | `/rapporter/ona` |
+
+### Integrationer mot regionens ekosystem (IT-arkitektur "Personalstöd v7")
+Filgeneratorer/adaptrar byggda och config-ready mot integrationsmotorn Health Connect (skarp nätverkstransport kräver avtal):
+- **Skatteverket** — AGI-XML (SKV 269) + skattetabell; folkbokföring-import (Navet-format, skyddad identitet)
+- **Nordea/bank** — pain.001.001.03 (ISO 20022) lönefil
+- **KPA** — AKAP-KR pensionsredovisning
+- **Försäkringskassan** — sjukanmälan/rehab-underlag
+- **CGI-Raindance** — konteringsfil (Raindance-CSV eller SIE typ 4)
+- **KOLL (RÖL katalogtjänst)** — anställningsmasterdata-export
+- **SCB** — lönestatistik + sjuklönestatistik
+- **SKR** — novemberstatistik
+- **BI/DW** — dimensionsmodellerad export (CSV+JSON) för Power BI/Diver + realtids-dashboard
 
 ### Rapporter & Analytics (DB-backed)
-Alla rapportvyer laser fran verklig DB-data:
-- **Workforce Analytics** — headcount, anstallningsformer, snittalder, per-enhet-breakdown
-- **Lonekartering** — loneskillnadsanalys per befattning (diskrimineringslagen)
-- **Kostnadssimulering** — total lonekostnad + AG-avgifter per enhet
-- **SCB-export** — personalstatistik i KLR-format (lokal forhandsvy)
-- **Lonestatistik** — PayrollRun-aggregering per manad
-- **Rekryteringsstatistik** — Vacancy/Application-aggregering
-- **Standardrapporter** — Personalforteckning, loneregister fran DB
-- **EU Pay Transparency** — loneransparensrapportering enligt EU-direktivet 2023/970, pay gap-analys per kohort
-- **Workforce Planning Scenarios** — scenariomodellering for framtida personalbehov
+Alla rapportvyer läser från verklig DB-data:
+- **Workforce Analytics** — headcount, anställningsformer, snittålder, per-enhet-breakdown
+- **Lönekartering** — löneskillnadsanalys per befattning (diskrimineringslagen)
+- **Kostnadssimulering** — total lönekostnad + AG-avgifter per enhet
+- **Beslutsstöd** — realtids-KPI:er (personalomsättning, sjukfrånvaro %, bemanningsgrad, LAS-risk, lönekostnad/enhet)
+- **EU Pay Transparency** — lönetransparensrapportering enligt EU-direktivet 2023/970, pay gap-analys per kohort
 
 ### Auth & personalisering
-- **Demo-auth** med EmployeeId i session (4 profiler: Anna/Anstalld, Eva/Chef, Karl/HR, Admin)
-- **MinSida** (6 personliga vyer) — schema, lon, ledighet, arenden, profil, lonespecifikationer
-- **Chefsportal** — teamvy filtrerad pa chefens enhet, franvarokalender, godkannanden
-- **Auth-guards** — personalbundna actions (godkann, avvisa, skapa) blockeras utan EmployeeId
-- **0 Guid.Empty** i personalbundna floden
+- **Rollbaserad session** (ClaimsPrincipal via AuthenticationStateProvider) med central path→roll-policy — Anställd når aldrig lön/audit/admin ens via direkt-URL
+- **Demo-inloggning** med profilval (Anna/Anställd, Eva/Chef, Karl/HR, Admin); **Entra/OIDC config-ready** för skarp federation
+- **MinSida** — schema, lön, ledighet, ärenden, profil, lönespecifikationer, stämpling, saldon
+- **Chefsportal** — teamvy filtrerad på chefens enhet (org-scoping), frånvarokalender, godkännanden
 
 ### Internationalisering (i18n)
 - **329/330 nycklar** i sv + en (SharedResources.sv.resx / SharedResources.en.resx)
-- NavMenu, TopBar, formularlabels, felmeddelanden — allt via IStringLocalizer
-- Sprakvaxling via cookie + page reload
-- Forberett for fler sprak (lagg till .resx-fil)
+- NavMenu, TopBar, formulärlabels, felmeddelanden — allt via IStringLocalizer
+- Språkväxling via cookie + page reload; förberett för fler språk (lägg till .resx-fil)
 
 ### Infrastruktur
 - **CI/CD** — GitHub Actions (build + test + publish)
 - **Docker Compose** — PostgreSQL + app
-- **PWA** — Enhanced service worker med offline data caching (schema, saldon, notiser), network-first for API, cache-first for statiska resurser, background sync for offline-actions (ledighetsbegaran, stampling), push-notiser (Web Push), bottom navigation, manifest med genvagar
-- **Sakerhet** — CSP headers, rate limiting, X-Frame-Options, CSRF
-- **Bakgrundsjobb** — NotificationReminder, RetentionCleanup, CertificationReminder, LASAlert
+- **PWA** — service worker med offline-cache, background sync, push-notiser (Web Push), bottom navigation
+- **Säkerhet** — CSP headers, rate limiting, X-Frame-Options, CSRF; InMemory-DB hård-failar i produktion
+- **Drift** — `/health` (liveness) + `/health/ready` (readiness), `/admin/drift-status`, reservlöneplan (`docs/drift-reservloneplan.md`)
+- **Bakgrundsjobb** — NotificationReminder, RetentionCleanup, CertificationReminder, LASAlert, RehabAutoTrigger
 
 ### Trust & Security
-OpenHR har en dedikerad [/trust](/trust)-sida med:
-- Sakerhetsarkitektur och design-principer
-- OWASP ASVS sjalvbedomning
-- GDPR-complianceguide
-- DPA-mall for personuppgiftsbitradesavtal
-- Deployment-guide med hardenings-rekommendationer
+OpenHR har en dedikerad [/trust](/trust)-sida med säkerhetsarkitektur, OWASP ASVS-självbedömning, GDPR-complianceguide, DPA-mall och deployment-guide. Se även `docs/security/`.
 
-Se aven `docs/security/` for detaljerad dokumentation: OWASP ASVS, GDPR-guide, DPA-mall, deployment-guide.
-
-### 2.0 Expansion
-
-OpenHR 2.0 Enterprise Expansion lagger till ~100 nya domanentities, 12+ nya moduler och ~80 nya sidor:
-
-**Fas A — Automation, Migrering & Avtal**
-- **Migreringsmotor** med 10 adaptrar: PAXml 2.0, HEROMA, Personec P, Hogia, Fortnox, SIE 4i, Workday, SAP, Oracle HCM och generisk CSV. Stoder faltmappning, validering, dry-run och rollback.
-- **Automatiseringsramverk** med tre atgardsniver (Notify, Suggest, Autopilot) och 22 fordefinierade regler (sjukfranvaro-eskalering, LAS-varningar, certifiering-paminnelser, m.fl.). Konfigurerbar per kategori.
-- **Pluggbara kollektivavtal** — 10 seedade avtal (AB, HOK 24, Teknikavtalet, Vardforbundets avtal, m.fl.) med DB-driven regelmotor. Varje anstallning knyts till ett avtal.
-
-**Fas B — Analytics, Compensation, Benefits, VMS, WFM & Talent**
-- **Compensation Suite** — loneband, bonusprogram, total rewards-utlatanden och scenariomodellering.
-- **Benefits Engine** — planhantering, eligibility rules, life events, enrollment windows och statements.
-- **Enterprise Analytics** — 10 KPI-definitioner, prediktiva modeller (turnover, sjukfranvaro), self-service rapportbyggare med drag-and-drop kolumner. **Workforce Planning Scenarios** for headcount-prognoser.
-- **VMS (Vendor Management System)** — leverantorsregister, ramavtal, rate cards, inhyrd personal, spend analytics och **F-skatt Compliance**.
-- **Avancerad WFM** — demand forecasting baserat pa historisk data, fatigue scoring (EU-arbetstidsdirektivet), optimeringsalgoritm och **skiftbudgivning**.
-- **Talent Marketplace** — karriarvagar, interna utlysningar med matchningspoang, mentorskapsprogram och skills intelligence.
-
-**Fas C — Plattform & Ekosystem**
-- **Webhooks** med HMAC-SHA256-signering, retry med exponential backoff och leveranslogg.
-- **API-nycklar** med scope-begransning, hash-lagring och utgangsdatum.
-- **Custom Objects** — dynamiska entiteter med JSON Schema-validering.
-- **Marketplace** — pluginregister med installation, konfiguration och versionshantering.
-
-**Fas D — Service Delivery, AI & Compliance**
-- **HR Service Delivery** — arendehantering med SLA, agentarbetsyta, routing-regler, CSAT-matning, mallar.
-- **AI HR-assistent** — kunskapsbas med 20 artiklar, konversationspersistens, atgardsforslag, kontextmedveten.
-- **Shift Bidding** — budgivning pa oppna pass med preferenser och automatisk tilldelning.
-- **Grievance Management** — formell klagomal-process med utredning, hearing och overklagan.
-- **EU Pay Transparency** — lonerapportering enligt EU-direktivet 2023/970, pay gap-analys per kohort.
-- **Manager Effectiveness** — 1:1-moten, scorecard, coaching-nudges for chefer.
-- **ONA (Organizational Network Analysis)** — samarbetsmonster och kommunikationsfloden.
-- **Deep PWA** — offline data caching, push-notiser, background sync, bottom navigation, swipe-gester.
-
-### Uttryckligen utanfor nuvarande scope
-Dessa kraver extern infrastruktur eller livekopplingar och ar medvetet inte implementerade:
-- Riktig BankID/SITHS-inloggning (nuvarande auth ar demo-simulering)
-- Externa integrationer: Forsakringskassan, AD/Entra, Platsbanken, SCB live, banker
-- Native mobilapp (PWA med offline-stod och push-notiser anvands istallet)
-- Realtidspush via SignalR (infrastrukturen finns men ej aktiverad)
-
-### Kvarvarande begransningar
-- **Seeddata-beroende** — manga vyer forlitar sig pa seed for att visa data; i produktion behovs riktiga arbetsfloden
-- **Demo-auth** — namnbaserad matchning mot seedade anstallda, inte en riktig identity provider
+### Uttryckligen utanför nuvarande scope (kräver kostnad/avtal)
+Dessa kräver betalda avtal eller livekopplingar som regionen tecknar — filformaten och adaptrarna bakom dem är byggda och config-ready, men den skarpa transporten är medvetet inte aktiverad:
+- Riktig BankID/SITHS-legitimation (nuvarande inloggning är demo-simulering; Entra/OIDC är config-ready)
+- Skarp nätverkstransport till bank, Försäkringskassan, KPA, Skatteverket/Navet, Inera/HSA och RÖL:s Health Connect
+- Native mobilapp (PWA med offline-stöd och push-notiser används i stället)
+- Horisontell skalning för 11 000 samtidiga användare (driftbeslut: 2–4 instanser bakom lastbalanserare)
 
 ## Tech Stack
 
@@ -174,11 +140,11 @@ Dessa kraver extern infrastruktur eller livekopplingar och ar medvetet inte impl
 | Frontend | Blazor Server, MudBlazor 9.1 |
 | Databas | PostgreSQL 17 |
 | ORM | EF Core 9 med migrationer |
-| Arkitektur | Modular Monolith (38 moduler) |
+| Arkitektur | Modulär monolit (38 moduler) |
 | Tema | Nordic Refined (light/dark mode) |
 | Auth | Rollbaserad (ClaimsPrincipal); demo-login + Entra/OIDC config-ready |
 | i18n | 329/330 nycklar, sv + en (IStringLocalizer) |
-| PWA | Offline cache, push-notiser, background sync |
+| PWA | Offline-cache, push-notiser, background sync |
 | CI/CD | GitHub Actions |
 | Container | Docker Compose |
 | Licens | AGPL-3.0 |
@@ -189,28 +155,30 @@ Dessa kraver extern infrastruktur eller livekopplingar och ar medvetet inte impl
 ```bash
 docker compose up -d
 ```
-Oppna http://localhost:5076
+Öppna http://localhost:5076
 
 ### Utan Docker
 ```bash
 dotnet build RegionHR.sln
 dotnet run --project src/Web/RegionHR.Web.csproj
 ```
-Oppna http://localhost:5076/login
+Öppna http://localhost:5076/login
 
-### Demo-anvandare
-| Anvandare | Roll | Ser |
+### Demo-användare
+Logga in via "BankID" (simulerad — vänta igenom animationen) och välj profil:
+
+| Användare | Roll | Ser |
 |-----------|------|-----|
-| Admin | Admin | Allt (read-only for personalbundna actions) |
-| Karl Berg | HR | Personal, Lon, Admin |
-| Eva Nilsson | Chef | Team, Godkannanden |
-| Anna Svensson | Anstalld | Min sida, Ledighet |
+| Admin | Admin | Allt |
+| Karl Berg | HR | Personal, Lön, Admin |
+| Eva Nilsson | Chef | Team, Godkännanden (egen enhet) |
+| Anna Svensson | Anställd | Min sida, Ledighet |
 
 ## Datamodell
 
-**240 domanfiler** fordelade pa 38 moduler. Alla med EF Core-konfiguration, migrationer och seeddata.
+**240 domänfiler** fördelade på 38 moduler. Alla med EF Core-konfiguration och seeddata.
 
-Nyckelentities (urval): Employee, Employment, OrganizationUnit, PayrollRun, PayrollResult, LeaveRequest, VacationBalance, Case, ScheduledShift, Timesheet, Position, Vacancy, Policy, PulseSurvey, WellnessClaim, Announcement, Recognition, SuccessionPlan, FeedbackRound, MBLNegotiation, ReferenceCheck, InsuranceCoverage, DelegatedAccess, TravelClaim, OffboardingCase, RehabCase, LASAccumulation, Certification, Skill, Course, Notification, PushSubscription, AuditEntry, Document, CollectiveAgreement, AutomationRule, MigrationProject, SalaryBand, BonusProgram, BenefitPlan, KpiDefinition, PredictiveModel, Vendor, FrameworkAgreement, DemandForecast, CareerPath, WebhookSubscription, ApiKey, CustomObjectDefinition, MarketplacePlugin, ServiceRequest, SLADefinition, KnowledgeArticle, ConversationSession, Grievance, GrievanceInvestigation, OpenShift, ShiftBid, PayTransparencyReport, PayGapAnalysis.
+Nyckelentities (urval): Employee, Employment, OrganizationUnit, PayrollRun, PayrollResult, LeaveRequest, VacationBalance, Case, ScheduledShift, Timesheet, FlexBalance, Position, Vacancy, TravelClaim, OffboardingCase, RehabCase, LASAccumulation, Certification, Skill, Course, Notification, PushSubscription, AuditEntry, Document, ArchivedDocument, CollectiveAgreement, Loneutmatning, Fackavgift, IntegrationRunLog, SalaryReviewRound, KpiDefinition, Grievance, OpenShift, ShiftBid, PayTransparencyReport.
 
 ## Utveckling
 
@@ -222,4 +190,4 @@ dotnet run --project src/Web/RegionHR.Web.csproj
 
 ## Licens
 
-AGPL-3.0 — Alla forks maste halla koden oppen.
+AGPL-3.0 — Alla forks måste hålla koden öppen.
