@@ -1,0 +1,339 @@
+@page "/lon/pension"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Text
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Integrations
+@using RegionHR.Payroll.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - Tjänstepension (AKAP-KR)</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/lon/korningar" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Tjänstepension — AKAP-KR</MudText>
+<MudText Typo="Typo.body1" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+    Beräknar avgiftsbestämd tjänstepension enligt AKAP-KR ur en lönekörning:
+    <strong>6&nbsp;%</strong> på pensionsgrundande lön upp till 7,5 inkomstbasbelopp och
+    <strong>31,5&nbsp;%</strong> på lön däröver (upp till taket 30 IBB). Redovisningen kan laddas
+    ner som CSV eller XML per period.
+</MudText>
+
+<MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Class="mb-4">
+    <strong>Standardredovisning.</strong> Filen som skapas är en tydligt märkt OpenHR-standardredovisning
+    med korrekt AKAP-KR-beräknade belopp. Skarp inlämning till pensionsleverantör
+    (t.ex. KPA eller Valcentralen/Pensionsvalet) kräver <strong>tecknat avtal</strong> och leverantörens
+    egen formatspecifikation — den kopplingen är förberedd men inte aktiverad.
+</MudAlert>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">1. Välj lönekörning</MudText>
+        @if (_korningar.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                Det finns inga lönekörningar att redovisa ännu. Skapa och beräkna en körning under
+                <MudLink Href="/lon/korningar">Lönekörningar</MudLink> först.
+            </MudAlert>
+        }
+        else
+        {
+            <MudSelect T="Guid" Value="_valdKorning" ValueChanged="OnKorningVald"
+                       Label="Lönekörning" Variant="Variant.Outlined">
+                @foreach (var k in _korningar)
+                {
+                    <MudSelectItem T="Guid" Value="k.Id">@k.Etikett</MudSelectItem>
+                }
+            </MudSelect>
+        }
+    </MudPaper>
+
+    @if (_valdKorning != Guid.Empty && _sammanfattning is not null)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">Underlag för @_periodText</MudText>
+            <MudGrid Spacing="3" Class="mb-2">
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Anställda</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@_sammanfattning.AntalRader st</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Pensionsgrundande lön</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_sammanfattning.TotalLon)</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Premie 6&nbsp;%</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_sammanfattning.TotalUnder)</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Premie 31,5&nbsp;%</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_sammanfattning.TotalOver)</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Total premie</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700; color: var(--mud-palette-primary);">
+                        @Kr(_sammanfattning.TotalPremie)
+                    </MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Inkomstbasbelopp @_ar</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_ibb)</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Brytpunkt 7,5 IBB / mån</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_brytManad)</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Över brytpunkt</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@_sammanfattning.AntalOverGrans st</MudText>
+                </MudItem>
+            </MudGrid>
+
+            @if (_sammanfattning.Status != PayrollRunStatus.Godkand && _sammanfattning.Status != PayrollRunStatus.Utbetald)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Text" Class="mt-2">
+                    Körningen har status <strong>@_sammanfattning.Status</strong>. Pensionsredovisning skapas
+                    normalt först efter att körningen är <strong>godkänd</strong>.
+                </MudAlert>
+            }
+            @if (_sammanfattning.AntalUtanPension > 0)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mt-2">
+                    @_sammanfattning.AntalUtanPension av @_sammanfattning.AntalRader anställda saknar
+                    pensionsgrundande lön i denna körning och får därför 0 kr i premie.
+                </MudAlert>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">2. Uppgiftslämnare</MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_avsandareNamn" Label="Arbetsgivarens namn"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_orgnr" Label="Organisationsnummer"
+                                  Variant="Variant.Outlined"
+                                  HelperText="Arbetsgivarens organisationsnummer" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_leverantor" Label="Pensionsleverantör (informativ)"
+                                  Variant="Variant.Outlined"
+                                  HelperText="Fritext — skarp inlämning kräver avtal med leverantören" />
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">3. Ladda ner pensionsredovisning</MudText>
+            <MudStack Row="true" Spacing="3">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           Disabled="@(_genererar || string.IsNullOrWhiteSpace(_orgnr) || _sammanfattning.AntalRader == 0)"
+                           OnClick="@(() => LaddaNer(PensionFilFormat.Csv))">
+                    CSV-redovisning
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           Disabled="@(_genererar || string.IsNullOrWhiteSpace(_orgnr) || _sammanfattning.AntalRader == 0)"
+                           OnClick="@(() => LaddaNer(PensionFilFormat.Xml))">
+                    XML-redovisning
+                </MudButton>
+            </MudStack>
+            @if (_status is not null)
+            {
+                <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-3">@_status</MudAlert>
+            }
+            @if (_fel is not null)
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Text" Class="mt-3">@_fel</MudAlert>
+            }
+        </MudPaper>
+
+        @if (_individer.Count > 0)
+        {
+            <MudPaper Class="pa-4 mb-4" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">Individrader</MudText>
+                <MudSimpleTable Dense="true" Hover="true" Style="overflow-x: auto;">
+                    <thead>
+                        <tr>
+                            <th>Namn</th>
+                            <th style="text-align:right;">Pensionsgrundande lön</th>
+                            <th style="text-align:right;">Premie 6&nbsp;%</th>
+                            <th style="text-align:right;">Premie 31,5&nbsp;%</th>
+                            <th style="text-align:right;">Total premie</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var i in _individer)
+                        {
+                            <tr>
+                                <td>@i.Namn</td>
+                                <td style="text-align:right;">@Kr(i.PensionsgrundandeLon)</td>
+                                <td style="text-align:right;">@Kr(i.PremieUnderGrans)</td>
+                                <td style="text-align:right;">@Kr(i.PremieOverGrans)</td>
+                                <td style="text-align:right; font-weight:600;">@Kr(i.TotalPremie)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        }
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private bool _genererar;
+    private Guid _valdKorning = Guid.Empty;
+    private List<KorningRad> _korningar = [];
+    private Sammanfattning? _sammanfattning;
+    private List<PensionRedovisningIndivid> _individer = [];
+    private int _ar;
+    private int _manad;
+    private string _periodText = "";
+    private decimal _ibb;
+    private decimal _brytManad;
+    private string? _status;
+    private string? _fel;
+
+    // Uppgiftslämnare (demo-defaultar för Region Örebro län).
+    private string _orgnr = "162321000016";
+    private string _avsandareNamn = "Region Örebro län";
+    private string _leverantor = "Ej vald (kräver avtal)";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var runs = await db.PayrollRuns
+            .OrderByDescending(r => r.Year).ThenByDescending(r => r.Month)
+            .Take(24)
+            .ToListAsync();
+
+        _korningar = runs.Select(r => new KorningRad(
+            r.Id.Value,
+            $"{FormatPeriod(r.Year, r.Month)} — {r.Status} ({r.AntalAnstallda} anställda)")).ToList();
+        _loading = false;
+    }
+
+    private async Task OnKorningVald(Guid id)
+    {
+        _valdKorning = id;
+        _status = null;
+        _fel = null;
+        await LaddaUnderlag(id);
+    }
+
+    private async Task LaddaUnderlag(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var run = await db.PayrollRuns.FirstOrDefaultAsync(r => r.Id == PayrollRunId.From(id));
+        if (run is null)
+        {
+            _sammanfattning = null;
+            _individer = [];
+            return;
+        }
+
+        _ar = run.Year;
+        _manad = run.Month;
+        _periodText = FormatPeriod(run.Year, run.Month);
+        _ibb = PensionsberakningsEngine.Inkomstbasbelopp(run.Year);
+        _brytManad = PensionsberakningsEngine.GransIBB * _ibb / 12m;
+
+        var results = await db.PayrollResults
+            .Where(r => r.KorningsId == PayrollRunId.From(id))
+            .ToListAsync();
+
+        var anstallIds = results.Select(r => r.AnstallId).Distinct().ToList();
+        var employees = await db.Employees
+            .Where(e => anstallIds.Contains(e.Id))
+            .ToListAsync();
+        var empById = employees.ToDictionary(e => e.Id);
+
+        var engine = new PensionsberakningsEngine();
+        _individer = results
+            .Where(r => empById.ContainsKey(r.AnstallId))
+            .Select(r =>
+            {
+                var e = empById[r.AnstallId];
+                var premie = engine.BeraknaManadspremie(r.Pensionsgrundande, run.Year);
+                return new PensionRedovisningIndivid(
+                    (string)e.Personnummer,
+                    e.FulltNamn,
+                    r.Pensionsgrundande.Amount,
+                    premie.PremieUnderGrans.Amount,
+                    premie.PremieOverGrans.Amount,
+                    premie.TotalPremie.Amount);
+            })
+            .OrderByDescending(i => i.TotalPremie)
+            .ToList();
+
+        _sammanfattning = new Sammanfattning(
+            run.Status,
+            _individer.Count,
+            _individer.Count(i => i.PremieOverGrans > 0m),
+            _individer.Count(i => i.PensionsgrundandeLon <= 0m),
+            _individer.Sum(i => i.PensionsgrundandeLon),
+            _individer.Sum(i => i.PremieUnderGrans),
+            _individer.Sum(i => i.PremieOverGrans),
+            _individer.Sum(i => i.TotalPremie));
+    }
+
+    private async Task LaddaNer(PensionFilFormat format)
+    {
+        _genererar = true;
+        _status = null;
+        _fel = null;
+        try
+        {
+            var redovisning = new PensionRedovisning(
+                _avsandareNamn,
+                _orgnr.Trim(),
+                _ar,
+                _manad,
+                _ibb,
+                _individer,
+                Avtal: "AKAP-KR",
+                Pensionsleverantor: string.IsNullOrWhiteSpace(_leverantor) ? "Ej vald (kräver avtal)" : _leverantor.Trim());
+
+            var fil = new PensionFileGenerator().Generera(redovisning, format);
+            var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(fil.Content));
+            await JS.InvokeVoidAsync("downloadFile", fil.FileName, base64, fil.ContentType);
+
+            _status = $"Pensionsredovisning ({format}) genererad för {_individer.Count} anställda " +
+                      $"(period {_periodText}). Total premie {Kr(_sammanfattning!.TotalPremie)}.";
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte skapa pensionsredovisningen: {ex.Message}";
+        }
+        finally
+        {
+            _genererar = false;
+        }
+    }
+
+    private static string Kr(decimal amount) => $"{amount:N0} kr";
+
+    private static string FormatPeriod(int year, int month)
+    {
+        var monthNames = new[] { "", "Januari", "Februari", "Mars", "April", "Maj", "Juni",
+            "Juli", "Augusti", "September", "Oktober", "November", "December" };
+        return $"{monthNames[month]} {year}";
+    }
+
+    private record KorningRad(Guid Id, string Etikett);
+
+    private record Sammanfattning(
+        PayrollRunStatus Status, int AntalRader, int AntalOverGrans, int AntalUtanPension,
+        decimal TotalLon, decimal TotalUnder, decimal TotalOver, decimal TotalPremie);
+}

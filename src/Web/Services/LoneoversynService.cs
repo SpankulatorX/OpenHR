@@ -1,7 +1,10 @@
+using System.Text;
+using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using RegionHR.Core.Domain;
 using RegionHR.Infrastructure.Persistence;
 using RegionHR.SalaryReview.Domain;
+using RegionHR.SalaryReview.Services;
 using RegionHR.SharedKernel.Domain;
 
 namespace RegionHR.Web.Services;
@@ -163,6 +166,240 @@ public sealed class LoneoversynService
         return anstallda.ToDictionary(e => e.Id, e => e.FulltNamn);
     }
 
+    // ─────────────────────────── Filimport av löneförslag ───────────────────────────
+
+    private readonly SalaryProposalImportParser _importParser = new();
+
+    /// <summary>
+    /// Läser en uppladdad CSV- eller Excel-fil, tolkar löneförslagen och matchar varje rad
+    /// mot en anställd + aktiv anställning i rundan. Committar ingenting — resultatet är en
+    /// förhandsgranskning med giltiga rader och tydliga fel per rad, som sidan visar innan
+    /// användaren bekräftar. Systemet är experten: rader som skulle spränga budget, sakna
+    /// anställd eller dubbleras avvisas redan här.
+    /// </summary>
+    public async Task<SalaryImportForhandsvisning> FortolkaFilAsync(
+        Guid rundaId, Stream fil, string filnamn, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var runda = await LaddaRundaAsync(db, rundaId, ct);
+        if (runda.Status != SalaryReviewStatus.Planering)
+            throw new InvalidOperationException("Import kan bara göras när rundan är i planeringsfasen.");
+
+        var parseResultat = await TolkaFilAsync(fil, filnamn, ct);
+        if (!parseResultat.HarRader)
+            return new SalaryImportForhandsvisning(rundaId, [], parseResultat.GlobalaFel, 0, 0);
+
+        var anstallda = await db.Employees.Include(e => e.Anstallningar).ToListAsync(ct);
+        // Gruppera först: om registret mot förmodan har dubblett-pnr ska uppslaget inte krascha.
+        var perPnr = anstallda
+            .GroupBy(e => (string)e.Personnummer)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var rader = new List<SalaryImportForslagRad>();
+        var sedanAnstallningar = new HashSet<EmploymentId>();
+        var lopandeFordelad = runda.FordeladBudget;
+
+        foreach (var parsad in parseResultat.Rader)
+        {
+            var fel = new List<string>(parsad.Fel);
+
+            Employee? anstalld = null;
+            Employment? anstallning = null;
+
+            if (parsad.ArGiltig && parsad.Personnummer is { } pnr)
+            {
+                if (!perPnr.TryGetValue((string)pnr, out anstalld))
+                {
+                    fel.Add($"Ingen anställd med personnummer {pnr.ToMaskedString()} i registret.");
+                }
+                else
+                {
+                    anstallning = ValjAnstallning(anstalld, runda, parsad, fel);
+                    if (anstallning is not null)
+                    {
+                        if (!sedanAnstallningar.Add(anstallning.Id))
+                            fel.Add("Dubblett: anställningen förekommer redan i importen.");
+                        else if (runda.Forslag.Any(f =>
+                                     f.AnstallningId == anstallning.Id && f.Status != SalaryProposalStatus.Avslagen))
+                            fel.Add("Anställningen har redan ett löneförslag i rundan.");
+                    }
+                }
+            }
+
+            decimal? nuvarande = anstallning?.Manadslon.Amount;
+            decimal? okning = (anstallning is not null && parsad.NyLon is { } ny) ? ny - anstallning.Manadslon.Amount : null;
+
+            // Budgetkontroll i filordning, speglar aggregatets sekventiella kontroll.
+            if (fel.Count == 0 && okning is { } o)
+            {
+                var nyFordelad = lopandeFordelad + Money.SEK(o);
+                if (nyFordelad > runda.TotalBudget)
+                    fel.Add($"Överskrider rundans budget (återstår {runda.AterstaendeBudget.Amount:N0} kr).");
+                else
+                    lopandeFordelad = nyFordelad;
+            }
+
+            rader.Add(new SalaryImportForslagRad(
+                parsad.RadNummer,
+                parsad.PersonnummerRaw ?? "-",
+                anstalld?.FulltNamn,
+                anstallning?.Befattningstitel,
+                nuvarande,
+                parsad.NyLon,
+                okning,
+                parsad.Motivering ?? string.Empty,
+                anstalld?.Id,
+                anstallning?.Id,
+                fel));
+        }
+
+        return new SalaryImportForhandsvisning(
+            rundaId,
+            rader,
+            parseResultat.GlobalaFel,
+            rader.Count(r => r.ArGiltig),
+            rader.Count(r => !r.ArGiltig));
+    }
+
+    /// <summary>
+    /// Committar de giltiga, förhandsgranskade raderna till rundan som löneförslag i en
+    /// transaktion. Nuvarande lön läses om från databasen (litar aldrig på klientvärdet)
+    /// och varje rad läggs till via aggregatet så att alla domäninvarianter gäller.
+    /// </summary>
+    public async Task<SalaryImportResultat> CommittaImportAsync(
+        Guid rundaId, IReadOnlyList<SalaryImportForslagRad> giltigaRader, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var runda = await LaddaRundaAsync(db, rundaId, ct);
+        if (runda.Status != SalaryReviewStatus.Planering)
+            throw new InvalidOperationException("Import kan bara göras när rundan är i planeringsfasen.");
+
+        var anstalldIds = giltigaRader
+            .Where(r => r.AnstallId is not null)
+            .Select(r => r.AnstallId!.Value)
+            .ToHashSet();
+
+        // Ladda alla och filtrera i minnet — undviker EF-översättning av Contains över
+        // en värdekonverterad nyckel (samma säkra mönster som GenomforAsync använder).
+        var anstallda = (await db.Employees
+                .Include(e => e.Anstallningar)
+                .ToListAsync(ct))
+            .Where(e => anstalldIds.Contains(e.Id))
+            .ToDictionary(e => e.Id);
+
+        var skapade = 0;
+        var avvisade = 0;
+        var meddelanden = new List<string>();
+
+        foreach (var rad in giltigaRader)
+        {
+            if (rad.AnstallId is not { } anstallId || rad.AnstallningId is not { } anstallningId
+                || rad.NyLon is not { } nyLon)
+            {
+                avvisade++;
+                meddelanden.Add($"Rad {rad.RadNummer}: ofullständig rad, hoppades över.");
+                continue;
+            }
+
+            if (!anstallda.TryGetValue(anstallId, out var anstalld)
+                || anstalld.Anstallningar.FirstOrDefault(a => a.Id == anstallningId) is not { } anstallning)
+            {
+                avvisade++;
+                meddelanden.Add($"Rad {rad.RadNummer}: anställningen hittades inte längre.");
+                continue;
+            }
+
+            try
+            {
+                runda.LaggTillForslag(
+                    anstallId, anstallning.Manadslon, Money.SEK(nyLon),
+                    string.IsNullOrWhiteSpace(rad.Motivering) ? "Importerad" : rad.Motivering,
+                    anstallningId);
+                skapade++;
+            }
+            catch (Exception ex)
+            {
+                avvisade++;
+                meddelanden.Add($"Rad {rad.RadNummer}: {ex.Message}");
+            }
+        }
+
+        if (skapade > 0)
+            await db.SaveChangesAsync(ct);
+
+        return new SalaryImportResultat(skapade, avvisade, meddelanden);
+    }
+
+    /// <summary>
+    /// Väljer vilken anställning ett importerat förslag ska gälla: explicit angivet
+    /// anställnings-id vinner, annars den aktiva anställningen på ikraftträdandedatumet
+    /// (i första hand inom rundans avtalsområde).
+    /// </summary>
+    private static Employment? ValjAnstallning(
+        Employee anstalld, SalaryReviewRound runda, SalaryImportRad parsad, List<string> fel)
+    {
+        if (parsad.AnstallningId is { } explicitId)
+        {
+            var traff = anstalld.Anstallningar.FirstOrDefault(a => a.Id == explicitId);
+            if (traff is null)
+                fel.Add("Angivet anställnings-id finns inte på den anställde.");
+            return traff;
+        }
+
+        var aktiva = anstalld.AktivaAnstallningar(runda.IkrafttradandeDatum);
+        if (aktiva.Count == 0)
+        {
+            fel.Add($"Ingen aktiv anställning {runda.IkrafttradandeDatum:yyyy-MM-dd}.");
+            return null;
+        }
+
+        var iAvtal = aktiva.Where(a => a.Kollektivavtal == runda.Avtalsomrade).ToList();
+        var val = iAvtal.Count > 0 ? iAvtal : aktiva.ToList();
+        if (val.Count > 1)
+        {
+            fel.Add("Flera aktiva anställningar — ange anställnings-id i filen.");
+            return null;
+        }
+        return val[0];
+    }
+
+    private async Task<SalaryImportParseResult> TolkaFilAsync(Stream fil, string filnamn, CancellationToken ct)
+    {
+        var ext = Path.GetExtension(filnamn).ToLowerInvariant();
+        if (ext is ".xlsx" or ".xlsm" or ".xls")
+        {
+            using var ms = new MemoryStream();
+            await fil.CopyToAsync(ms, ct);
+            ms.Position = 0;
+            return _importParser.ParseRutnat(LasExcelRutnat(ms));
+        }
+
+        using var reader = new StreamReader(fil, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        var text = await reader.ReadToEndAsync(ct);
+        return _importParser.ParseCsv(text);
+    }
+
+    private static IReadOnlyList<IReadOnlyList<string?>> LasExcelRutnat(Stream fil)
+    {
+        using var wb = new XLWorkbook(fil);
+        var ws = wb.Worksheets.FirstOrDefault();
+        if (ws is null)
+            return [];
+
+        var sistaRad = ws.LastRowUsed()?.RowNumber() ?? 0;
+        var sistaKol = ws.LastColumnUsed()?.ColumnNumber() ?? 0;
+        var rutnat = new List<IReadOnlyList<string?>>(sistaRad);
+
+        for (var r = 1; r <= sistaRad; r++)
+        {
+            var celler = new string?[sistaKol];
+            for (var c = 1; c <= sistaKol; c++)
+                celler[c - 1] = ws.Cell(r, c).GetString();
+            rutnat.Add(celler);
+        }
+        return rutnat;
+    }
+
     private static async Task<SalaryReviewRound> LaddaRundaAsync(
         RegionHRDbContext db, Guid rundaId, CancellationToken ct) =>
         await db.SalaryReviewRounds.Include(r => r.Forslag).FirstOrDefaultAsync(r => r.Id == rundaId, ct)
@@ -176,3 +413,43 @@ public sealed record LoneKandidat(
     string Namn,
     string Befattning,
     Money NuvarandeLon);
+
+/// <summary>
+/// Förhandsgranskning av en importfil: en rad per tolkad datarad, redo att visas för
+/// användaren innan commit. Innehåller både giltiga rader och rader med tydliga fel.
+/// </summary>
+public sealed record SalaryImportForhandsvisning(
+    Guid RundaId,
+    IReadOnlyList<SalaryImportForslagRad> Rader,
+    IReadOnlyList<string> GlobalaFel,
+    int AntalGiltiga,
+    int AntalFel)
+{
+    public bool HarRader => Rader.Count > 0;
+    public IReadOnlyList<SalaryImportForslagRad> GiltigaRader => Rader.Where(r => r.ArGiltig).ToList();
+}
+
+/// <summary>En förhandsgranskad importrad, matchad mot anställd/anställning där möjligt.</summary>
+public sealed record SalaryImportForslagRad(
+    int RadNummer,
+    string PersonnummerRaw,
+    string? Namn,
+    string? Befattning,
+    decimal? NuvarandeLon,
+    decimal? NyLon,
+    decimal? Okning,
+    string Motivering,
+    EmployeeId? AnstallId,
+    EmploymentId? AnstallningId,
+    IReadOnlyList<string> Fel)
+{
+    /// <summary>Raden är fullständigt validerad och kan committas till rundan.</summary>
+    public bool ArGiltig =>
+        Fel.Count == 0 && AnstallId is not null && AnstallningId is not null && NyLon is > 0;
+}
+
+/// <summary>Utfallet av en committad import: hur många förslag som skapades respektive avvisades.</summary>
+public sealed record SalaryImportResultat(
+    int AntalSkapade,
+    int AntalAvvisade,
+    IReadOnlyList<string> Meddelanden);

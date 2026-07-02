@@ -41,7 +41,11 @@ else
     @if (_runda.Status == SalaryReviewStatus.Planering && Auth.IsHR)
     {
         <MudPaper Class="pa-4 mb-4" Elevation="2">
-            <MudText Typo="Typo.h6" Class="mb-3">Nytt löneförslag</MudText>
+            <div class="d-flex justify-space-between align-center mb-3">
+                <MudText Typo="Typo.h6">Nytt löneförslag</MudText>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.UploadFile"
+                           OnClick="@(() => Nav.NavigateTo($"/loneoversyn/{RundaId}/import"))">Importera från fil</MudButton>
+            </div>
             <MudGrid Spacing="3">
                 <MudItem xs="12" sm="4">
                     <MudSelect T="Guid" Value="_valdKandidatKey" ValueChanged="OnKandidatVald" Label="Anställd" Variant="Variant.Outlined">

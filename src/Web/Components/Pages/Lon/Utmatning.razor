@@ -1,0 +1,355 @@
+@page "/lon/utmatning"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Payroll.Domain
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Core.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+
+<PageTitle>OpenHR - Löneutmätning &amp; fackavgift</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Löneutmätning &amp; fackavgift</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Register för Kronofogdens löneutmätningar och fackföreningsavgifter. Beloppen läses in i lönekörningen
+    per anställd och månad. Löneutmätningen kapas alltid mot förbehållsbeloppet.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else
+{
+    @if (_success != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+    }
+
+    <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true">
+
+        <MudTabPanel Text="Löneutmätning" Icon="@Icons.Material.Filled.Gavel">
+            <div class="d-flex justify-space-between align-center mb-3">
+                <MudText Typo="Typo.h6" Style="font-weight: 600;">Aktiva och avslutade utmätningar</MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="@(() => _showUtForm = !_showUtForm)">Registrera utmätning</MudButton>
+            </div>
+
+            @if (_showUtForm)
+            {
+                <MudPaper Class="pa-4 mb-4" Elevation="1" Style="border-left: 4px solid var(--mud-palette-primary);">
+                    <MudGrid Spacing="3">
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="Guid?" @bind-Value="_utAnstalld" Label="Anställd" Variant="Variant.Outlined">
+                                @foreach (var e in _employees) { <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.FulltNamn</MudSelectItem> }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" sm="6"><MudTextField @bind-Value="_utMalnummer" Label="KFM mål-/ärendenummer" Variant="Variant.Outlined" /></MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudSelect T="UtmatningTyp" @bind-Value="_utTyp" Label="Typ" Variant="Variant.Outlined">
+                                <MudSelectItem T="UtmatningTyp" Value="UtmatningTyp.FastBelopp">Fast belopp/månad</MudSelectItem>
+                                <MudSelectItem T="UtmatningTyp" Value="UtmatningTyp.AndelAvNetto">Andel av nettolön</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        @if (_utTyp == UtmatningTyp.FastBelopp)
+                        {
+                            <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_utBelopp" Label="Utmätningsbelopp (kr/mån)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                        }
+                        else
+                        {
+                            <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_utProcent" Label="Andel av netto (%)" Variant="Variant.Outlined" Min="0" Max="100" /></MudItem>
+                        }
+                        <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_utForbehall" Label="Förbehållsbelopp (kr/mån)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                        <MudItem xs="12" sm="6"><MudTextField @bind-Value="_utMottagare" Label="Mottagare" Variant="Variant.Outlined" /></MudItem>
+                        <MudItem xs="12" sm="3"><MudDatePicker @bind-Date="_utStart" Label="Startdatum" Variant="Variant.Outlined" /></MudItem>
+                        <MudItem xs="12" sm="3"><MudDatePicker @bind-Date="_utSlut" Label="Slutdatum (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                    </MudGrid>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaUtmatning"
+                               Disabled="@(_saving || _utAnstalld == null || string.IsNullOrWhiteSpace(_utMalnummer) || _utStart == null)">
+                        @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                        Spara
+                    </MudButton>
+                </MudPaper>
+            }
+
+            @if (_utmatningar.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga löneutmätningar registrerade.</MudAlert>
+            }
+            else
+            {
+                <MudSimpleTable Hover="true" Elevation="1">
+                    <thead><tr><th>Anställd</th><th>Målnummer</th><th>Utmätning</th><th>Förbehåll</th><th>Period</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var u in _utmatningar)
+                        {
+                            var aktiv = ArAktiv(u.Startdatum, u.Slutdatum);
+                            <tr>
+                                <td><strong>@NamnFor(u.AnstallId)</strong></td>
+                                <td>@u.Malnummer</td>
+                                <td>@BeskrivUtmatning(u)</td>
+                                <td>@u.Forbehallsbelopp.Amount.ToString("N0") kr</td>
+                                <td>@Period(u.Startdatum, u.Slutdatum)</td>
+                                <td><MudChip T="string" Size="Size.Small" Color="@(aktiv ? Color.Success : Color.Default)">@(aktiv ? "Aktiv" : "Avslutad")</MudChip></td>
+                                <td>
+                                    @if (aktiv)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => AvslutaUtmatning(u.Id))">Avsluta</MudButton>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudTabPanel>
+
+        <MudTabPanel Text="Fackavgift" Icon="@Icons.Material.Filled.Groups">
+            <div class="d-flex justify-space-between align-center mb-3">
+                <MudText Typo="Typo.h6" Style="font-weight: 600;">Registrerade fackavgifter</MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                           OnClick="@(() => _showFackForm = !_showFackForm)">Registrera fackavgift</MudButton>
+            </div>
+
+            @if (_showFackForm)
+            {
+                <MudPaper Class="pa-4 mb-4" Elevation="1" Style="border-left: 4px solid var(--mud-palette-primary);">
+                    <MudGrid Spacing="3">
+                        <MudItem xs="12" sm="6">
+                            <MudSelect T="Guid?" @bind-Value="_fackAnstalld" Label="Anställd" Variant="Variant.Outlined">
+                                @foreach (var e in _employees) { <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.FulltNamn</MudSelectItem> }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" sm="6"><MudTextField @bind-Value="_fackForbund" Label="Fackförbund" Variant="Variant.Outlined" /></MudItem>
+                        <MudItem xs="12" sm="4">
+                            <MudSelect T="FackavgiftTyp" @bind-Value="_fackTyp" Label="Typ" Variant="Variant.Outlined">
+                                <MudSelectItem T="FackavgiftTyp" Value="FackavgiftTyp.FastBelopp">Fast belopp/månad</MudSelectItem>
+                                <MudSelectItem T="FackavgiftTyp" Value="FackavgiftTyp.ProcentAvLon">Procent av lön</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        @if (_fackTyp == FackavgiftTyp.FastBelopp)
+                        {
+                            <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_fackBelopp" Label="Avgift (kr/mån)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                        }
+                        else
+                        {
+                            <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_fackProcent" Label="Andel av lön (%)" Variant="Variant.Outlined" Min="0" Max="100" /></MudItem>
+                        }
+                        <MudItem xs="12" sm="4"><MudTextField @bind-Value="_fackMedlemsnr" Label="Medlemsnummer (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                        <MudItem xs="12" sm="3"><MudDatePicker @bind-Date="_fackStart" Label="Startdatum" Variant="Variant.Outlined" /></MudItem>
+                        <MudItem xs="12" sm="3"><MudDatePicker @bind-Date="_fackSlut" Label="Slutdatum (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                    </MudGrid>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaFackavgift"
+                               Disabled="@(_saving || _fackAnstalld == null || string.IsNullOrWhiteSpace(_fackForbund) || _fackStart == null)">
+                        @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                        Spara
+                    </MudButton>
+                </MudPaper>
+            }
+
+            @if (_fackavgifter.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga fackavgifter registrerade.</MudAlert>
+            }
+            else
+            {
+                <MudSimpleTable Hover="true" Elevation="1">
+                    <thead><tr><th>Anställd</th><th>Förbund</th><th>Avgift</th><th>Medlemsnr</th><th>Period</th><th>Status</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var f in _fackavgifter)
+                        {
+                            var aktiv = ArAktiv(f.Startdatum, f.Slutdatum);
+                            <tr>
+                                <td><strong>@NamnFor(f.AnstallId)</strong></td>
+                                <td>@f.Fackforbund</td>
+                                <td>@BeskrivFackavgift(f)</td>
+                                <td>@(f.Medlemsnummer ?? "—")</td>
+                                <td>@Period(f.Startdatum, f.Slutdatum)</td>
+                                <td><MudChip T="string" Size="Size.Small" Color="@(aktiv ? Color.Success : Color.Default)">@(aktiv ? "Aktiv" : "Avslutad")</MudChip></td>
+                                <td>
+                                    @if (aktiv)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => AvslutaFackavgift(f.Id))">Avsluta</MudButton>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudTabPanel>
+
+    </MudTabs>
+}
+
+@code {
+    private List<Employee> _employees = [];
+    private List<Loneutmatning> _utmatningar = [];
+    private List<Fackavgift> _fackavgifter = [];
+    private Dictionary<Guid, string> _namn = [];
+    private bool _loading = true, _saving, _showUtForm, _showFackForm;
+    private string? _error, _success;
+
+    // Utmätningsformulär
+    private Guid? _utAnstalld;
+    private string _utMalnummer = "";
+    private UtmatningTyp _utTyp = UtmatningTyp.FastBelopp;
+    private decimal _utBelopp;
+    private decimal _utProcent;
+    private decimal _utForbehall;
+    private string _utMottagare = "Kronofogdemyndigheten";
+    private DateTime? _utStart = DateTime.Today;
+    private DateTime? _utSlut;
+
+    // Fackavgiftsformulär
+    private Guid? _fackAnstalld;
+    private string _fackForbund = "";
+    private FackavgiftTyp _fackTyp = FackavgiftTyp.FastBelopp;
+    private decimal _fackBelopp;
+    private decimal _fackProcent;
+    private string _fackMedlemsnr = "";
+    private DateTime? _fackStart = DateTime.Today;
+    private DateTime? _fackSlut;
+
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _employees = await db.Employees.OrderBy(e => e.Efternamn).ThenBy(e => e.Fornamn).ToListAsync();
+            _namn = _employees.ToDictionary(e => e.Id.Value, e => e.FulltNamn);
+            _utmatningar = await db.Set<Loneutmatning>().OrderByDescending(u => u.Registrerad).ToListAsync();
+            _fackavgifter = await db.Set<Fackavgift>().OrderByDescending(f => f.Registrerad).ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta register: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task SparaUtmatning()
+    {
+        if (_utAnstalld is null || _utStart is null) return;
+        _saving = true; _error = null;
+        try
+        {
+            var anstallId = EmployeeId.From(_utAnstalld.Value);
+            var start = DateOnly.FromDateTime(_utStart.Value);
+            DateOnly? slut = _utSlut is { } s ? DateOnly.FromDateTime(s) : null;
+
+            var utmatning = _utTyp == UtmatningTyp.FastBelopp
+                ? Loneutmatning.SkapaFastBelopp(anstallId, _utMalnummer, Money.SEK(_utBelopp), Money.SEK(_utForbehall), start, slut, _utMottagare, "HR")
+                : Loneutmatning.SkapaAndel(anstallId, _utMalnummer, _utProcent / 100m, Money.SEK(_utForbehall), start, slut, _utMottagare, "HR");
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Set<Loneutmatning>().Add(utmatning);
+            await db.SaveChangesAsync();
+
+            _success = "Löneutmätning registrerad.";
+            _showUtForm = false;
+            ResetUtForm();
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte spara utmätning: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task SparaFackavgift()
+    {
+        if (_fackAnstalld is null || _fackStart is null) return;
+        _saving = true; _error = null;
+        try
+        {
+            var anstallId = EmployeeId.From(_fackAnstalld.Value);
+            var start = DateOnly.FromDateTime(_fackStart.Value);
+            DateOnly? slut = _fackSlut is { } s ? DateOnly.FromDateTime(s) : null;
+
+            var avgift = _fackTyp == FackavgiftTyp.FastBelopp
+                ? Fackavgift.SkapaFastBelopp(anstallId, _fackForbund, Money.SEK(_fackBelopp), start, slut, _fackMedlemsnr, "HR")
+                : Fackavgift.SkapaProcent(anstallId, _fackForbund, _fackProcent / 100m, start, slut, _fackMedlemsnr, "HR");
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Set<Fackavgift>().Add(avgift);
+            await db.SaveChangesAsync();
+
+            _success = "Fackavgift registrerad.";
+            _showFackForm = false;
+            ResetFackForm();
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte spara fackavgift: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task AvslutaUtmatning(Guid id)
+    {
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var utmatning = await db.Set<Loneutmatning>().FirstOrDefaultAsync(u => u.Id == id);
+            if (utmatning is null) return;
+            utmatning.Avsluta(DateOnly.FromDateTime(DateTime.Today), "Avslutad manuellt av HR");
+            await db.SaveChangesAsync();
+            _success = "Löneutmätning avslutad.";
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte avsluta: {ex.Message}"; }
+    }
+
+    private async Task AvslutaFackavgift(Guid id)
+    {
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var avgift = await db.Set<Fackavgift>().FirstOrDefaultAsync(f => f.Id == id);
+            if (avgift is null) return;
+            avgift.Avsluta(DateOnly.FromDateTime(DateTime.Today));
+            await db.SaveChangesAsync();
+            _success = "Fackavgift avslutad.";
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte avsluta: {ex.Message}"; }
+    }
+
+    private void ResetUtForm()
+    {
+        _utAnstalld = null; _utMalnummer = ""; _utTyp = UtmatningTyp.FastBelopp;
+        _utBelopp = 0; _utProcent = 0; _utForbehall = 0;
+        _utMottagare = "Kronofogdemyndigheten"; _utStart = DateTime.Today; _utSlut = null;
+    }
+
+    private void ResetFackForm()
+    {
+        _fackAnstalld = null; _fackForbund = ""; _fackTyp = FackavgiftTyp.FastBelopp;
+        _fackBelopp = 0; _fackProcent = 0; _fackMedlemsnr = "";
+        _fackStart = DateTime.Today; _fackSlut = null;
+    }
+
+    private string NamnFor(EmployeeId id) => _namn.GetValueOrDefault(id.Value, "Okänd");
+
+    private static bool ArAktiv(DateOnly start, DateOnly? slut)
+    {
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+        return start <= idag && (slut is null || slut >= idag);
+    }
+
+    private static string Period(DateOnly start, DateOnly? slut) =>
+        $"{start:yyyy-MM-dd} – {(slut is { } s ? s.ToString("yyyy-MM-dd") : "tills vidare")}";
+
+    private static string BeskrivUtmatning(Loneutmatning u) =>
+        u.Typ == UtmatningTyp.FastBelopp
+            ? $"{u.Belopp.Amount:N0} kr/mån"
+            : $"{u.Andel * 100m:0.##} % av netto";
+
+    private static string BeskrivFackavgift(Fackavgift f) =>
+        f.Typ == FackavgiftTyp.FastBelopp
+            ? $"{f.Belopp.Amount:N0} kr/mån"
+            : $"{f.Procent * 100m:0.##} % av lön";
+}

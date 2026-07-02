@@ -1,0 +1,509 @@
+@page "/admin/avtal/lokala"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Agreements.Domain
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Web.Services
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject LokalAvvikelseService AvvikelseService
+
+<PageTitle>OpenHR — Lokala avtalsavvikelser</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/admin/avtal" Style="margin-bottom: 1rem;">Kollektivavtal</MudButton>
+
+<div class="d-flex justify-space-between align-center mb-2">
+    <div>
+        <MudText Typo="Typo.h4" Style="font-weight: 700;">Lokala avtalsavvikelser</MudText>
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+            Lokala OB-påslag, tillägg och förmåner per organisationsenhet — ett override-lager ovanpå
+            det centrala kollektivavtalet (AB/HÖK). Centrala satser lämnas orörda.
+        </MudText>
+    </div>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+               StartIcon="@Icons.Material.Filled.Add" OnClick="OppnaNy"
+               Style="min-height: 48px;">
+        Ny lokal avvikelse
+    </MudButton>
+</div>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error">@_error</MudAlert>
+}
+else
+{
+    @if (_visarForm)
+    {
+        <MudPaper Class="pa-6 mb-4" Elevation="3">
+            <MudText Typo="Typo.h6" Class="mb-4">
+                @(_form.Id.HasValue ? "Redigera lokal avvikelse" : "Ny lokal avvikelse")
+            </MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" md="6">
+                    <MudSelect T="Guid?" Value="_form.EnhetId" ValueChanged="EnhetVald" Label="Organisationsenhet"
+                               Variant="Variant.Outlined" ToStringFunc="@(id => EnhetNamn(id))" Required="true">
+                        @foreach (var ou in _enheter)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)ou.Id.Value)">@ou.Namn</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudSelect T="LokalAvvikelseTyp" @bind-Value="_form.Typ" Label="Typ av avvikelse" Variant="Variant.Outlined">
+                        @foreach (var t in Enum.GetValues<LokalAvvikelseTyp>())
+                        {
+                            <MudSelectItem Value="@t">@TypText(t)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                <MudItem xs="12" md="6">
+                    <MudTextField @bind-Value="_form.Namn" Label="Namn" Variant="Variant.Outlined" Required="true" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudSelect T="Guid?" Value="_form.AvtalsId" ValueChanged="AvtalValt"
+                               Label="Kopplat centralt avtal (valfritt)" Variant="Variant.Outlined"
+                               ToStringFunc="AvtalNamn" Clearable="true">
+                        <MudSelectItem T="Guid?" Value="@((Guid?)null)">— Gäller alla avtal —</MudSelectItem>
+                        @foreach (var a in _avtal)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)a.Id.Value)">@a.Namn</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+
+                @if (_form.Typ == LokalAvvikelseTyp.ObPaslag)
+                {
+                    <MudItem xs="12" md="6">
+                        <MudSelect T="OBCategory?" @bind-Value="_form.ObKategori" Label="OB-kategori"
+                                   Variant="Variant.Outlined" ToStringFunc="ObKategoriText">
+                            <MudSelectItem T="OBCategory?" Value="@((OBCategory?)null)">Alla OB-kategorier</MudSelectItem>
+                            @foreach (var k in ObKategorier)
+                            {
+                                <MudSelectItem T="OBCategory?" Value="@((OBCategory?)k)">@ObKategoriText(k)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                }
+
+                <MudItem xs="12" md="4">
+                    <MudSelect T="LokalBerakningsTyp" Value="_form.BerakningsTyp" ValueChanged="BerakningsTypVald"
+                               Label="Beräkning" Variant="Variant.Outlined">
+                        @foreach (var b in Enum.GetValues<LokalBerakningsTyp>())
+                        {
+                            <MudSelectItem Value="@b">@BerakningsText(b)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudSelect T="LokalBeloppsEnhet" @bind-Value="_form.Enhet" Label="Beloppsenhet" Variant="Variant.Outlined">
+                        @foreach (var e in TillatnaEnheter(_form.BerakningsTyp))
+                        {
+                            <MudSelectItem Value="@e">@EnhetText(e)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudNumericField T="decimal" @bind-Value="_form.Varde" Label="@VardeLabel()"
+                                     Variant="Variant.Outlined" Step="1m" />
+                </MudItem>
+
+                <MudItem xs="12" md="6">
+                    <MudDatePicker @bind-Date="_form.GiltigFran" Label="Giltig från" Variant="Variant.Outlined"
+                                   DateFormat="yyyy-MM-dd" Required="true" />
+                </MudItem>
+                <MudItem xs="12" md="6">
+                    <MudDatePicker @bind-Date="_form.GiltigTill" Label="Giltig till (valfritt)" Variant="Variant.Outlined"
+                                   DateFormat="yyyy-MM-dd" Clearable="true" />
+                </MudItem>
+
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_form.Beskrivning" Label="Beskrivning" Variant="Variant.Outlined"
+                                  Lines="2" />
+                </MudItem>
+            </MudGrid>
+
+            @* Expertvarningar & förhandsvisning *@
+            @foreach (var v in Varningar())
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">@v</MudAlert>
+            }
+
+            @if (_form.Typ == LokalAvvikelseTyp.ObPaslag && _form.ObKategori is { } kat && kat != OBCategory.Ingen && _form.GiltigFran.HasValue)
+            {
+                var datum = DateOnly.FromDateTime(_form.GiltigFran.Value);
+                var central = ABOTillaggSatser.Grundsats(kat, datum);
+                var effektiv = TillampaForhandsvisning(central);
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                    Förhandsvisning @ObKategoriText(kat) @datum.ToString("yyyy-MM-dd"):
+                    central O-tilläggssats @central.ToString("0.00") kr/h →
+                    <strong>effektivt @effektiv.ToString("0.00") kr/h</strong> med denna lokala avvikelse.
+                </MudAlert>
+            }
+
+            <div class="d-flex gap-3 mt-4">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                           Style="min-height: 48px;" OnClick="Spara" Disabled="_sparar">
+                    @(_sparar ? "Sparar..." : "Spara")
+                </MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Large"
+                           Style="min-height: 48px;" OnClick="StangForm">Avbryt</MudButton>
+            </div>
+
+            @if (_felmeddelande is not null)
+            {
+                <MudAlert Severity="Severity.Error" Class="mt-4">@_felmeddelande</MudAlert>
+            }
+        </MudPaper>
+    }
+
+    @if (_alla.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Class="mt-4">
+            Inga lokala avvikelser registrerade. Alla enheter följer det centrala kollektivavtalet fullt ut.
+        </MudAlert>
+    }
+    else
+    {
+        <MudSimpleTable Hover="true" Elevation="2" Class="mt-4">
+            <thead>
+                <tr>
+                    <th>Enhet</th>
+                    <th>Typ</th>
+                    <th>Namn</th>
+                    <th>Beräkning</th>
+                    <th>Värde</th>
+                    <th>Giltighet</th>
+                    <th>Status</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var a in _alla)
+                {
+                    <tr>
+                        <td>@EnhetNamn(a.EnhetId.Value)</td>
+                        <td>@TypText(a.Typ)@(a.Typ == LokalAvvikelseTyp.ObPaslag ? $" ({ObKategoriText(a.ObKategori)})" : "")</td>
+                        <td><strong>@a.Namn</strong></td>
+                        <td>@BerakningsText(a.BerakningsTyp)</td>
+                        <td>@VardeText(a)</td>
+                        <td>
+                            @a.GiltigFran.ToString("yyyy-MM-dd") –
+                            @(a.GiltigTill?.ToString("yyyy-MM-dd") ?? "tillsvidare")
+                        </td>
+                        <td>
+                            <MudChip T="string" Size="Size.Small" Color="@(a.Aktiv ? Color.Success : Color.Default)">
+                                @(a.Aktiv ? "Aktiv" : "Inaktiv")
+                            </MudChip>
+                        </td>
+                        <td class="d-flex gap-1">
+                            <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" Color="Color.Primary"
+                                           OnClick="@(() => Redigera(a))" />
+                            <MudIconButton Icon="@(a.Aktiv ? Icons.Material.Filled.ToggleOn : Icons.Material.Filled.ToggleOff)"
+                                           Size="Size.Small" Color="Color.Default"
+                                           OnClick="@(() => VaxlaAktiv(a))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                           OnClick="@(() => TaBort(a))" />
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+}
+
+@code {
+    private readonly List<OrganizationUnitVy> _enheter = [];
+    private readonly List<AvtalVy> _avtal = [];
+    private List<LokalAvtalsAvvikelse> _alla = [];
+
+    private bool _loading = true;
+    private bool _visarForm;
+    private bool _sparar;
+    private string? _error;
+    private string? _felmeddelande;
+
+    private Formular _form = new();
+
+    private static readonly OBCategory[] ObKategorier =
+        { OBCategory.VardagKvall, OBCategory.VardagNatt, OBCategory.Helg, OBCategory.Storhelg };
+
+    private sealed record OrganizationUnitVy(OrganizationId Id, string Namn);
+    private sealed record AvtalVy(CollectiveAgreementId Id, string Namn);
+
+    private sealed class Formular
+    {
+        public Guid? Id { get; set; }
+        public Guid? EnhetId { get; set; }
+        public LokalAvvikelseTyp Typ { get; set; } = LokalAvvikelseTyp.ObPaslag;
+        public OBCategory? ObKategori { get; set; } = OBCategory.VardagKvall;
+        public string Namn { get; set; } = "";
+        public string Beskrivning { get; set; } = "";
+        public LokalBerakningsTyp BerakningsTyp { get; set; } = LokalBerakningsTyp.FastBelopp;
+        public LokalBeloppsEnhet Enhet { get; set; } = LokalBeloppsEnhet.KronorPerTimme;
+        public decimal Varde { get; set; }
+        public DateTime? GiltigFran { get; set; } = DateTime.Today;
+        public DateTime? GiltigTill { get; set; }
+        public Guid? AvtalsId { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var enheter = await db.OrganizationUnits
+                .AsNoTracking()
+                .OrderBy(o => o.Namn)
+                .Select(o => new { o.Id, o.Namn })
+                .ToListAsync();
+            _enheter.AddRange(enheter.Select(e => new OrganizationUnitVy(e.Id, e.Namn)));
+
+            var avtal = await db.CollectiveAgreements
+                .AsNoTracking()
+                .OrderBy(a => a.Namn)
+                .Select(a => new { a.Id, a.Namn })
+                .ToListAsync();
+            _avtal.AddRange(avtal.Select(a => new AvtalVy(a.Id, a.Namn)));
+
+            await LaddaOmAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte ladda sidan: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task LaddaOmAsync()
+    {
+        _alla = await AvvikelseService.HamtaAllaAsync();
+    }
+
+    private void OppnaNy()
+    {
+        _form = new Formular { EnhetId = _enheter.FirstOrDefault()?.Id.Value };
+        _felmeddelande = null;
+        _visarForm = true;
+    }
+
+    private void Redigera(LokalAvtalsAvvikelse a)
+    {
+        _form = new Formular
+        {
+            Id = a.Id,
+            EnhetId = a.EnhetId.Value,
+            Typ = a.Typ,
+            ObKategori = a.ObKategori,
+            Namn = a.Namn,
+            Beskrivning = a.Beskrivning,
+            BerakningsTyp = a.BerakningsTyp,
+            Enhet = a.Enhet,
+            Varde = a.Varde,
+            GiltigFran = a.GiltigFran.ToDateTime(TimeOnly.MinValue),
+            GiltigTill = a.GiltigTill?.ToDateTime(TimeOnly.MinValue),
+            AvtalsId = a.AvtalsId?.Value
+        };
+        _felmeddelande = null;
+        _visarForm = true;
+    }
+
+    private void StangForm()
+    {
+        _visarForm = false;
+        _felmeddelande = null;
+    }
+
+    private void EnhetVald(Guid? id) => _form.EnhetId = id;
+    private void AvtalValt(Guid? id) => _form.AvtalsId = id;
+
+    private void BerakningsTypVald(LokalBerakningsTyp typ)
+    {
+        _form.BerakningsTyp = typ;
+        // Håll beloppsenheten koherent med beräkningstypen (domänen kräver det).
+        if (typ == LokalBerakningsTyp.ProcentPaslag)
+            _form.Enhet = LokalBeloppsEnhet.Procent;
+        else if (_form.Enhet == LokalBeloppsEnhet.Procent)
+            _form.Enhet = LokalBeloppsEnhet.KronorPerTimme;
+    }
+
+    private async Task Spara()
+    {
+        _felmeddelande = null;
+
+        if (!_form.EnhetId.HasValue)
+        {
+            _felmeddelande = "Välj en organisationsenhet.";
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(_form.Namn))
+        {
+            _felmeddelande = "Ange ett namn.";
+            return;
+        }
+        if (!_form.GiltigFran.HasValue)
+        {
+            _felmeddelande = "Ange giltig från.";
+            return;
+        }
+
+        _sparar = true;
+        StateHasChanged();
+        try
+        {
+            var data = new LokalAvvikelseIndata(
+                OrganizationId.From(_form.EnhetId.Value),
+                _form.Typ,
+                _form.Namn,
+                _form.BerakningsTyp,
+                _form.Enhet,
+                _form.Varde,
+                DateOnly.FromDateTime(_form.GiltigFran.Value),
+                _form.GiltigTill.HasValue ? DateOnly.FromDateTime(_form.GiltigTill.Value) : null,
+                _form.Typ == LokalAvvikelseTyp.ObPaslag ? _form.ObKategori : null,
+                _form.AvtalsId.HasValue ? CollectiveAgreementId.From(_form.AvtalsId.Value) : null,
+                _form.Beskrivning);
+
+            if (_form.Id.HasValue)
+                await AvvikelseService.UppdateraAsync(_form.Id.Value, data);
+            else
+                await AvvikelseService.LaggTillAsync(data);
+
+            await LaddaOmAsync();
+            _visarForm = false;
+        }
+        catch (RegionHR.SharedKernel.Abstractions.DomainException dex)
+        {
+            _felmeddelande = dex.Message;
+        }
+        catch (Exception ex)
+        {
+            _felmeddelande = $"Kunde inte spara: {ex.Message}";
+        }
+        finally { _sparar = false; }
+    }
+
+    private async Task VaxlaAktiv(LokalAvtalsAvvikelse a)
+    {
+        await AvvikelseService.SattAktivAsync(a.Id, !a.Aktiv);
+        await LaddaOmAsync();
+    }
+
+    private async Task TaBort(LokalAvtalsAvvikelse a)
+    {
+        await AvvikelseService.TaBortAsync(a.Id);
+        await LaddaOmAsync();
+    }
+
+    // === Förhandsvisning & varningar ===
+
+    private decimal TillampaForhandsvisning(decimal bas) => _form.BerakningsTyp switch
+    {
+        LokalBerakningsTyp.FastBelopp => bas + _form.Varde,
+        LokalBerakningsTyp.ProcentPaslag => bas * (1m + _form.Varde / 100m),
+        LokalBerakningsTyp.ErsattVarde => _form.Varde,
+        _ => bas
+    };
+
+    private IEnumerable<string> Varningar()
+    {
+        if (_form.GiltigTill.HasValue && _form.GiltigFran.HasValue && _form.GiltigTill < _form.GiltigFran)
+            yield return "Giltig till ligger före giltig från.";
+
+        if (_form.BerakningsTyp == LokalBerakningsTyp.ProcentPaslag && _form.Enhet != LokalBeloppsEnhet.Procent)
+            yield return "Procentpåslag bör använda beloppsenheten Procent.";
+
+        if (_form.Varde == 0m)
+            yield return "Värdet är 0 — avvikelsen får ingen effekt.";
+
+        // Överlappningsvarning: samma enhet + typ + OB-kategori redan aktiv → risk för dubbel tillämpning.
+        if (_form.EnhetId.HasValue)
+        {
+            var enhetId = OrganizationId.From(_form.EnhetId.Value);
+            var krock = _alla.Any(x =>
+                x.Id != _form.Id
+                && x.Aktiv
+                && x.EnhetId == enhetId
+                && x.Typ == _form.Typ
+                && (_form.Typ != LokalAvvikelseTyp.ObPaslag || x.ObKategori == _form.ObKategori));
+            if (krock)
+                yield return "Det finns redan en aktiv avvikelse av samma typ för enheten — kontrollera att de inte dubbleras.";
+        }
+    }
+
+    // === Presentationshjälp ===
+
+    private string EnhetNamn(Guid? id)
+        => id.HasValue ? EnhetNamn(id.Value) : "—";
+
+    private string EnhetNamn(Guid id)
+        => _enheter.FirstOrDefault(e => e.Id.Value == id)?.Namn ?? "(okänd enhet)";
+
+    private string AvtalNamn(Guid? id)
+        => id.HasValue
+            ? _avtal.FirstOrDefault(a => a.Id.Value == id.Value)?.Namn ?? "(okänt avtal)"
+            : "— Gäller alla avtal —";
+
+    private static IEnumerable<LokalBeloppsEnhet> TillatnaEnheter(LokalBerakningsTyp typ)
+        => typ == LokalBerakningsTyp.ProcentPaslag
+            ? new[] { LokalBeloppsEnhet.Procent }
+            : new[] { LokalBeloppsEnhet.KronorPerTimme, LokalBeloppsEnhet.KronorPerManad, LokalBeloppsEnhet.Kronor };
+
+    private string VardeLabel() => _form.Enhet switch
+    {
+        LokalBeloppsEnhet.Procent => "Värde (%)",
+        LokalBeloppsEnhet.KronorPerTimme => "Värde (kr/h)",
+        LokalBeloppsEnhet.KronorPerManad => "Värde (kr/mån)",
+        _ => "Värde (kr)"
+    };
+
+    private static string VardeText(LokalAvtalsAvvikelse a) => a.Enhet switch
+    {
+        LokalBeloppsEnhet.Procent => $"{a.Varde:0.##} %",
+        LokalBeloppsEnhet.KronorPerTimme => $"{a.Varde:0.##} kr/h",
+        LokalBeloppsEnhet.KronorPerManad => $"{a.Varde:0.##} kr/mån",
+        _ => $"{a.Varde:0.##} kr"
+    };
+
+    private static string TypText(LokalAvvikelseTyp typ) => typ switch
+    {
+        LokalAvvikelseTyp.ObPaslag => "OB-påslag",
+        LokalAvvikelseTyp.Forman => "Förmån",
+        LokalAvvikelseTyp.Tillagg => "Tillägg",
+        LokalAvvikelseTyp.OvertidPaslag => "Övertidspåslag",
+        LokalAvvikelseTyp.Annat => "Annat",
+        _ => typ.ToString()
+    };
+
+    private static string BerakningsText(LokalBerakningsTyp b) => b switch
+    {
+        LokalBerakningsTyp.FastBelopp => "Fast belopp (+)",
+        LokalBerakningsTyp.ProcentPaslag => "Procentpåslag",
+        LokalBerakningsTyp.ErsattVarde => "Ersätter värde",
+        _ => b.ToString()
+    };
+
+    private static string EnhetText(LokalBeloppsEnhet e) => e switch
+    {
+        LokalBeloppsEnhet.KronorPerTimme => "kr/timme",
+        LokalBeloppsEnhet.KronorPerManad => "kr/månad",
+        LokalBeloppsEnhet.Kronor => "kr (engång)",
+        LokalBeloppsEnhet.Procent => "procent",
+        _ => e.ToString()
+    };
+
+    private static string ObKategoriText(OBCategory? kategori) => kategori switch
+    {
+        OBCategory.VardagKvall => "Vardag kväll",
+        OBCategory.VardagNatt => "Vardag natt",
+        OBCategory.Helg => "Helg",
+        OBCategory.Storhelg => "Storhelg",
+        OBCategory.Ingen => "Ingen",
+        null => "Alla OB-kategorier",
+        _ => "—"
+    };
+}

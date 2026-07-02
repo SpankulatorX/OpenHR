@@ -1,0 +1,305 @@
+@page "/lon/kontering"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Text
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Payroll.Domain
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.IntegrationHub.Adapters.Raindance
+@using RegionHR.IntegrationHub.Adapters.SIE
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - Konteringsfil till ekonomisystem</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/lon/korningar" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Konteringsfil till ekonomisystem</MudText>
+<MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Skapar en balanserad bokföringsverifikation ur en lönekörning — lönekostnad, arbetsgivaravgift och
+    preliminärskatteskuld konterade per kostnadsställe. Ladda ner som Raindance-konteringsfil (CSV) eller
+    som SIE typ 4 (öppet svenskt bokföringsformat) för import i ekonomisystemet.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">1. Välj lönekörning</MudText>
+        @if (_korningar.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                Det finns inga lönekörningar ännu. Skapa och beräkna en körning under
+                <MudLink Href="/lon/korningar">Lönekörningar</MudLink> först.
+            </MudAlert>
+        }
+        else
+        {
+            <MudSelect T="Guid" Value="_valdKorning" ValueChanged="OnKorningVald"
+                       Label="Lönekörning" Variant="Variant.Outlined">
+                @foreach (var k in _korningar)
+                {
+                    <MudSelectItem T="Guid" Value="k.Id">@k.Etikett</MudSelectItem>
+                }
+            </MudSelect>
+        }
+    </MudPaper>
+
+    @if (_valdKorning != Guid.Empty && _rader is not null)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">Konteringsunderlag (@_period)</MudText>
+            <MudGrid Spacing="3" Class="mb-2">
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Konteringsrader</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@_rader.Count st</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Kostnadsställen</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@_antalKostnadsstallen st</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Summa debet</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_totalDebet)</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Summa kredit</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_totalKredit)</MudText>
+                </MudItem>
+            </MudGrid>
+
+            @if (_rader.Count == 0)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Text" Class="mt-2">
+                    Lönekörningen saknar konteringsbara belopp. Beräkna körningen först.
+                </MudAlert>
+            }
+            else if (_balanserad)
+            {
+                <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-2">
+                    Verifikationen balanserar (debet = kredit).
+                </MudAlert>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Text" Class="mt-2">
+                    Verifikationen balanserar <strong>inte</strong> (differens @Kr(Math.Abs(_totalDebet - _totalKredit))).
+                    Kontrollera lönekörningen innan filen bokförs.
+                </MudAlert>
+            }
+
+            @if (_status is not null && _status != PayrollRunStatus.Godkand && _status != PayrollRunStatus.Utbetald)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mt-2">
+                    Körningen har status <strong>@_status</strong>. Konteringsfilen bokförs normalt först efter godkännande.
+                </MudAlert>
+            }
+        </MudPaper>
+
+        @if (_rader.Count > 0)
+        {
+            <MudPaper Class="pa-4 mb-4" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">2. Uppgiftslämnare</MudText>
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_orgnr" Label="Organisationsnummer"
+                                      Variant="Variant.Outlined" HelperText="t.ex. 232100-0016" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="_foretagsnamn" Label="Företagsnamn"
+                                      Variant="Variant.Outlined" />
+                    </MudItem>
+                </MudGrid>
+            </MudPaper>
+
+            <MudPaper Class="pa-4 mb-4" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">3. Ladda ner konteringsfil</MudText>
+                <MudStack Row="true" Spacing="3">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                               StartIcon="@Icons.Material.Filled.Download"
+                               Disabled="@_genererar"
+                               OnClick="LaddaNerRaindance">
+                        Raindance (CSV)
+                    </MudButton>
+                    <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Large"
+                               StartIcon="@Icons.Material.Filled.Download"
+                               Disabled="@(_genererar || string.IsNullOrWhiteSpace(_orgnr))"
+                               OnClick="LaddaNerSie">
+                        SIE typ 4 (.se)
+                    </MudButton>
+                </MudStack>
+                @if (_meddelande is not null)
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-3">@_meddelande</MudAlert>
+                }
+                @if (_fel is not null)
+                {
+                    <MudAlert Severity="Severity.Error" Variant="Variant.Text" Class="mt-3">@_fel</MudAlert>
+                }
+            </MudPaper>
+
+            <MudPaper Class="pa-4 mb-4" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">Förhandsgranska konteringsrader (@_rader.Count)</MudText>
+                <MudTable Items="_rader" Dense="true" Hover="true" Elevation="0">
+                    <HeaderContent>
+                        <MudTh>Kostnadsställe</MudTh>
+                        <MudTh>Konto</MudTh>
+                        <MudTh Style="text-align:right">Debet</MudTh>
+                        <MudTh Style="text-align:right">Kredit</MudTh>
+                        <MudTh>Text</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd DataLabel="Kostnadsställe">@context.Kostnadsstalle</MudTd>
+                        <MudTd DataLabel="Konto">@context.Konto</MudTd>
+                        <MudTd DataLabel="Debet" Style="text-align:right">@(context.Debet.Amount > 0 ? Kr(context.Debet.Amount) : "")</MudTd>
+                        <MudTd DataLabel="Kredit" Style="text-align:right">@(context.Kredit.Amount > 0 ? Kr(context.Kredit.Amount) : "")</MudTd>
+                        <MudTd DataLabel="Text">@context.Text</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </MudPaper>
+        }
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private bool _genererar;
+    private Guid _valdKorning = Guid.Empty;
+    private List<KorningRad> _korningar = [];
+
+    private PayrollRun? _run;
+    private IReadOnlyList<KonteringsRad>? _rader;
+    private string _period = "";
+    private PayrollRunStatus? _status;
+    private decimal _totalDebet;
+    private decimal _totalKredit;
+    private bool _balanserad;
+    private int _antalKostnadsstallen;
+
+    private string? _meddelande;
+    private string? _fel;
+
+    // Uppgiftslämnare (demo-defaultar för Region Örebro län).
+    private string _orgnr = "232100-0016";
+    private string _foretagsnamn = "Region Örebro län";
+
+    private readonly RaindanceKonteringsGenerator _generator = new();
+    private readonly SIEKonteringsExporter _sieExporter = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var runs = await db.PayrollRuns
+            .OrderByDescending(r => r.Year).ThenByDescending(r => r.Month)
+            .Take(24)
+            .ToListAsync();
+
+        _korningar = runs.Select(r => new KorningRad(
+            r.Id.Value,
+            $"{FormatPeriod(r.Year, r.Month)} — {r.Status} ({r.AntalAnstallda} anställda)")).ToList();
+        _loading = false;
+    }
+
+    private async Task OnKorningVald(Guid id)
+    {
+        _valdKorning = id;
+        _meddelande = null;
+        _fel = null;
+        await LaddaUnderlag(id);
+    }
+
+    private async Task LaddaUnderlag(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var run = await db.PayrollRuns
+            .Include(r => r.Resultat).ThenInclude(res => res.Rader)
+            .FirstOrDefaultAsync(r => r.Id == PayrollRunId.From(id));
+
+        if (run is null)
+        {
+            _run = null;
+            _rader = null;
+            return;
+        }
+
+        _run = run;
+        _period = run.Period;
+        _status = run.Status;
+        _rader = _generator.GenerateEntries(run);
+        _totalDebet = _rader.Sum(r => r.Debet.Amount);
+        _totalKredit = _rader.Sum(r => r.Kredit.Amount);
+        _balanserad = _generator.ValidateBalance(_rader);
+        _antalKostnadsstallen = _rader.Select(r => r.Kostnadsstalle).Distinct().Count();
+    }
+
+    private async Task LaddaNerRaindance()
+    {
+        if (_rader is null) return;
+        _genererar = true;
+        _meddelande = null;
+        _fel = null;
+        try
+        {
+            var csv = _generator.GenerateFile(_rader);
+            // UTF-8 med BOM så svenska tecken visas rätt i Excel/ekonomisystem.
+            var bytes = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(csv)).ToArray();
+            var base64 = Convert.ToBase64String(bytes);
+            var fileName = $"Kontering_Raindance_{_period}.csv";
+            await JS.InvokeVoidAsync("downloadFile", fileName, base64, "text/csv");
+            _meddelande = $"Raindance-konteringsfil genererad med {_rader.Count} rader (period {_period}).";
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte skapa Raindance-filen: {ex.Message}";
+        }
+        finally
+        {
+            _genererar = false;
+        }
+    }
+
+    private async Task LaddaNerSie()
+    {
+        if (_rader is null || _run is null) return;
+        _genererar = true;
+        _meddelande = null;
+        _fel = null;
+        try
+        {
+            var input = new SIEExportInput
+            {
+                OrganisationsNummer = _orgnr.Trim(),
+                Foretagsnamn = _foretagsnamn.Trim(),
+                GenereringsDatum = DateOnly.FromDateTime(DateTime.Today)
+            };
+            var bytes = _sieExporter.GenerateSieBytes(_run, input, _rader);
+            var base64 = Convert.ToBase64String(bytes);
+            var fileName = $"Lon_{_period}.se";
+            await JS.InvokeVoidAsync("downloadFile", fileName, base64, "application/octet-stream");
+            _meddelande = $"SIE typ 4-fil genererad med {_rader.Count} konteringsrader (period {_period}).";
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte skapa SIE-filen: {ex.Message}";
+        }
+        finally
+        {
+            _genererar = false;
+        }
+    }
+
+    private static string Kr(decimal amount) => $"{amount:N2} kr";
+
+    private static string FormatPeriod(int year, int month)
+    {
+        var monthNames = new[] { "", "Januari", "Februari", "Mars", "April", "Maj", "Juni",
+            "Juli", "Augusti", "September", "Oktober", "November", "December" };
+        return $"{monthNames[month]} {year}";
+    }
+
+    private record KorningRad(Guid Id, string Etikett);
+}

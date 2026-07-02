@@ -93,13 +93,123 @@ public sealed class PayrollInputBuilder
 
         AggregeraFranvaro(leave, firstDay, lastDay, input);
 
-        // === Nettolöneavdrag ===
-        // Löneutmätning (Kronofogden) och fackavgift saknar ännu ett dedikerat register.
-        // De byggs in här när källorna finns; tills dess 0 kr (aldrig en schablon).
-        input.Loneutmatning = Money.Zero;
-        input.Fackavgift = Money.Zero;
+        // === Nettolöneavdrag: löneutmätning (Kronofogden) + fackavgift ur registren ===
+        // Systemet är experten: beloppen härleds ur utmätnings-/fackavgiftsregistren per anställd
+        // och period — aldrig en schablon. Löneutmätningen kapas mot förbehållsbeloppet.
+        await FyllNettoavdragAsync(db, employment, input, firstDay, lastDay, ct);
 
         return input;
+    }
+
+    /// <summary>
+    /// Läser löneutmätnings- och fackavgiftsregistren och fyller <see cref="PayrollInput.Loneutmatning"/>
+    /// och <see cref="PayrollInput.Fackavgift"/> för perioden.
+    ///
+    /// Förbehållsbeloppet (existensminimum enligt KFM) respekteras: utmätningen kapas mot en
+    /// medvetet FÖRSIKTIG nettouppskattning (proportionerad grundlön minus preliminärskatt).
+    /// Uppskattningen exkluderar OB/övertid/tillägg, vilket underskattar nettot och därmed
+    /// aldrig drar mer än vad som med säkerhet finns över förbehållsbeloppet; den exakta
+    /// avstämningen sker sedan mot lönespecifikationen.
+    /// </summary>
+    private static async Task FyllNettoavdragAsync(
+        RegionHRDbContext db,
+        Employment employment,
+        PayrollInput input,
+        DateOnly firstDay,
+        DateOnly lastDay,
+        CancellationToken ct)
+    {
+        var anstallId = employment.AnstallId;
+        var proportioneradBrutto = BeraknaProportioneradBrutto(employment, input);
+
+        // Löneutmätning (Utsökningsbalken 7 kap.)
+        var aktivaUtmatningar = await db.Set<Loneutmatning>()
+            .Where(u => u.AnstallId == anstallId
+                        && u.Startdatum <= lastDay
+                        && (u.Slutdatum == null || u.Slutdatum >= firstDay))
+            .ToListAsync(ct);
+
+        if (aktivaUtmatningar.Count > 0)
+        {
+            var skattesats = await HamtaEstimeradSkattesatsAsync(db, anstallId, ct);
+            var estimeradNetto = Money.SEK(proportioneradBrutto.Amount * (1m - skattesats));
+            input.Loneutmatning = BeraknaLoneutmatning(aktivaUtmatningar, estimeradNetto);
+        }
+        else
+        {
+            input.Loneutmatning = Money.Zero;
+        }
+
+        // Fackavgift (frivilligt nettoavdrag, efterställt utmätning)
+        var aktivaFackavgifter = await db.Set<Fackavgift>()
+            .Where(f => f.AnstallId == anstallId
+                        && f.Startdatum <= lastDay
+                        && (f.Slutdatum == null || f.Slutdatum >= firstDay))
+            .ToListAsync(ct);
+
+        input.Fackavgift = aktivaFackavgifter.Count == 0
+            ? Money.Zero
+            : Money.SEK(aktivaFackavgifter.Sum(f => f.BeraknaAvgift(proportioneradBrutto).Amount)).RoundToOren();
+    }
+
+    /// <summary>
+    /// Proportionerad grundlön (månadslön × sysselsättningsgrad, proportionerad mot arbetade dagar).
+    /// Utgör bas för fackavgiftsprocent och nettouppskattning; exkluderar tillägg avsiktligt.
+    /// </summary>
+    private static Money BeraknaProportioneradBrutto(Employment employment, PayrollInput input)
+    {
+        var fullLon = employment.Manadslon.Amount * employment.Sysselsattningsgrad.Value / 100m;
+        var arbetsdagar = Math.Max(1, input.ArbetsdagarIManadens);
+        var brutto = input.ArbetadeDagar >= arbetsdagar
+            ? fullLon
+            : fullLon * input.ArbetadeDagar / arbetsdagar;
+        return Money.SEK(brutto);
+    }
+
+    /// <summary>
+    /// Uppskattad preliminärskattesats (0–1) för nettoberäkningen. Använder den anställdes
+    /// kommunalskattesats om den finns, annars genomsnittlig kommunalskatt (~32 %).
+    /// </summary>
+    private static async Task<decimal> HamtaEstimeradSkattesatsAsync(
+        RegionHRDbContext db, EmployeeId anstallId, CancellationToken ct)
+    {
+        var kommunalSats = await db.Employees
+            .Where(e => e.Id == anstallId)
+            .Select(e => e.KommunalSkattesats)
+            .FirstOrDefaultAsync(ct);
+
+        var procent = kommunalSats is > 0m ? kommunalSats.Value : 32m;
+        return procent / 100m;
+    }
+
+    /// <summary>
+    /// Summera aktiva utmätningar, kapat mot vad som finns kvar över förbehållsbeloppet.
+    /// Vid flera samtidiga beslut används det högsta förbehållsbeloppet (dubbelräknas inte)
+    /// och beloppen fördelas i turordning efter startdatum tills det disponibla är slut.
+    /// </summary>
+    private static Money BeraknaLoneutmatning(IReadOnlyList<Loneutmatning> aktiva, Money estimeradNetto)
+    {
+        var forbehall = aktiva.Max(u => u.Forbehallsbelopp.Amount);
+        var kvar = estimeradNetto.Amount - forbehall;
+        if (kvar <= 0m)
+            return Money.Zero;
+
+        var total = 0m;
+        foreach (var u in aktiva.OrderBy(u => u.Startdatum))
+        {
+            if (kvar <= 0m)
+                break;
+
+            var begart = u.Typ == UtmatningTyp.FastBelopp
+                ? u.Belopp.Amount
+                : Math.Round(estimeradNetto.Amount * u.Andel, 2, MidpointRounding.ToEven);
+
+            var avdrag = Math.Min(begart, kvar);
+            total += avdrag;
+            kvar -= avdrag;
+        }
+
+        return Money.SEK(total).RoundToOren();
     }
 
     /// <summary>

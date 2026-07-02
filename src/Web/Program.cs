@@ -101,6 +101,7 @@ builder.Services.AddScoped<StamplingService>();
 builder.Services.AddScoped<FlexService>();
 builder.Services.AddScoped<RegionHR.Web.Services.RekryteringService>();
 builder.Services.AddScoped<LedighetService>();
+builder.Services.AddScoped<LokalAvvikelseService>();
 
 // Rate limiting
 builder.Services.AddRateLimiter(options =>

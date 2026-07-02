@@ -308,6 +308,7 @@ public class RegionHRDbContext : DbContext
     public DbSet<AgreementNoticePeriod> AgreementNoticePeriods => Set<AgreementNoticePeriod>();
     public DbSet<AgreementPensionRule> AgreementPensionRules => Set<AgreementPensionRule>();
     public DbSet<AgreementInsurancePackage> AgreementInsurancePackages => Set<AgreementInsurancePackage>();
+    public DbSet<LokalAvtalsAvvikelse> LokalaAvtalsAvvikelser => Set<LokalAvtalsAvvikelse>();
     public DbSet<PrivateCompensationPlan> PrivateCompensationPlans => Set<PrivateCompensationPlan>();
 
     // Platform (schema: platform)

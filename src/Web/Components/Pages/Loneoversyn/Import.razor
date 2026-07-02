@@ -1,0 +1,221 @@
+@page "/loneoversyn/{RundaId:guid}/import"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.SalaryReview.Domain
+@using RegionHR.Web.Services
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
+@inject AuthService Auth
+@inject ISnackbar Snackbar
+
+<PageTitle>OpenHR - Importera löneförslag</PageTitle>
+
+<MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack"
+           OnClick="@(() => Nav.NavigateTo($"/loneoversyn/{RundaId}"))" Class="mb-3">Tillbaka till rundan</MudButton>
+
+@if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
+else if (_runda is null) { <MudAlert Severity="Severity.Error">Löneöversynsrundan hittades inte.</MudAlert> }
+else
+{
+    <MudText Typo="Typo.h4" Style="font-weight: 700;" Class="mb-1">Importera löneförslag</MudText>
+    <MudText Typo="Typo.body2" Class="mb-4" Style="opacity:.75;">
+        @_runda.Namn · År @_runda.Ar · Avtal @_runda.Avtalsomrade · Ikraftträdande @_runda.IkrafttradandeDatum.ToString("yyyy-MM-dd")
+    </MudText>
+
+    @if (!Auth.IsHR)
+    {
+        <MudAlert Severity="Severity.Warning">Endast HR/administratör kan importera löneförslag.</MudAlert>
+    }
+    else if (_runda.Status != SalaryReviewStatus.Planering)
+    {
+        <MudAlert Severity="Severity.Info">Rundan är i status @_runda.Status. Import kan bara göras under planeringsfasen.</MudAlert>
+    }
+    else
+    {
+        @if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert> }
+
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-2">1. Välj fil</MudText>
+            <MudText Typo="Typo.body2" Class="mb-3" Style="opacity:.8;">
+                CSV (semikolon-, tab- eller kommaseparerad) eller Excel (.xlsx). Kolumner:
+                <strong>Personnummer</strong>, <strong>Ny lön</strong>, <strong>Motivering</strong>
+                (valfri kolumn <em>Anställnings-id</em> om en person har flera anställningar).
+                Rubrikrad känns igen automatiskt; annars antas ordningen Personnummer, Ny lön, Motivering.
+                Spara CSV som UTF-8.
+            </MudText>
+
+            <MudFileUpload T="IBrowserFile" Accept=".csv,.txt,.xlsx,.xlsm,.xls" OnFilesChanged="OnFileSelected">
+                <CustomContent>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.UploadFile"
+                               OnClick="@context.OpenFilePickerAsync">
+                        Välj fil
+                    </MudButton>
+                </CustomContent>
+            </MudFileUpload>
+
+            @if (_fil != null)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2"><strong>Vald fil:</strong> @_fil.Name (@FormateraStorlek(_fil.Size))</MudText>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+                           OnClick="Forhandsgranska" Disabled="_busy" StartIcon="@Icons.Material.Filled.Preview">
+                    @if (_busy) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                    Förhandsgranska
+                </MudButton>
+            }
+        </MudPaper>
+
+        @if (_forhandsvisning is { } fv)
+        {
+            @if (fv.GlobalaFel.Count > 0)
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-4">
+                    <MudText Typo="Typo.subtitle2">Filen kunde inte tolkas:</MudText>
+                    @foreach (var f in fv.GlobalaFel) { <MudText Typo="Typo.body2">@f</MudText> }
+                </MudAlert>
+            }
+            else
+            {
+                <MudPaper Class="pa-4 mb-4" Elevation="2">
+                    <div class="d-flex justify-space-between align-center mb-2">
+                        <MudText Typo="Typo.h6">2. Förhandsgranskning</MudText>
+                        <div>
+                            <MudChip T="string" Color="Color.Success" Size="Size.Small">@fv.AntalGiltiga giltiga</MudChip>
+                            @if (fv.AntalFel > 0) { <MudChip T="string" Color="Color.Error" Size="Size.Small">@fv.AntalFel med fel</MudChip> }
+                        </div>
+                    </div>
+
+                    <MudSimpleTable Hover="true" Dense="true" Elevation="0" Class="mb-3">
+                        <thead><tr><th>Rad</th><th>Personnummer</th><th>Namn</th><th>Nuvarande</th><th>Ny lön</th><th>Ökning</th><th>Status</th></tr></thead>
+                        <tbody>
+                            @foreach (var r in fv.Rader)
+                            {
+                                <tr style="@(r.ArGiltig ? "" : "background: rgba(var(--mud-palette-error-rgb), .08);")">
+                                    <td>@r.RadNummer</td>
+                                    <td>@r.PersonnummerRaw</td>
+                                    <td>@(r.Namn ?? "-")</td>
+                                    <td>@(r.NuvarandeLon?.ToString("N0") ?? "-") @(r.NuvarandeLon is null ? "" : "kr")</td>
+                                    <td>@(r.NyLon?.ToString("N0") ?? "-") @(r.NyLon is null ? "" : "kr")</td>
+                                    <td>@(r.Okning?.ToString("N0") ?? "-") @(r.Okning is null ? "" : "kr")</td>
+                                    <td>
+                                        @if (r.ArGiltig)
+                                        {
+                                            <MudChip T="string" Size="Size.Small" Color="Color.Success">OK</MudChip>
+                                        }
+                                        else
+                                        {
+                                            <MudTooltip Text="@string.Join(" ", r.Fel)">
+                                                <MudChip T="string" Size="Size.Small" Color="Color.Error">@r.Fel.FirstOrDefault()</MudChip>
+                                            </MudTooltip>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Committa"
+                               Disabled="@(_busy || fv.AntalGiltiga == 0)" StartIcon="@Icons.Material.Filled.PlaylistAddCheck">
+                        @if (_busy) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                        Importera @fv.AntalGiltiga giltiga rader
+                    </MudButton>
+                    @if (fv.AntalFel > 0)
+                    {
+                        <MudText Typo="Typo.caption" Class="d-block mt-2" Style="opacity:.7;">
+                            Endast giltiga rader importeras. Rätta felraderna i filen och ladda upp igen för att ta med dem.
+                        </MudText>
+                    }
+                </MudPaper>
+            }
+        }
+
+        @if (_resultat is { } res)
+        {
+            <MudAlert Severity="@(res.AntalSkapade > 0 ? Severity.Success : Severity.Warning)" Class="mb-3">
+                @res.AntalSkapade löneförslag importerade@(res.AntalAvvisade > 0 ? $", {res.AntalAvvisade} avvisade" : "").
+                @if (res.Meddelanden.Count > 0)
+                {
+                    <ul style="margin:.5rem 0 0 1rem;">
+                        @foreach (var m in res.Meddelanden) { <li><MudText Typo="Typo.caption">@m</MudText></li> }
+                    </ul>
+                }
+            </MudAlert>
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                       OnClick="@(() => Nav.NavigateTo($"/loneoversyn/{RundaId}"))" StartIcon="@Icons.Material.Filled.ArrowForward">
+                Till rundan
+            </MudButton>
+        }
+    }
+}
+
+@code {
+    [Parameter] public Guid RundaId { get; set; }
+
+    private LoneoversynService _svc = default!;
+    private SalaryReviewRound? _runda;
+    private IBrowserFile? _fil;
+    private SalaryImportForhandsvisning? _forhandsvisning;
+    private SalaryImportResultat? _resultat;
+    private bool _loading = true, _busy;
+    private string? _error;
+
+    private const long MaxFilstorlek = 10 * 1024 * 1024; // 10 MB
+
+    protected override void OnInitialized() => _svc = new LoneoversynService(DbFactory);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        try { _runda = await _svc.HamtaRundaAsync(RundaId); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _fil = e.File;
+        _forhandsvisning = null;
+        _resultat = null;
+        _error = null;
+    }
+
+    private async Task Forhandsgranska()
+    {
+        if (_fil is null) return;
+        _busy = true; _error = null; _resultat = null;
+        try
+        {
+            await using var ms = new MemoryStream();
+            await using (var las = _fil.OpenReadStream(MaxFilstorlek))
+                await las.CopyToAsync(ms);
+            ms.Position = 0;
+            _forhandsvisning = await _svc.FortolkaFilAsync(RundaId, ms, _fil.Name);
+        }
+        catch (Exception ex) { _error = $"Kunde inte tolka filen: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private async Task Committa()
+    {
+        if (_forhandsvisning is not { } fv) return;
+        _busy = true; _error = null;
+        try
+        {
+            _resultat = await _svc.CommittaImportAsync(RundaId, fv.GiltigaRader);
+            _runda = await _svc.HamtaRundaAsync(RundaId);
+            _forhandsvisning = null;
+            _fil = null;
+            Snackbar.Add($"{_resultat.AntalSkapade} löneförslag importerade.", Severity.Success);
+        }
+        catch (Exception ex) { _error = $"Import misslyckades: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private static string FormateraStorlek(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024):F1} MB";
+    }
+}
