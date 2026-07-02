@@ -4,18 +4,26 @@
 
 OpenHR ar ett personalhanteringssystem byggt for att ersatta HEROMA och andra proprietara HR-system inom svensk offentlig sektor. Byggt med oppen kallkod (AGPL-3.0), svensk arbetsratt, kollektivavtal och GDPR.
 
-> **OpenHR 2.0** — 38 moduler, ~177 sidor, 207 domanentities, 1 116 tester, 328 i18n-nycklar (sv+en). Se [2.0 Expansion](#20-expansion) nedan.
+> **OpenHR 2.1** — 38 moduler, 189 sidor, 217 domanfiler, 1 637 tester (alla grona), 329/330 i18n-nycklar (sv+en). Se [2.0 Expansion](#20-expansion) nedan.
+
+## Status & begransningar (las forst)
+
+OpenHR ar en **fungerande, testad demonstrator** — inte en driftsatt Heroma-ersattare an. Vad som ar pa riktigt vs demo:
+
+- **Pa riktigt:** loneberakning med korrekta 2026-varden (skattetabell, AB O-tillagg, arbetsgivaravgift, traktamente), hela HR-livscykeln (anstalla→schema→tid→lon→utbetalningsfil), rollbaserad behorighet (Anstalld nar aldrig lon/audit/admin via URL), 1 637 grona tester.
+- **Demo/simulering (kraver externa avtal for skarp drift):** inloggning (BankID/SITHS ar simulerad — riktig e-legitimation kraver avtal med Finansiell ID-Teknik/Inera + SITHS-cert), HSA-katalogen (sandbox-adapter — skarp koppling kraver Inera-avtal), bank-/Skatteverket-filer genereras korrekt men skickas inte automatiskt (manuell inlamning). Se `docs/drift-reservloneplan.md`.
+- **Aterstar for produktion:** lasttest for 11 000 samtidiga anvandare, skarpa integrationer, drift-SLA. Se [gap-analys](docs/gap-analysis-enterprise-hr.md).
 
 ## Funktionsstatus
 
-### Berakningsmotorer (production-ready)
-Riktiga berakningar med korrekt svensk lagstiftning:
+### Berakningsmotorer (kopplade till UI, korrekta 2026-varden)
+Riktiga berakningar med svensk lagstiftning, anropade direkt fran lonekorningen:
 
-- **SwedishTaxCalculator** — kommunalskatt, statlig skatt, arbetsgivaravgift (31,42%), reducerad avgift 66+
-- **KollektivavtalEngine** — OB-tillagg (kvall/natt/helg/storhelg), viloregler, overtid, semester per alder (AB/HOK)
-- **TraktamentsCalculator** — inrikes/utrikes traktamente enligt Skatteverkets regler 2026
-- **SchemaOptimizer** — round-robin-tilldelning med balansindex
-- **Integrationsformat** — AGI-XML (Skatteverket), pain.001 (Nordea ISO 20022), CSV-export
+- **PayrollCalculationEngine** — brutto→netto via seedad **skattetabell** (Skatteverket tabell 34); arbetsgivaravgift 31,42% (aldre 10,21% for fodda ≤1958; 1937− = 0%; temporar ungdomsnedsattning 20,81%); statlig skatt over skiktgrans 643 000 kr/ar
+- **CollectiveAgreementRulesEngine** — AB §21 O-tillagg (kvall 25,60 / natt 56,70 / helg 66,10 / storhelg 126,90 kr/h), overtid §20, semester §27 per alder; arsversionerat
+- **TraktamentsCalculator** — inrikes 300/150 kr + maltidsavdrag enligt Skatteverket 2026 (SKV 354); arsversionerat
+- **ConstraintScheduleSolver + ArbetstidslagenValidator** — schemaoptimering med ATL-kontroll (dygnsvila 11h, veckovila 36h)
+- **Integrationsformat** — AGI-XML (Skatteverket SKV 269, faltkod + specifikationsnummer), pain.001.001.03 (ISO 20022, riktiga person-/bankuppgifter), nedladdas via /lon/export
 
 ### Karnmoduler (DB-backed, domanlogik)
 Fullstandig datamodell med entities, domanmetoder, EF Core-konfiguration, migrationer och seed:
