@@ -1,0 +1,218 @@
+@page "/utbildning/extern/{Token}"
+@layout RegionHR.Web.Components.Layout.EmptyLayout
+@using RegionHR.LMS.Domain
+@using RegionHR.Infrastructure.Persistence
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+
+@* Publik utbildningsportal för externa deltagare. Åtkomst via personlig token-länk
+   (EmptyLayout → ingen inloggning krävs; token är bäraren). Se ExternalParticipant för
+   dokumentation om vad som är förenklat jämfört med en fullständig extern IdP-lösning. *@
+
+<PageTitle>OpenHR — Utbildningsportal</PageTitle>
+
+<MudThemeProvider />
+<MudContainer MaxWidth="MaxWidth.Medium" Class="py-8">
+    @if (_loading)
+    {
+        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+    }
+    else if (_deltagare == null)
+    {
+        <MudAlert Severity="Severity.Error">Ogiltig eller okänd access-länk. Kontakta utbildningsadministratören.</MudAlert>
+    }
+    else if (!_deltagare.HarAktivAccess)
+    {
+        <MudAlert Severity="Severity.Warning">Din access till utbildningsportalen har återkallats.</MudAlert>
+    }
+    else
+    {
+        <MudPaper Class="pa-6 mb-4" Elevation="2">
+            <MudText Typo="Typo.h4" Style="font-weight: 700;">Välkommen, @_deltagare!.Namn</MudText>
+            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+                Extern deltagare@(_deltagare!.Organisation != null ? $" — {_deltagare!.Organisation}" : "")
+            </MudText>
+        </MudPaper>
+
+        @if (_error != null)
+        {
+            <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+        }
+
+        @if (_kurser.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info">Du är inte anmäld till någon kurs ännu.</MudAlert>
+        }
+        else if (_aktivKurs == null)
+        {
+            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Dina kurser</MudText>
+            <MudGrid Spacing="3">
+                @foreach (var kurs in _kurser)
+                {
+                    var enr = _enrollments.FirstOrDefault(e => e.CourseId == kurs.Id);
+                    var grad = enr?.GenomforandeGrad ?? 0;
+                    <MudItem xs="12" sm="6">
+                        <MudPaper Class="pa-4" Elevation="2">
+                            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@kurs.Namn</MudText>
+                            <MudText Typo="Typo.caption" Class="mb-2">@kurs.Beskrivning</MudText>
+                            <MudProgressLinear Color="Color.Success" Value="@grad" Class="my-2" Rounded="true" />
+                            <MudText Typo="Typo.caption">@grad % genomfört</MudText>
+                            <div class="mt-2">
+                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                           OnClick="@(() => OppnaKurs(kurs))">
+                                    @(grad >= 100 ? "Repetera" : (grad > 0 ? "Fortsätt" : "Starta"))
+                                </MudButton>
+                            </div>
+                        </MudPaper>
+                    </MudItem>
+                }
+            </MudGrid>
+        }
+        else
+        {
+            <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary"
+                       OnClick="@(() => _aktivKurs = null)" Class="mb-3">Alla kurser</MudButton>
+            <MudText Typo="Typo.h5" Class="mb-1" Style="font-weight: 700;">@_aktivKurs!.Namn</MudText>
+            <MudProgressLinear Color="Color.Success" Value="@_grad" Class="my-2" Size="Size.Large" Rounded="true" />
+            <MudText Typo="Typo.caption" Class="mb-3">@_completedLessonIds.Count av @_lessons.Count lektioner genomförda (@_grad %)</MudText>
+
+            @if (_lessons.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info">Kursen saknar innehåll ännu.</MudAlert>
+            }
+            else
+            {
+                @foreach (var l in _lessons)
+                {
+                    var klar = _completedLessonIds.Contains(l.Id);
+                    <MudPaper Class="pa-4 mb-2" Elevation="1">
+                        <div class="d-flex justify-space-between align-center">
+                            <div>
+                                <MudText Typo="Typo.subtitle2" Style="font-weight: 600;">
+                                    <MudIcon Icon="@(klar ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.RadioButtonUnchecked)"
+                                             Color="@(klar ? Color.Success : Color.Default)" Size="Size.Small" Class="mr-1" />
+                                    @l.Titel
+                                </MudText>
+                                <MudText Typo="Typo.caption">@LessonTypeText(l.Typ) @(l.LangdMinuter > 0 ? $"· {l.LangdMinuter} min" : "")</MudText>
+                            </div>
+                            @if (!klar)
+                            {
+                                <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Small"
+                                           OnClick="@(() => MarkeraGenomford(l))">Markera genomförd</MudButton>
+                            }
+                        </div>
+                        @if (l.Typ == LessonType.Text && !string.IsNullOrWhiteSpace(l.TextInnehall))
+                        {
+                            <MudText Typo="Typo.body2" Class="mt-2" Style="white-space: pre-wrap;">@l.TextInnehall</MudText>
+                        }
+                        else if (l.Typ == LessonType.Video && !string.IsNullOrWhiteSpace(l.MediaUrl))
+                        {
+                            <MudLink Href="@l.MediaUrl" Target="_blank" Class="mt-2">@l.MediaUrl</MudLink>
+                        }
+                    </MudPaper>
+                }
+            }
+        }
+    }
+</MudContainer>
+
+@code {
+    [Parameter] public string Token { get; set; } = "";
+
+    private ExternalParticipant? _deltagare;
+    private List<Course> _kurser = [];
+    private List<ExternalCourseEnrollment> _enrollments = [];
+    private Course? _aktivKurs;
+    private List<Lesson> _lessons = [];
+    private HashSet<Guid> _completedLessonIds = [];
+    private int _grad;
+    private bool _loading = true;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _deltagare = await db.Set<ExternalParticipant>().FirstOrDefaultAsync(d => d.AccessToken == Token);
+            if (_deltagare == null || !_deltagare.HarAktivAccess) { _loading = false; return; }
+
+            var deltagare = _deltagare;
+            var deltId = deltagare.Id;
+
+            // deltagare spåras av denna db-kontext → RegistreraAktivitet + SaveChanges persisterar.
+            deltagare.RegistreraAktivitet();
+            await db.SaveChangesAsync();
+
+            _enrollments = await db.Set<ExternalCourseEnrollment>()
+                .Where(e => e.ExternalParticipantId == deltId)
+                .ToListAsync();
+            var kursIds = _enrollments.Select(e => e.CourseId).ToList();
+            _kurser = await db.Courses.Where(c => kursIds.Contains(c.Id)).OrderBy(c => c.Namn).ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte ladda portalen: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task OppnaKurs(Course kurs)
+    {
+        if (_deltagare == null) return;
+        var deltId = _deltagare.Id;
+        var kursId = kurs.Id;
+        _aktivKurs = kurs;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _lessons = await db.Set<Lesson>()
+            .Where(l => l.CourseId == kursId)
+            .OrderBy(l => l.Ordning).ThenBy(l => l.SkapadVid)
+            .ToListAsync();
+        _completedLessonIds = (await db.Set<LessonCompletion>()
+                .Where(c => c.CourseId == kursId && c.DeltagareId == deltId && c.ArExtern)
+                .Select(c => c.LessonId)
+                .ToListAsync())
+            .ToHashSet();
+        RakningGrad();
+    }
+
+    private async Task MarkeraGenomford(Lesson lektion)
+    {
+        if (_deltagare == null || _aktivKurs == null) return;
+        var kursId = _aktivKurs.Id;
+        var deltId = _deltagare.Id;
+        var lessonId = lektion.Id;
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var redan = await db.Set<LessonCompletion>()
+            .AnyAsync(c => c.CourseId == kursId && c.DeltagareId == deltId && c.ArExtern && c.LessonId == lessonId);
+        if (!redan)
+        {
+            db.Set<LessonCompletion>().Add(LessonCompletion.Markera(kursId, lessonId, deltId, arExtern: true));
+            _completedLessonIds.Add(lessonId);
+        }
+        RakningGrad();
+
+        var enr = await db.Set<ExternalCourseEnrollment>()
+            .FirstOrDefaultAsync(e => e.ExternalParticipantId == deltId && e.CourseId == kursId);
+        if (enr != null)
+        {
+            enr.UppdateraGenomforande(_grad);
+            var lokal = _enrollments.FirstOrDefault(e => e.Id == enr.Id);
+            lokal?.UppdateraGenomforande(_grad);
+        }
+        await db.SaveChangesAsync();
+    }
+
+    private void RakningGrad()
+    {
+        var giltiga = _completedLessonIds.Count(id => _lessons.Any(l => l.Id == id));
+        _grad = LessonCompletion.BeraknaGrad(giltiga, _lessons.Count);
+    }
+
+    private static string LessonTypeText(LessonType t) => t switch
+    {
+        LessonType.Text => "Text",
+        LessonType.Video => "Video",
+        LessonType.Fil => "Fil",
+        LessonType.Scorm => "SCORM",
+        _ => t.ToString()
+    };
+}

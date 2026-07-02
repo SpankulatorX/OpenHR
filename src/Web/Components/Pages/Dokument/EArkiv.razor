@@ -1,0 +1,242 @@
+@page "/dokument/earkiv"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Documents.Domain
+@using RegionHR.Infrastructure.Documents
+@using RegionHR.Infrastructure.Persistence
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IArchiveService Archive
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>OpenHR — E-arkiv</PageTitle>
+
+<div class="d-flex justify-space-between align-center mb-2">
+    <MudText Typo="Typo.h4" Style="font-weight: 700;">E-arkiv</MudText>
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Large"
+               StartIcon="@Icons.Material.Filled.DeleteSweep" Href="/dokument/earkiv/gallring"
+               Style="min-height: 48px;">Gallringsvy</MudButton>
+</div>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Arkiverade handlingar är oföränderliga enligt arkivlagen (1990:782). Innehåll och arkivmetadata
+    kan inte ändras efter arkivering; en integritetshash (SHA-256) upptäcker manipulation. Arkivpliktiga
+    handlingar skyddas mot GDPR-radering — de får bara tas bort genom gallring när fristen löpt ut.
+</MudText>
+
+@if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+}
+@if (_info != null)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _info = null)">@_info</MudAlert>
+}
+
+<MudPaper Class="pa-5 mb-4" Elevation="2">
+    <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Arkivera dokument</MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="6">
+                <MudSelect T="Guid?" @bind-Value="_valtDokument" Label="Dokument att arkivera" Variant="Variant.Outlined" Required="true">
+                    @foreach (var d in _arkiverbara)
+                    {
+                        <MudSelectItem T="Guid?" Value="@((Guid?)d.Id)">@d.FileName (@d.Kategori)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_diarienummer" Label="Diarienummer" Variant="Variant.Outlined" Required="true"
+                              Placeholder="t.ex. HR-2026-00123" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="ArchiveClass" @bind-Value="_arkivklass" Label="Arkivklass" Variant="Variant.Outlined">
+                    @foreach (var k in Enum.GetValues<ArchiveClass>())
+                    {
+                        <MudSelectItem Value="@k">@ArchiveClassificationPolicy.Etikett(k)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_ansvarig" Label="Arkivansvarig" Variant="Variant.Outlined" Required="true"
+                              Placeholder="t.ex. HR-arkivarie" />
+            </MudItem>
+        </MudGrid>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-4"
+                   Style="min-height: 48px;" OnClick="Arkivera"
+                   Disabled="@(_arbetar || _valtDokument == null || string.IsNullOrWhiteSpace(_diarienummer) || string.IsNullOrWhiteSpace(_ansvarig))">
+            @if (_arbetar) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+            Arkivera
+        </MudButton>
+</MudPaper>
+
+<MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">Arkiverade handlingar (@_arkiverade.Count)</MudText>
+<MudSimpleTable Hover="true" Elevation="2">
+    <thead>
+        <tr>
+            <th>Titel</th>
+            <th>Diarienummer</th>
+            <th>Arkivklass</th>
+            <th>Gallringsfrist</th>
+            <th>Status</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var a in _arkiverade)
+        {
+            <tr>
+                <td>@a.Titel</td>
+                <td>@a.Diarienummer</td>
+                <td><MudChip T="string" Size="Size.Small" Color="@(a.Bevaras ? Color.Info : Color.Default)">@ArchiveClassificationPolicy.Etikett(a.Arkivklass)</MudChip></td>
+                <td>@(a.Bevaras ? "Bevaras" : a.GallringsFrist?.ToString("yyyy-MM-dd") ?? "—")</td>
+                <td>
+                    @if (a.GallringsSparr)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning" Icon="@Icons.Material.Filled.Lock">Gallringsspärr</MudChip>
+                    }
+                    else
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success">Arkiverad</MudChip>
+                    }
+                </td>
+                <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Valj(a))">Detaljer</MudButton></td>
+            </tr>
+            @if (_vald?.Id == a.Id)
+            {
+                <tr>
+                    <td colspan="6">
+                        <MudPaper Class="pa-4" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                            <MudText Typo="Typo.body2"><strong>Ansvarig:</strong> @a.Ansvarig</MudText>
+                            <MudText Typo="Typo.body2"><strong>Arkiverad:</strong> @a.ArkiveratVid.ToLocalTime().ToString("yyyy-MM-dd HH:mm") av @a.ArkiveratAv</MudText>
+                            <MudText Typo="Typo.body2" Style="word-break: break-all;"><strong>Integritetshash (@a.HashAlgoritm):</strong> @a.IntegritetsHash</MudText>
+                            @if (a.GallringsSparr)
+                            {
+                                <MudText Typo="Typo.body2" Color="Color.Warning"><strong>Gallringsspärr:</strong> @a.GallringsSparrOrsak (satt av @a.GallringsSparrAv @a.GallringsSparrSatt?.ToLocalTime().ToString("yyyy-MM-dd"))</MudText>
+                            }
+
+                            @if (_integritetsResultat != null)
+                            {
+                                <MudAlert Severity="@(_integritetsResultat == true ? Severity.Success : _integritetsResultat == false ? Severity.Error : Severity.Info)" Dense="true" Class="mt-2">
+                                    @(_integritetsResultat == true ? "Integritet verifierad — handlingen är oförändrad." : _integritetsResultat == false ? "VARNING: hashen stämmer inte — handlingen kan ha manipulerats." : "Fysiskt innehåll ej åtkomligt — kunde inte verifieras (demoläge).")
+                                </MudAlert>
+                            }
+
+                            <MudStack Row="true" Spacing="2" Class="mt-3">
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.VerifiedUser"
+                                           OnClick="@(() => VerifieraIntegritet(a.Id))" Disabled="@_arbetar">Verifiera integritet</MudButton>
+                                @if (!a.GallringsSparr)
+                                {
+                                    <MudTextField @bind-Value="_sparrOrsak" Label="Orsak till spärr" Variant="Variant.Text" Margin="Margin.Dense" Style="max-width: 260px;" />
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning" StartIcon="@Icons.Material.Filled.Lock"
+                                               OnClick="@(() => SattSparr(a.Id))" Disabled="@(_arbetar || string.IsNullOrWhiteSpace(_sparrOrsak))">Sätt gallringsspärr</MudButton>
+                                }
+                                else
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success" StartIcon="@Icons.Material.Filled.LockOpen"
+                                               OnClick="@(() => TaBortSparr(a.Id))" Disabled="@_arbetar">Häv gallringsspärr</MudButton>
+                                }
+                            </MudStack>
+                        </MudPaper>
+                    </td>
+                </tr>
+            }
+        }
+    </tbody>
+</MudSimpleTable>
+
+@code {
+    private List<ArchivedDocument> _arkiverade = [];
+    private List<Document> _arkiverbara = [];
+    private ArchivedDocument? _vald;
+    private bool? _integritetsResultat;
+
+    private Guid? _valtDokument;
+    private string _diarienummer = "";
+    private string _ansvarig = "";
+    private ArchiveClass _arkivklass = ArchiveClass.Gallras5Ar;
+    private string _sparrOrsak = "";
+
+    private string? _error, _info;
+    private bool _arbetar;
+
+    protected override async Task OnInitializedAsync() => await LaddaOm();
+
+    private async Task LaddaOm()
+    {
+        try
+        {
+            _arkiverade = [.. await Archive.GetArkiveradeAsync(inkluderaGallrade: false)];
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _arkiverbara = await db.Documents
+                .Where(d => !d.IsArchived)
+                .OrderByDescending(d => d.UppladdadVid)
+                .Take(100)
+                .ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta arkivet: {ex.Message}"; }
+    }
+
+    private void Valj(ArchivedDocument a)
+    {
+        _integritetsResultat = null;
+        _sparrOrsak = "";
+        _vald = _vald?.Id == a.Id ? null : a;
+    }
+
+    private async Task<string> AktuellAnvandare()
+    {
+        var auth = await AuthState.GetAuthenticationStateAsync();
+        return auth.User.Identity?.Name is { Length: > 0 } n ? n : "Okänd";
+    }
+
+    private async Task Arkivera()
+    {
+        if (_valtDokument is null) return;
+        _arbetar = true; _error = null; _info = null;
+        try
+        {
+            var anvandare = await AktuellAnvandare();
+            var a = await Archive.ArkiveraAsync(_valtDokument.Value, _diarienummer, _ansvarig, anvandare, _arkivklass);
+            _info = $"Dokumentet arkiverat. Diarienr {a.Diarienummer}, {ArchiveClassificationPolicy.Etikett(a.Arkivklass)}.";
+            _valtDokument = null; _diarienummer = ""; _ansvarig = "";
+            await LaddaOm();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _arbetar = false; }
+    }
+
+    private async Task VerifieraIntegritet(Guid id)
+    {
+        _arbetar = true; _error = null;
+        try { _integritetsResultat = await Archive.VerifieraIntegritetAsync(id); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _arbetar = false; }
+    }
+
+    private async Task SattSparr(Guid id)
+    {
+        _arbetar = true; _error = null; _info = null;
+        try
+        {
+            await Archive.SattGallringsSparrAsync(id, _sparrOrsak, await AktuellAnvandare());
+            _info = "Gallringsspärr satt.";
+            _vald = null;
+            await LaddaOm();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _arbetar = false; }
+    }
+
+    private async Task TaBortSparr(Guid id)
+    {
+        _arbetar = true; _error = null; _info = null;
+        try
+        {
+            await Archive.TaBortGallringsSparrAsync(id, await AktuellAnvandare());
+            _info = "Gallringsspärr hävd.";
+            _vald = null;
+            await LaddaOm();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _arbetar = false; }
+    }
+}

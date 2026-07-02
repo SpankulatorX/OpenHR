@@ -134,6 +134,14 @@ public static class DependencyInjection
         services.AddScoped<ReportGenerator>();
         services.AddScoped<ReportExecutionService>();
 
+        // E-arkiv (arkivlagen) — våg 7
+        services.AddScoped<RegionHR.Infrastructure.Documents.IArchiveService, RegionHR.Infrastructure.Documents.ArchiveService>();
+
+        // Web Push (VAPID + sändning) — våg 7. VapidKeyProvider läser "WebPush"-config, demo-fallback annars.
+        services.AddSingleton<RegionHR.Infrastructure.Notifications.VapidKeyProvider>();
+        services.AddSingleton<RegionHR.Infrastructure.Notifications.WebPushSender>();
+        services.AddScoped<RegionHR.Infrastructure.Notifications.PushDispatchService>();
+
         // HälsoSAM — rehabkedja + automatisk triggning (våg 1)
         services.AddScoped<IRehabRepository, RehabRepository>();
         services.AddScoped<RehabService>();

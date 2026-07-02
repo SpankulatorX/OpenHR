@@ -1,0 +1,276 @@
+@using Microsoft.EntityFrameworkCore
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Notifications
+@using RegionHR.Notifications.Domain
+@inject IJSRuntime JS
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.AuthService Auth
+@inject VapidKeyProvider Vapid
+@inject PushDispatchService PushDispatch
+@inject ISnackbar Snackbar
+
+<MudCard Elevation="2" Class="mt-6">
+    <MudCardHeader>
+        <CardHeaderAvatar>
+            <MudIcon Icon="@Icons.Material.Filled.NotificationsActive" Color="Color.Primary" />
+        </CardHeaderAvatar>
+        <CardHeaderContent>
+            <MudText Typo="Typo.h6" Style="font-weight: 600;">Push-notiser på denna enhet</MudText>
+            <MudText Typo="Typo.body2" Class="mud-text-secondary">
+                Få notiser direkt i webbläsaren eller på mobilen, även när OpenHR inte är öppet.
+            </MudText>
+        </CardHeaderContent>
+    </MudCardHeader>
+    <MudCardContent>
+        @if (!_ready)
+        {
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" />
+        }
+        else if (!_supported)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true">
+                Den här webbläsaren stöder inte push-notiser.
+            </MudAlert>
+        }
+        else
+        {
+            @if (_permission == "denied")
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                    Notisbehörighet är blockerad i webbläsaren. Tillåt notiser för sidan och försök igen.
+                </MudAlert>
+            }
+
+            <MudText Typo="Typo.body2" Class="mb-3">
+                Status:
+                @if (_subscribedOnDevice)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">Aktiverad</MudChip>
+                }
+                else
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Default" Variant="Variant.Text">Ej aktiverad</MudChip>
+                }
+                <span class="mud-text-secondary">@_dbActiveCount aktiv(a) prenumeration(er) i databasen.</span>
+            </MudText>
+
+            <div class="d-flex flex-wrap gap-2">
+                @if (!_subscribedOnDevice)
+                {
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.NotificationsActive"
+                               OnClick="Aktivera" Disabled="@_busy" Style="min-height: 44px;">
+                        Aktivera push på denna enhet
+                    </MudButton>
+                }
+                else
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                               StartIcon="@Icons.Material.Filled.NotificationsOff"
+                               OnClick="Inaktivera" Disabled="@_busy" Style="min-height: 44px;">
+                        Inaktivera
+                    </MudButton>
+                    <MudButton Variant="Variant.Text" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.Send"
+                               OnClick="SkickaTest" Disabled="@_busy" Style="min-height: 44px;">
+                        Skicka testnotis
+                    </MudButton>
+                }
+            </div>
+
+            @if (Vapid.IsUsingDemoKeys)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true" Class="mt-3">
+                    <strong>Demo-VAPID-nycklar</strong> används. I produktion: sätt egna nycklar i
+                    <code>WebPush:PublicKey</code> / <code>WebPush:PrivateKey</code> (privat nyckel via secret).
+                </MudAlert>
+            }
+        }
+    </MudCardContent>
+</MudCard>
+
+@code {
+    private bool _ready;
+    private bool _supported;
+    private bool _busy;
+    private bool _subscribedOnDevice;
+    private int _dbActiveCount;
+    private string? _permission;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || !Auth.EmployeeId.HasValue)
+        {
+            return;
+        }
+
+        try
+        {
+            _supported = await JS.InvokeAsync<bool>("OpenHR.push.isSupported");
+            if (_supported)
+            {
+                _permission = await JS.InvokeAsync<string>("OpenHR.push.permission");
+                _subscribedOnDevice = await JS.InvokeAsync<bool>("OpenHR.push.isSubscribed");
+            }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var id = Auth.EmployeeId.Value;
+            _dbActiveCount = await db.PushSubscriptions.CountAsync(p => p.AnstallId == id && p.ArAktiv);
+        }
+        catch (JSException)
+        {
+            // JS interop not available yet (prerender) — leave defaults.
+        }
+        finally
+        {
+            _ready = true;
+            StateHasChanged();
+        }
+    }
+
+    private async Task Aktivera()
+    {
+        if (!Auth.EmployeeId.HasValue)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var data = await JS.InvokeAsync<PushSubData?>("OpenHR.push.getSubscription", Vapid.PublicKey);
+            if (data is null || string.IsNullOrEmpty(data.Endpoint))
+            {
+                _permission = data?.Permission;
+                Snackbar.Add(
+                    data?.Permission == "denied"
+                        ? "Notisbehörighet nekad i webbläsaren."
+                        : "Kunde inte aktivera push på denna enhet.",
+                    Severity.Warning);
+                return;
+            }
+
+            var id = Auth.EmployeeId.Value;
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var existing = await db.PushSubscriptions
+                .Where(p => p.AnstallId == id && p.Endpoint == data.Endpoint)
+                .ToListAsync();
+
+            if (existing.Count == 0)
+            {
+                db.PushSubscriptions.Add(
+                    PushSubscription.Registrera(id, data.Endpoint, data.P256dh ?? string.Empty, data.Auth ?? string.Empty));
+            }
+            else
+            {
+                foreach (var sub in existing)
+                {
+                    sub.Aktivera();
+                }
+            }
+
+            await db.SaveChangesAsync();
+            _dbActiveCount = await db.PushSubscriptions.CountAsync(p => p.AnstallId == id && p.ArAktiv);
+            _subscribedOnDevice = true;
+            _permission = "granted";
+            Snackbar.Add("Push aktiverad på denna enhet.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte aktivera push: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task Inaktivera()
+    {
+        if (!Auth.EmployeeId.HasValue)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var endpoint = await JS.InvokeAsync<string?>("OpenHR.push.removeSubscription");
+            var id = Auth.EmployeeId.Value;
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var query = db.PushSubscriptions.Where(p => p.AnstallId == id && p.ArAktiv);
+            if (!string.IsNullOrEmpty(endpoint))
+            {
+                query = query.Where(p => p.Endpoint == endpoint);
+            }
+
+            var toDeactivate = await query.ToListAsync();
+            foreach (var sub in toDeactivate)
+            {
+                sub.Avaktivera();
+            }
+
+            if (toDeactivate.Count > 0)
+            {
+                await db.SaveChangesAsync();
+            }
+
+            _dbActiveCount = await db.PushSubscriptions.CountAsync(p => p.AnstallId == id && p.ArAktiv);
+            _subscribedOnDevice = false;
+            Snackbar.Add("Push inaktiverad på denna enhet.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte inaktivera push: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SkickaTest()
+    {
+        if (!Auth.EmployeeId.HasValue)
+        {
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            var id = Auth.EmployeeId.Value;
+
+            // Skapa en riktig notis och pusha den — samma väg som en produktionsnotis tar.
+            var notis = Notification.Create(
+                id,
+                "Testnotis från OpenHR",
+                $"Push-test skickat {DateTime.Now:HH:mm:ss}.",
+                NotificationType.Info,
+                NotificationChannel.Push,
+                "/notiser");
+
+            await using (var db = await DbFactory.CreateDbContextAsync())
+            {
+                db.Notifications.Add(notis);
+                await db.SaveChangesAsync();
+            }
+
+            var sent = await PushDispatch.DispatchAsync(notis);
+            Snackbar.Add(
+                sent > 0 ? $"Testnotis skickad till {sent} enhet(er)." : "Ingen aktiv prenumeration att pusha till.",
+                sent > 0 ? Severity.Success : Severity.Warning);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte skicka testnotis: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed record PushSubData(string? Endpoint, string? P256dh, string? Auth, string? Permission);
+}

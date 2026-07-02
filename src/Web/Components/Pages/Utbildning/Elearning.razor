@@ -8,9 +8,18 @@
 <PageTitle>OpenHR — E-learning</PageTitle>
 
 <MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">E-learning</MudText>
-<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+<MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
     Kurskatalog och kursanmälningar från databasen. Adminvy.
 </MudText>
+
+<div class="d-flex flex-wrap gap-2 mb-4">
+    <MudButton Href="/utbildning/kursinnehall" Variant="Variant.Outlined" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.MenuBook" Size="Size.Small">Kursinnehåll</MudButton>
+    <MudButton Href="/utbildning/scorm" Variant="Variant.Outlined" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Widgets" Size="Size.Small">SCORM-paket</MudButton>
+    <MudButton Href="/utbildning/externa" Variant="Variant.Outlined" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.GroupAdd" Size="Size.Small">Externa deltagare</MudButton>
+</div>
 
 @if (_loading)
 {
@@ -102,8 +111,12 @@ else
                         <td>@(c.ArObligatorisk ? "Ja" : "Nej")</td>
                         <td>@(c.Kategori ?? "—")</td>
                         <td>@antalAnmalda</td>
-                        <td><MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
-                                       OnClick="@(() => { _enrollCourseId = c.Id; _showEnroll = true; })">Anmäl</MudButton></td>
+                        <td>
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Primary"
+                                       OnClick="@(() => { _enrollCourseId = c.Id; _showEnroll = true; })">Anmäl</MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                                       Href="@($"/utbildning/kurs/{c.Id}")" StartIcon="@Icons.Material.Filled.PlayArrow">Öppna</MudButton>
+                        </td>
                     </tr>
                 }
             </tbody>

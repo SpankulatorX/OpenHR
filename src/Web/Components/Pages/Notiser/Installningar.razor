@@ -38,6 +38,8 @@ else
     </MudButton>
 
     @if (_sparad) { <MudAlert Severity="Severity.Success" Class="mt-4" ShowCloseIcon="true" CloseIconClicked="@(() => _sparad = false)">Inställningar sparade i databasen.</MudAlert> }
+
+    <PushDeviceCard />
 }
 
 @code {

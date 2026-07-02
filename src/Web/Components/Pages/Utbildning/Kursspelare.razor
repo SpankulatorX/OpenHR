@@ -1,0 +1,321 @@
+@page "/utbildning/kurs/{CourseId:guid}"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.LMS.Domain
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Web.Services
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject AuthService Auth
+
+<PageTitle>OpenHR — Kursspelare</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/utbildning/elearning" Style="margin-bottom: 1rem;">Tillbaka till katalogen</MudButton>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error">@_error</MudAlert>
+}
+else if (_course == null)
+{
+    <MudAlert Severity="Severity.Warning">Kursen hittades inte.</MudAlert>
+}
+else
+{
+    <MudText Typo="Typo.h4" Class="mb-1" Style="font-weight: 700;">@_course!.Namn</MudText>
+    <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">@_course!.Beskrivning</MudText>
+
+    @* Deltagarval för användare utan kopplad anställning (t.ex. Admin/HR) *@
+    @if (_needParticipantPick)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2" Style="border-left: 4px solid var(--mud-palette-warning);">
+            <MudText Typo="Typo.subtitle2" Class="mb-2">Ditt konto saknar kopplad anställning. Välj deltagare att spåra genomförande för:</MudText>
+            <MudGrid Spacing="2" Class="align-center">
+                <MudItem xs="12" sm="8">
+                    <MudSelect T="Guid?" @bind-Value="_deltagareId" Label="Deltagare (anställd)" Variant="Variant.Outlined" Dense="true">
+                        @foreach (var e in _employees)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Fornamn @e.Efternamn</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="StartaForDeltagare"
+                               Disabled="@(_deltagareId == null)">Öppna kurs</MudButton>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    }
+    else
+    {
+        <MudPaper Class="pa-3 mb-4" Elevation="1">
+            <div class="d-flex justify-space-between align-center mb-1">
+                <MudText Typo="Typo.body2"><strong>Genomförande:</strong> @(_grad) %</MudText>
+                <MudChip T="string" Size="Size.Small" Color="@ProgressColor(_enrollmentProgress)">@ProgressText(_enrollmentProgress)</MudChip>
+            </div>
+            <MudProgressLinear Color="Color.Success" Value="@_grad" Class="my-1" Size="Size.Large" Rounded="true" />
+            <MudText Typo="Typo.caption">@_completedLessonIds.Count av @_lessons.Count lektioner genomförda</MudText>
+        </MudPaper>
+
+        @if (_lessons.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                Kursen har inget lektionsinnehåll ännu. Lägg till lektioner under
+                <MudLink Href="/utbildning/kursinnehall">Kursinnehåll</MudLink>.
+            </MudAlert>
+        }
+        else
+        {
+            <MudGrid Spacing="3">
+                @* Lektionslista *@
+                <MudItem xs="12" md="4">
+                    <MudPaper Elevation="2" Class="pa-2">
+                        <MudList T="Lesson" Dense="true">
+                            @for (var i = 0; i < _lessons.Count; i++)
+                            {
+                                var idx = i;
+                                var lektion = _lessons[idx];
+                                var klar = _completedLessonIds.Contains(lektion.Id);
+                                <MudListItem T="Lesson" OnClick="@(() => _aktivIndex = idx)"
+                                             Icon="@(klar ? Icons.Material.Filled.CheckCircle : LessonIcon(lektion.Typ))"
+                                             IconColor="@(klar ? Color.Success : Color.Default)"
+                                             Style="@(idx == _aktivIndex ? "background: var(--mud-palette-action-default-hover); border-radius: 6px;" : "")">
+                                    <MudText Typo="Typo.body2">@(idx + 1). @lektion.Titel</MudText>
+                                </MudListItem>
+                            }
+                        </MudList>
+                    </MudPaper>
+                </MudItem>
+
+                @* Aktiv lektion *@
+                <MudItem xs="12" md="8">
+                    @{
+                        var aktiv = _lessons[_aktivIndex];
+                        var aktivKlar = _completedLessonIds.Contains(aktiv.Id);
+                    }
+                    <MudPaper Elevation="2" Class="pa-5">
+                        <div class="d-flex justify-space-between align-center mb-2">
+                            <MudText Typo="Typo.h6" Style="font-weight: 600;">@aktiv.Titel</MudText>
+                            <MudChip T="string" Size="Size.Small">@LessonTypeText(aktiv.Typ)</MudChip>
+                        </div>
+
+                        @switch (aktiv.Typ)
+                        {
+                            case LessonType.Text:
+                                <MudText Typo="Typo.body1" Style="white-space: pre-wrap;">@aktiv.TextInnehall</MudText>
+                                break;
+                            case LessonType.Video:
+                                <MudText Typo="Typo.body2" Class="mb-2">Videolektion:</MudText>
+                                <MudLink Href="@aktiv.MediaUrl" Target="_blank" Color="Color.Primary">@aktiv.MediaUrl</MudLink>
+                                break;
+                            case LessonType.Fil:
+                                <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true">
+                                    Bifogad fil: <strong>@aktiv.FilNamn</strong> (lagrad via fillagringstjänsten).
+                                </MudAlert>
+                                break;
+                            case LessonType.Scorm:
+                                if (_scormByLesson.TryGetValue(aktiv.Id, out var pkg))
+                                {
+                                    <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mb-2">
+                                        SCORM-paket: <strong>@pkg.Titel</strong> — @pkg.VersionText,
+                                        launch: <code>@pkg.LaunchUrl</code>
+                                    </MudAlert>
+                                    <MudText Typo="Typo.caption">
+                                        Förenklad SCORM-uppspelning: paketet är uppladdat och katalogiserat.
+                                        Full SCORM-runtime (JS-API + cmi-spårning) ingår inte — markera genomförd manuellt nedan.
+                                    </MudText>
+                                }
+                                else
+                                {
+                                    <MudAlert Severity="Severity.Warning" Variant="Variant.Text" Dense="true">SCORM-paketet saknas.</MudAlert>
+                                }
+                                break;
+                        }
+
+                        <MudDivider Class="my-4" />
+
+                        @if (aktivKlar)
+                        {
+                            <MudAlert Severity="Severity.Success" Variant="Variant.Text" Dense="true">Lektionen är genomförd.</MudAlert>
+                        }
+                        else
+                        {
+                            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                                       StartIcon="@Icons.Material.Filled.Check"
+                                       OnClick="@(() => MarkeraGenomford(aktiv))">Markera som genomförd</MudButton>
+                        }
+
+                        <div class="d-flex justify-space-between mt-4">
+                            <MudButton Variant="Variant.Text" Disabled="@(_aktivIndex == 0)"
+                                       OnClick="@(() => _aktivIndex--)" StartIcon="@Icons.Material.Filled.NavigateBefore">Föregående</MudButton>
+                            <MudButton Variant="Variant.Text" Disabled="@(_aktivIndex >= _lessons.Count - 1)"
+                                       OnClick="@(() => _aktivIndex++)" EndIcon="@Icons.Material.Filled.NavigateNext">Nästa</MudButton>
+                        </div>
+                    </MudPaper>
+                </MudItem>
+            </MudGrid>
+        }
+    }
+}
+
+@code {
+    [Parameter] public Guid CourseId { get; set; }
+
+    private Course? _course;
+    private List<Lesson> _lessons = [];
+    private List<RegionHR.Core.Domain.Employee> _employees = [];
+    private Dictionary<Guid, ScormPackage> _scormByLesson = [];
+    private HashSet<Guid> _completedLessonIds = [];
+    private Guid? _deltagareId;
+    private Guid _enrollmentId;
+    private EnrollmentProgress _enrollmentProgress = EnrollmentProgress.Anmalad;
+    private int _grad;
+    private int _aktivIndex;
+    private bool _loading = true;
+    private bool _needParticipantPick;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _course = await db.Courses.FirstOrDefaultAsync(c => c.Id == CourseId);
+            if (_course == null) { _loading = false; return; }
+
+            _lessons = await db.Set<Lesson>()
+                .Where(l => l.CourseId == CourseId)
+                .OrderBy(l => l.Ordning).ThenBy(l => l.SkapadVid)
+                .ToListAsync();
+
+            var scormIds = _lessons.Where(l => l.ScormPackageId != null).Select(l => l.ScormPackageId!.Value).ToList();
+            if (scormIds.Count > 0)
+            {
+                var pkgs = await db.Set<ScormPackage>().Where(p => scormIds.Contains(p.Id)).ToListAsync();
+                _scormByLesson = _lessons
+                    .Where(l => l.ScormPackageId != null && pkgs.Any(p => p.Id == l.ScormPackageId!.Value))
+                    .ToDictionary(l => l.Id, l => pkgs.First(p => p.Id == l.ScormPackageId!.Value));
+            }
+
+            var empId = Auth.EmployeeId;
+            if (empId != null)
+            {
+                _deltagareId = empId.Value;
+                await LaddaDeltagareAsync(db);
+            }
+            else
+            {
+                _employees = await db.Employees.OrderBy(e => e.Efternamn).ToListAsync();
+                _needParticipantPick = true;
+            }
+        }
+        catch (Exception ex) { _error = $"Kunde inte ladda kursen: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task StartaForDeltagare()
+    {
+        if (_deltagareId == null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await LaddaDeltagareAsync(db);
+        _needParticipantPick = false;
+    }
+
+    private async Task LaddaDeltagareAsync(RegionHRDbContext db)
+    {
+        var pid = _deltagareId!.Value;
+        var enrollment = await db.CourseEnrollments
+            .FirstOrDefaultAsync(e => e.AnstallId == pid && e.CourseId == CourseId);
+        if (enrollment == null)
+        {
+            enrollment = CourseEnrollment.Anmala(pid, CourseId);
+            db.CourseEnrollments.Add(enrollment);
+            await db.SaveChangesAsync();
+        }
+        _enrollmentId = enrollment.Id;
+        _enrollmentProgress = enrollment.Progress;
+
+        _completedLessonIds = (await db.Set<LessonCompletion>()
+                .Where(c => c.CourseId == CourseId && c.DeltagareId == pid && !c.ArExtern)
+                .Select(c => c.LessonId)
+                .ToListAsync())
+            .ToHashSet();
+        RakningGrad();
+    }
+
+    private async Task MarkeraGenomford(Lesson lektion)
+    {
+        if (_deltagareId == null) return;
+        var pid = _deltagareId.Value;
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var redan = await db.Set<LessonCompletion>()
+            .AnyAsync(c => c.CourseId == CourseId && c.DeltagareId == pid && !c.ArExtern && c.LessonId == lektion.Id);
+        if (!redan)
+        {
+            db.Set<LessonCompletion>().Add(LessonCompletion.Markera(CourseId, lektion.Id, pid, arExtern: false));
+            _completedLessonIds.Add(lektion.Id);
+        }
+
+        RakningGrad();
+
+        var enrollment = await db.CourseEnrollments.FirstOrDefaultAsync(e => e.Id == _enrollmentId);
+        if (enrollment != null)
+        {
+            enrollment.UppdateraGenomforande(_grad);
+            _enrollmentProgress = enrollment.Progress;
+        }
+        await db.SaveChangesAsync();
+
+        // Gå vidare till nästa ej genomförda lektion om möjligt.
+        var nasta = _lessons.FindIndex(_aktivIndex + 1, l => !_completedLessonIds.Contains(l.Id));
+        if (nasta >= 0) _aktivIndex = nasta;
+    }
+
+    private void RakningGrad()
+    {
+        var giltiga = _completedLessonIds.Count(id => _lessons.Any(l => l.Id == id));
+        _grad = LessonCompletion.BeraknaGrad(giltiga, _lessons.Count);
+    }
+
+    private static string LessonTypeText(LessonType t) => t switch
+    {
+        LessonType.Text => "Text",
+        LessonType.Video => "Video",
+        LessonType.Fil => "Fil",
+        LessonType.Scorm => "SCORM",
+        _ => t.ToString()
+    };
+
+    private static string LessonIcon(LessonType t) => t switch
+    {
+        LessonType.Text => Icons.Material.Filled.Article,
+        LessonType.Video => Icons.Material.Filled.PlayCircle,
+        LessonType.Fil => Icons.Material.Filled.AttachFile,
+        LessonType.Scorm => Icons.Material.Filled.Widgets,
+        _ => Icons.Material.Filled.Circle
+    };
+
+    private static Color ProgressColor(EnrollmentProgress p) => p switch
+    {
+        EnrollmentProgress.Genomford => Color.Success,
+        EnrollmentProgress.Paborjad => Color.Warning,
+        EnrollmentProgress.Anmalad => Color.Info,
+        EnrollmentProgress.Underkand => Color.Error,
+        _ => Color.Default
+    };
+
+    private static string ProgressText(EnrollmentProgress p) => p switch
+    {
+        EnrollmentProgress.Anmalad => "Anmäld",
+        EnrollmentProgress.Paborjad => "Påbörjad",
+        EnrollmentProgress.Genomford => "Genomförd",
+        EnrollmentProgress.Underkand => "Underkänd",
+        EnrollmentProgress.Avbruten => "Avbruten",
+        _ => p.ToString()
+    };
+}

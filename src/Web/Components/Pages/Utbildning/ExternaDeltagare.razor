@@ -1,0 +1,209 @@
+@page "/utbildning/externa"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.LMS.Domain
+@using RegionHR.Infrastructure.Persistence
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>OpenHR — Externa deltagare</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/utbildning" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Externa kursdeltagare</MudText>
+<MudText Typo="Typo.body2" Class="mb-2" Style="color: var(--mud-palette-text-secondary);">
+    Bjud in personer utan anställning (konsulter, entreprenörer, förtroendevalda, elever) till en kurs.
+    Varje deltagare får en personlig access-länk.
+</MudText>
+<MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-4">
+    <strong>Förenklat:</strong> access sker via en slumpad token-länk (bärartoken). Detta är en "enkel access"-modell —
+    ingen federerad inloggning (BankID/eduID), inget lösenord och ingen e-postverifiering. I skarp drift
+    skickas länken via e-post (NotificationEndpoints) och bör vara tidsbegränsad.
+</MudAlert>
+
+@if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+}
+@if (_success != null)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+}
+
+<MudPaper Class="pa-5 mb-4" Elevation="2">
+    <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Bjud in extern deltagare</MudText>
+    <MudGrid Spacing="3">
+        <MudItem xs="12" sm="6">
+            <MudTextField @bind-Value="_epost" Label="E-post" Variant="Variant.Outlined" InputType="InputType.Email" Required="true" />
+        </MudItem>
+        <MudItem xs="12" sm="6">
+            <MudTextField @bind-Value="_namn" Label="Namn" Variant="Variant.Outlined" Required="true" />
+        </MudItem>
+        <MudItem xs="12" sm="6">
+            <MudTextField @bind-Value="_organisation" Label="Organisation (valfritt)" Variant="Variant.Outlined" />
+        </MudItem>
+        <MudItem xs="12" sm="6">
+            <MudSelect T="Guid?" @bind-Value="_courseId" Label="Kurs" Variant="Variant.Outlined" Required="true">
+                @foreach (var c in _courses)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Namn</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+    </MudGrid>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+               OnClick="BjudIn" Disabled="@_sparar">Bjud in och skapa access-länk</MudButton>
+</MudPaper>
+
+@if (_deltagare.Count > 0)
+{
+    <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Inbjudna deltagare (@_deltagare.Count)</MudText>
+    <MudSimpleTable Hover="true" Elevation="2">
+        <thead><tr><th>Namn</th><th>E-post</th><th>Organisation</th><th>Kurser</th><th>Status</th><th>Access-länk</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var d in _deltagare.OrderByDescending(d => d.InbjudenVid))
+            {
+                <tr>
+                    <td><strong>@d.Namn</strong></td>
+                    <td>@d.Epost</td>
+                    <td>@(d.Organisation ?? "—")</td>
+                    <td>@KursNamnForDeltagare(d.Id)</td>
+                    <td><MudChip T="string" Size="Size.Small" Color="@StatusColor(d.Status)">@StatusText(d.Status)</MudChip></td>
+                    <td>
+                        <MudLink Href="@AccessLank(d.AccessToken)" Target="_blank" Typo="Typo.caption">Öppna länk</MudLink>
+                    </td>
+                    <td>
+                        @if (d.Status == ExternalParticipantStatus.Inaktiverad)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.LockOpen" Size="Size.Small" Color="Color.Success"
+                                           title="Återaktivera" OnClick="@(() => Ateraktivera(d))" />
+                        }
+                        else
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Block" Size="Size.Small" Color="Color.Error"
+                                           title="Inaktivera" OnClick="@(() => Inaktivera(d))" />
+                        }
+                        <MudIconButton Icon="@Icons.Material.Filled.Autorenew" Size="Size.Small" Color="Color.Warning"
+                                       title="Ny access-token" OnClick="@(() => NyToken(d))" />
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+}
+
+@code {
+    private List<Course> _courses = [];
+    private List<ExternalParticipant> _deltagare = [];
+    private List<ExternalCourseEnrollment> _enrollments = [];
+    private string _epost = "", _namn = "", _organisation = "";
+    private Guid? _courseId;
+    private bool _sparar;
+    private string? _error, _success;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _courses = await db.Courses.OrderBy(c => c.Namn).ToListAsync();
+            _deltagare = await db.Set<ExternalParticipant>().ToListAsync();
+            _enrollments = await db.Set<ExternalCourseEnrollment>().ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta data: {ex.Message}"; }
+    }
+
+    private async Task BjudIn()
+    {
+        if (_courseId == null) { _error = "Välj en kurs."; return; }
+        var courseId = _courseId.Value;
+        _sparar = true;
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var befintlig = _deltagare.FirstOrDefault(d => d.Epost == _epost.Trim().ToLowerInvariant());
+            ExternalParticipant deltagare;
+            if (befintlig != null)
+            {
+                deltagare = befintlig;
+            }
+            else
+            {
+                deltagare = ExternalParticipant.Bjudin(_epost, _namn, _organisation);
+                db.Set<ExternalParticipant>().Add(deltagare);
+                _deltagare.Add(deltagare);
+            }
+
+            var redanAnmald = _enrollments.Any(e => e.ExternalParticipantId == deltagare.Id && e.CourseId == courseId);
+            if (!redanAnmald)
+            {
+                var enr = ExternalCourseEnrollment.Anmala(deltagare.Id, courseId);
+                db.Set<ExternalCourseEnrollment>().Add(enr);
+                _enrollments.Add(enr);
+            }
+
+            await db.SaveChangesAsync();
+            var kurs = _courses.FirstOrDefault(c => c.Id == courseId)?.Namn ?? "kursen";
+            _success = $"{deltagare.Namn} inbjuden till {kurs}. Access-länk: {AccessLank(deltagare.AccessToken)}";
+            _epost = ""; _namn = ""; _organisation = "";
+        }
+        catch (ArgumentException ex) { _error = ex.Message; }
+        catch (Exception ex) { _error = $"Kunde inte bjuda in: {ex.Message}"; }
+        finally { _sparar = false; }
+    }
+
+    private async Task Inaktivera(ExternalParticipant d)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var e = await db.Set<ExternalParticipant>().FirstAsync(x => x.Id == d.Id);
+        e.Inaktivera();
+        await db.SaveChangesAsync();
+        d.Inaktivera();
+    }
+
+    private async Task Ateraktivera(ExternalParticipant d)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var e = await db.Set<ExternalParticipant>().FirstAsync(x => x.Id == d.Id);
+        e.Ateraktivera();
+        await db.SaveChangesAsync();
+        d.Ateraktivera();
+    }
+
+    private async Task NyToken(ExternalParticipant d)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var e = await db.Set<ExternalParticipant>().FirstAsync(x => x.Id == d.Id);
+        e.NyttAccessToken();
+        await db.SaveChangesAsync();
+        d.NyttAccessToken();
+        _success = $"Ny access-länk för {d.Namn}: {AccessLank(d.AccessToken)}";
+    }
+
+    private string AccessLank(string token) => $"{Nav.BaseUri}utbildning/extern/{token}";
+
+    private string KursNamnForDeltagare(Guid deltagareId)
+    {
+        var kursIds = _enrollments.Where(e => e.ExternalParticipantId == deltagareId).Select(e => e.CourseId).ToList();
+        var namn = _courses.Where(c => kursIds.Contains(c.Id)).Select(c => c.Namn).ToList();
+        return namn.Count == 0 ? "—" : string.Join(", ", namn);
+    }
+
+    private static Color StatusColor(ExternalParticipantStatus s) => s switch
+    {
+        ExternalParticipantStatus.Aktiv => Color.Success,
+        ExternalParticipantStatus.Inbjuden => Color.Info,
+        ExternalParticipantStatus.Inaktiverad => Color.Error,
+        _ => Color.Default
+    };
+
+    private static string StatusText(ExternalParticipantStatus s) => s switch
+    {
+        ExternalParticipantStatus.Aktiv => "Aktiv",
+        ExternalParticipantStatus.Inbjuden => "Inbjuden",
+        ExternalParticipantStatus.Inaktiverad => "Inaktiverad",
+        _ => s.ToString()
+    };
+}

@@ -1,0 +1,334 @@
+@page "/admin/migration/heroma"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Services
+@using RegionHR.Migration.Adapters
+@using RegionHR.Migration.Domain
+@using RegionHR.Migration.Services
+@using RegionHR.Web.Services
+@inject MigrationEngineService MigrationEngine
+@inject MigrationImportService ImportService
+@inject AuthService Auth
+
+<PageTitle>OpenHR - Importera anställda</PageTitle>
+<MudBreadcrumbs Items="@_breadcrumbs" Class="mb-2 pa-0" />
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Importera anställda</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Ladda upp en HEROMA-fil (eller annat format vi kan tolka) — systemet parserar, förhandsgranskar och
+    skapar riktiga anställda med anställning. Importen är idempotent: kör om samma fil utan att skapa dubbletter.
+</MudText>
+
+@if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="() => _error = null">@_error</MudAlert>
+}
+
+@* === STEG 1: Filuppladdning === *@
+<MudPaper Class="pa-5" Elevation="2">
+    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight: 600;">1. Ladda upp fil</MudText>
+    <InputFile OnChange="OnFileSelected" accept=".csv,.txt,.xml,.sie" />
+    @if (_fileName != null)
+    {
+        <MudText Typo="Typo.caption" Color="Color.Success" Class="mt-2 d-block">@_fileName</MudText>
+    }
+    @if (_detectedDescription != null)
+    {
+        <MudAlert Severity="Severity.Info" Class="mt-3">
+            <strong>Identifierat format:</strong> @_detectedDescription
+        </MudAlert>
+    }
+</MudPaper>
+
+@* === STEG 2: Förhandsgranskning === *@
+@if (_parsed != null)
+{
+    <MudPaper Class="pa-5 mt-4" Elevation="2">
+        <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight: 600;">
+            2. Förhandsgranskning (@_parsed.Records.Count rader)
+        </MudText>
+
+        @if (_parsed.Warnings.Count > 0)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-3" Dense="true">
+                @foreach (var w in _parsed.Warnings)
+                {
+                    <div>@w</div>
+                }
+            </MudAlert>
+        }
+
+        @if (_parsed.Records.Count == 0)
+        {
+            <MudAlert Severity="Severity.Warning">Inga rader att importera i filen.</MudAlert>
+        }
+        else
+        {
+            <MudTable Items="@_parsedPreview" Dense="true" Hover="true" Striped="true" Elevation="0" Class="mb-4">
+                <HeaderContent>
+                    <MudTh>Rad</MudTh>
+                    <MudTh>Personnummer</MudTh>
+                    <MudTh>Namn</MudTh>
+                    <MudTh>Anställningsform</MudTh>
+                    <MudTh>Avtal</MudTh>
+                    <MudTh>Månadslön</MudTh>
+                    <MudTh>Enhet</MudTh>
+                </HeaderContent>
+                <RowTemplate>
+                    <MudTd>@context.RadNummer</MudTd>
+                    <MudTd><code>@context.Personnummer</code></MudTd>
+                    <MudTd>@context.Namn</MudTd>
+                    <MudTd>@context.Anstallningsform</MudTd>
+                    <MudTd>@context.Avtal</MudTd>
+                    <MudTd>@context.Manadslon</MudTd>
+                    <MudTd>@context.Enhet</MudTd>
+                </RowTemplate>
+            </MudTable>
+
+            <MudCheckBox T="bool" @bind-Value="_uppdateraDubbletter" Color="Color.Primary" Class="mb-2"
+                         Label="Uppdatera befintliga anställda (annars hoppas dubbletter över)" />
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                       OnClick="Importera" Disabled="@_running" Style="min-height: 48px;">
+                @if (_running)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                    <span>Importerar...</span>
+                }
+                else
+                {
+                    <span>Starta import</span>
+                }
+            </MudButton>
+        }
+    </MudPaper>
+}
+
+@* === STEG 3: Resultat === *@
+@if (_result != null)
+{
+    <MudPaper Class="pa-5 mt-4" Elevation="2">
+        <MudText Typo="Typo.subtitle1" Class="mb-3" Style="font-weight: 600;">3. Resultat</MudText>
+
+        @if (_result.GlobaltFel != null)
+        {
+            <MudAlert Severity="Severity.Error" Class="mb-3">
+                Importen avbröts och rullades tillbaka: @_result.GlobaltFel
+            </MudAlert>
+        }
+        else
+        {
+            <MudAlert Severity="@(_result.Fel > 0 ? Severity.Warning : Severity.Success)" Class="mb-3">
+                Import klar.
+            </MudAlert>
+        }
+
+        <MudGrid Class="mb-2">
+            <MudItem xs="6" sm="3">
+                <MudPaper Class="pa-3 d-flex flex-column align-center" Elevation="1">
+                    <MudText Typo="Typo.h4" Color="Color.Success">@_result.Skapade</MudText>
+                    <MudText Typo="Typo.caption">Skapade</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudPaper Class="pa-3 d-flex flex-column align-center" Elevation="1">
+                    <MudText Typo="Typo.h4" Color="Color.Info">@_result.Uppdaterade</MudText>
+                    <MudText Typo="Typo.caption">Uppdaterade</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudPaper Class="pa-3 d-flex flex-column align-center" Elevation="1">
+                    <MudText Typo="Typo.h4" Color="Color.Default">@_result.Hoppade</MudText>
+                    <MudText Typo="Typo.caption">Hoppade</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudPaper Class="pa-3 d-flex flex-column align-center" Elevation="1">
+                    <MudText Typo="Typo.h4" Color="Color.Error">@_result.Fel</MudText>
+                    <MudText Typo="Typo.caption">Fel</MudText>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        <MudTable Items="@_result.Rader" Dense="true" Hover="true" Striped="true" Elevation="0">
+            <HeaderContent>
+                <MudTh>Rad</MudTh>
+                <MudTh>Personnummer</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh>Meddelande</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.RadNummer</MudTd>
+                <MudTd><code>@(context.Personnummer ?? "-")</code></MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Color="@StatusFarg(context.Status)">@StatusText(context.Status)</MudChip>
+                </MudTd>
+                <MudTd>@(context.Meddelande ?? "-")</MudTd>
+            </RowTemplate>
+        </MudTable>
+
+        <MudStack Row="true" Spacing="2" Class="mt-4">
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Href="/anstallda">
+                Visa anställda
+            </MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Default" Href="/admin/migration">
+                Till migreringslistan
+            </MudButton>
+        </MudStack>
+    </MudPaper>
+}
+
+@code {
+    private static readonly List<BreadcrumbItem> _breadcrumbs =
+    [
+        new("Migrering", "/admin/migration"),
+        new("Importera anställda", null, true)
+    ];
+
+    private string? _fileName;
+    private byte[]? _fileContent;
+    private SourceSystem _detectedSource = SourceSystem.HEROMA;
+    private string? _detectedDescription;
+    private ParsedMigrationData? _parsed;
+    private List<PreviewRad> _parsedPreview = [];
+    private bool _uppdateraDubbletter;
+    private bool _running;
+    private string? _error;
+    private MigrationImportResult? _result;
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _result = null;
+        _parsed = null;
+        _parsedPreview = [];
+        _detectedDescription = null;
+
+        try
+        {
+            var file = e.File;
+            _fileName = file.Name;
+
+            using var ms = new MemoryStream();
+            await file.OpenReadStream(maxAllowedSize: 100 * 1024 * 1024).CopyToAsync(ms);
+            _fileContent = ms.ToArray();
+
+            // Auto-detektera format och välj adapter.
+            using (var detectStream = new MemoryStream(_fileContent))
+            {
+                _detectedSource = MigrationEngine.DetekteraFormat(detectStream);
+            }
+            _detectedDescription = MigrationEngineService.HamtaFormatBeskrivning(_detectedSource);
+
+            var adapter = MigrationEngine.GetAdapter(_detectedSource) ?? new HeromaAdapter();
+
+            using (var parseStream = new MemoryStream(_fileContent))
+            {
+                _parsed = await adapter.ParseAsync(parseStream);
+            }
+
+            _parsedPreview = ByggPreview(_parsed);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte läsa filen: {ex.Message}";
+            _fileName = null;
+            _fileContent = null;
+            _parsed = null;
+        }
+    }
+
+    private async Task Importera()
+    {
+        if (_parsed == null)
+            return;
+
+        _running = true;
+        _error = null;
+        _result = null;
+        StateHasChanged();
+
+        try
+        {
+            var skapadAv = string.IsNullOrWhiteSpace(Auth.UserName) ? "admin" : Auth.UserName!;
+            _result = await ImportService.ImporteraAsync(
+                _parsed, _detectedSource, _fileName ?? "import.csv", skapadAv, _uppdateraDubbletter);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Import misslyckades: {ex.Message}";
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    private static List<PreviewRad> ByggPreview(ParsedMigrationData data)
+    {
+        var lista = new List<PreviewRad>();
+        for (var i = 0; i < data.Records.Count; i++)
+        {
+            var f = data.Records[i].Fields;
+            var namn = $"{Falt(f, "Fornamn")} {Falt(f, "Efternamn")}".Trim();
+            lista.Add(new PreviewRad(
+                i + 1,
+                MaskeraPnr(Falt(f, "Personnummer", "PERSNR")),
+                string.IsNullOrWhiteSpace(namn) ? "-" : namn,
+                FaltEllerStreck(f, "Anstallningsform", "ANST_FORM"),
+                FaltEllerStreck(f, "Kollektivavtal", "KOL_AVTAL"),
+                FaltEllerStreck(f, "Manadslon", "MANLON"),
+                FaltEllerStreck(f, "Enhetskod", "ENHET_KOD")));
+        }
+        return lista;
+    }
+
+    private static string Falt(Dictionary<string, string> fields, params string[] nycklar)
+    {
+        foreach (var n in nycklar)
+        {
+            if (fields.TryGetValue(n, out var v) && !string.IsNullOrWhiteSpace(v))
+                return v;
+        }
+        return string.Empty;
+    }
+
+    private static string FaltEllerStreck(Dictionary<string, string> fields, params string[] nycklar)
+    {
+        var v = Falt(fields, nycklar);
+        return string.IsNullOrWhiteSpace(v) ? "-" : v;
+    }
+
+    private static string MaskeraPnr(string raw)
+    {
+        var siffror = new string(raw.Where(char.IsDigit).ToArray());
+        if (siffror.Length >= 8)
+            return $"{siffror[..8]}-****";
+        return string.IsNullOrWhiteSpace(raw) ? "-" : raw;
+    }
+
+    private static Color StatusFarg(ImportRadStatus status) => status switch
+    {
+        ImportRadStatus.Skapad => Color.Success,
+        ImportRadStatus.Uppdaterad => Color.Info,
+        ImportRadStatus.Hoppad => Color.Default,
+        ImportRadStatus.Fel => Color.Error,
+        _ => Color.Default
+    };
+
+    private static string StatusText(ImportRadStatus status) => status switch
+    {
+        ImportRadStatus.Skapad => "Skapad",
+        ImportRadStatus.Uppdaterad => "Uppdaterad",
+        ImportRadStatus.Hoppad => "Hoppad",
+        ImportRadStatus.Fel => "Fel",
+        _ => status.ToString()
+    };
+
+    private sealed record PreviewRad(
+        int RadNummer,
+        string Personnummer,
+        string Namn,
+        string Anstallningsform,
+        string Avtal,
+        string Manadslon,
+        string Enhet);
+}

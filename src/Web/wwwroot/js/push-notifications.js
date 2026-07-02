@@ -1,6 +1,13 @@
-// OpenHR Push Notification Infrastructure
-// Handles permission requests, subscription registration, and push event handling.
-// Works with the /api/v1/notiser/push-subscription endpoint.
+// OpenHR Web Push — client helper (loaded by App.razor as window.OpenHR.push)
+//
+// Blazor Server architecture: the browser must NOT POST the subscription to an HTTP API.
+// Instead, getSubscription() RETURNS the subscription to the Blazor component over the
+// SignalR circuit (IJSRuntime), and the component persists it via IDbContextFactory.
+//
+// Push RECEIVING is handled by the already-registered root service worker
+// (/service-worker.js, registered in App.razor), which has a 'push' + 'notificationclick'
+// handler. When that worker is absent (e.g. a stripped deployment), we fall back to the
+// dedicated /sw-push.js worker.
 
 (function () {
     "use strict";
@@ -8,156 +15,144 @@
     window.OpenHR = window.OpenHR || {};
 
     window.OpenHR.push = {
-        _vapidPublicKey: null,
         _registration: null,
 
-        /**
-         * Initialize push notifications.
-         * @param {string} vapidPublicKey - The VAPID public key (base64url encoded)
-         */
-        init: async function (vapidPublicKey) {
-            this._vapidPublicKey = vapidPublicKey;
+        /** True when this browser can do Web Push at all. */
+        isSupported: function () {
+            return ("serviceWorker" in navigator) && ("PushManager" in window) && ("Notification" in window);
+        },
 
-            if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
-                console.warn("Push notifications are not supported in this browser.");
-                return false;
-            }
-
-            try {
-                this._registration = await navigator.serviceWorker.ready;
-                console.log("Push notification infrastructure ready.");
-                return true;
-            } catch (err) {
-                console.warn("Failed to get service worker registration:", err);
-                return false;
-            }
+        /** Current Notification permission: "granted" | "denied" | "default". */
+        permission: function () {
+            return ("Notification" in window) ? Notification.permission : "denied";
         },
 
         /**
-         * Request notification permission from the user.
-         * @returns {Promise<string>} Permission state: "granted", "denied", or "default"
+         * Resolve a service worker registration usable for push. Prefers the root PWA
+         * worker; registers /sw-push.js only if no root worker exists. Waits for it to
+         * become active so pushManager is usable.
          */
+        ensureRegistration: async function () {
+            if (this._registration) {
+                return this._registration;
+            }
+            if (!("serviceWorker" in navigator)) {
+                return null;
+            }
+
+            let reg = await navigator.serviceWorker.getRegistration("/");
+            if (!reg) {
+                reg = await navigator.serviceWorker.register("/sw-push.js");
+            }
+
+            if (!reg.active) {
+                await new Promise(function (resolve) {
+                    const worker = reg.installing || reg.waiting;
+                    if (!worker) {
+                        resolve();
+                        return;
+                    }
+                    worker.addEventListener("statechange", function () {
+                        if (worker.state === "activated") {
+                            resolve();
+                        }
+                    });
+                    // Safety net so we never hang the circuit call.
+                    setTimeout(resolve, 3000);
+                });
+            }
+
+            this._registration = reg;
+            return reg;
+        },
+
+        /** Ask for notification permission if not already decided. */
         requestPermission: async function () {
             if (!("Notification" in window)) {
                 return "denied";
             }
-
-            if (Notification.permission === "granted") {
-                return "granted";
+            if (Notification.permission !== "default") {
+                return Notification.permission;
             }
-
-            const result = await Notification.requestPermission();
-            return result;
+            return await Notification.requestPermission();
         },
 
         /**
-         * Subscribe to push notifications and register with the server.
-         * @param {string} employeeId - The employee's GUID
-         * @returns {Promise<boolean>} Whether subscription succeeded
+         * Subscribe this device and return the subscription for the server to persist.
+         * @param {string} vapidPublicKey base64url VAPID public key from the server.
+         * @returns {Promise<{endpoint?:string,p256dh?:string,auth?:string,permission:string}|null>}
+         *          Object with base64url keys on success, or {permission} when not granted.
          */
-        subscribe: async function (employeeId) {
-            if (!this._registration || !this._vapidPublicKey) {
-                console.warn("Push not initialized. Call init() first.");
-                return false;
+        getSubscription: async function (vapidPublicKey) {
+            if (!this.isSupported()) {
+                return null;
             }
 
             const permission = await this.requestPermission();
             if (permission !== "granted") {
-                console.warn("Notification permission not granted.");
-                return false;
+                return { permission: permission };
             }
 
-            try {
-                // Check for existing subscription
-                let subscription = await this._registration.pushManager.getSubscription();
+            const reg = await this.ensureRegistration();
+            if (!reg) {
+                return { permission: permission };
+            }
 
-                if (!subscription) {
-                    // Create new subscription
-                    const applicationServerKey = this._urlBase64ToUint8Array(this._vapidPublicKey);
-                    subscription = await this._registration.pushManager.subscribe({
-                        userVisibleOnly: true,
-                        applicationServerKey: applicationServerKey
-                    });
-                }
-
-                // Extract keys
-                const rawKey = subscription.getKey("p256dh");
-                const rawAuth = subscription.getKey("auth");
-                const p256dh = rawKey ? btoa(String.fromCharCode.apply(null, new Uint8Array(rawKey))) : "";
-                const auth = rawAuth ? btoa(String.fromCharCode.apply(null, new Uint8Array(rawAuth))) : "";
-
-                // Register with server
-                const response = await fetch("/api/v1/notiser/push-subscription", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        anstallId: employeeId,
-                        endpoint: subscription.endpoint,
-                        p256dhKey: p256dh,
-                        authKey: auth
-                    })
+            let subscription = await reg.pushManager.getSubscription();
+            if (!subscription) {
+                subscription = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: this._urlBase64ToUint8Array(vapidPublicKey)
                 });
-
-                if (response.ok) {
-                    console.log("Push subscription registered successfully.");
-                    return true;
-                } else {
-                    console.warn("Failed to register push subscription:", response.status);
-                    return false;
-                }
-            } catch (err) {
-                console.error("Push subscription failed:", err);
-                return false;
             }
+
+            // toJSON() returns the p256dh/auth keys already base64url-encoded, which is
+            // exactly what the server-side WebPush library expects.
+            const json = subscription.toJSON();
+            const keys = json.keys || {};
+            return {
+                endpoint: subscription.endpoint,
+                p256dh: keys.p256dh || "",
+                auth: keys.auth || "",
+                permission: "granted"
+            };
         },
 
-        /**
-         * Unsubscribe from push notifications.
-         * @returns {Promise<boolean>} Whether unsubscription succeeded
-         */
-        unsubscribe: async function () {
-            if (!this._registration) return false;
-
-            try {
-                const subscription = await this._registration.pushManager.getSubscription();
-                if (subscription) {
-                    await subscription.unsubscribe();
-                    console.log("Push subscription removed.");
-                    return true;
-                }
-                return false;
-            } catch (err) {
-                console.warn("Push unsubscribe failed:", err);
-                return false;
-            }
-        },
-
-        /**
-         * Check if currently subscribed to push notifications.
-         * @returns {Promise<boolean>}
-         */
+        /** True if a push subscription currently exists on this device. */
         isSubscribed: async function () {
-            if (!this._registration) return false;
-
-            try {
-                const subscription = await this._registration.pushManager.getSubscription();
-                return subscription !== null;
-            } catch {
+            const reg = await this.ensureRegistration();
+            if (!reg) {
                 return false;
             }
+            const subscription = await reg.pushManager.getSubscription();
+            return subscription !== null;
         },
 
         /**
-         * Convert a base64url VAPID key to Uint8Array for subscription.
-         * @param {string} base64String
-         * @returns {Uint8Array}
+         * Remove this device's push subscription.
+         * @returns {Promise<string|null>} The removed endpoint (so the server can deactivate it), or null.
          */
+        removeSubscription: async function () {
+            const reg = await this.ensureRegistration();
+            if (!reg) {
+                return null;
+            }
+            const subscription = await reg.pushManager.getSubscription();
+            if (!subscription) {
+                return null;
+            }
+            const endpoint = subscription.endpoint;
+            await subscription.unsubscribe();
+            return endpoint;
+        },
+
+        /** Convert a base64url VAPID key to the Uint8Array pushManager.subscribe expects. */
         _urlBase64ToUint8Array: function (base64String) {
-            const padding = "=".repeat((4 - base64String.length % 4) % 4);
+            const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
             const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
             const rawData = window.atob(base64);
             const outputArray = new Uint8Array(rawData.length);
-            for (var i = 0; i < rawData.length; ++i) {
+            for (let i = 0; i < rawData.length; ++i) {
                 outputArray[i] = rawData.charCodeAt(i);
             }
             return outputArray;

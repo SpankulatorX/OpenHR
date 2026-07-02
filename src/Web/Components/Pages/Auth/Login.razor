@@ -3,10 +3,13 @@
 @using RegionHR.Infrastructure.Persistence
 @using Microsoft.EntityFrameworkCore
 @using Microsoft.Extensions.Localization
+@using Microsoft.Extensions.Options
+@using RegionHR.Web.Services.Oidc
 @inject NavigationManager Nav
 @inject RegionHR.Web.Services.AuthService Auth
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject IStringLocalizer<SharedResources> L
+@inject IOptions<OidcOptions> Oidc
 
 <PageTitle>@L["Login"] — OpenHR</PageTitle>
 
@@ -68,6 +71,23 @@
                         </div>
                     </div>
                 </MudButton>
+
+                @* ══════ Entra ID / organisationskonto — visas endast om regionen konfigurerat OIDC ══════ *@
+                @if (Oidc.Value.IsConfigured)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                               FullWidth="true" Size="Size.Large" Class="mb-3"
+                               Style="border-radius: 12px; text-transform: none; font-weight: 600; font-size: 1rem; justify-content: flex-start; padding: 16px;"
+                               OnClick="@(() => StartEntra())">
+                        <div class="d-flex align-center" style="width: 100%;">
+                            <MudIcon Icon="@Icons.Material.Filled.Business" Class="mr-3" />
+                            <div>
+                                <MudText Typo="Typo.body1" Style="font-weight: 600;">Logga in med organisationskonto</MudText>
+                                <MudText Typo="Typo.caption" Style="color: #94a3b8;">Entra ID (federerad inloggning)</MudText>
+                            </div>
+                        </div>
+                    </MudButton>
+                }
             }
 
             @* ══════ STEG 2: BankID — Starta appen ══════ *@
@@ -297,6 +317,14 @@
         _step = Step.Verified;
         StateHasChanged();
     }
+
+    // ── Entra ID / organisationskonto ──
+    // Full-page-navigering till challenge-endpointen (Program.cs) som utlöser OIDC-flödet mot
+    // Entra via Microsoft.Identity.Web. Efter federationen landar användaren på
+    // /auth/oidc/complete som speglar in identiteten i AuthService. Knappen visas bara när
+    // regionen konfigurerat OIDC — annars orörd demo-inloggning.
+    private void StartEntra()
+        => Nav.NavigateTo("/auth/oidc/challenge", forceLoad: true);
 
     // ── SITHS Flow ──
     private async Task StartSITHS()

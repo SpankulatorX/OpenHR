@@ -1,0 +1,153 @@
+@page "/auth/oidc/complete"
+@layout RegionHR.Web.Components.Layout.EmptyLayout
+@implements IDisposable
+@using Microsoft.AspNetCore.Http
+@using Microsoft.Extensions.Options
+@using RegionHR.Web.Services
+@using RegionHR.Web.Services.Oidc
+@inject NavigationManager Nav
+@inject AuthService Auth
+@inject EntraClaimsMapper Mapper
+@inject OidcAccountLinker Linker
+@inject IOptions<OidcOptions> OidcOptions
+@inject PersistentComponentState AppState
+@inject IHttpContextAccessor HttpContextAccessor
+
+@*
+    Completion-sida för federerad Entra ID-inloggning.
+
+    Flöde: Login-sidan skickar användaren till challenge-endpointen (Program.cs), Entra
+    autentiserar och postar tillbaka en cookie via Microsoft.Identity.Web, och användaren landar
+    här. Vi läser den federerade principalen ur HttpContext under prerender (då den finns),
+    persisterar den över prerender→interaktiv-gränsen, och slutför inloggningen i den interaktiva
+    kretsen där JS-interop (ProtectedSessionStorage bakom AuthService) fungerar — precis som
+    demo-Login gör. Demo-inloggningen påverkas inte; hit når man bara efter en Entra-runda.
+*@
+
+<PageTitle>Loggar in — OpenHR</PageTitle>
+
+<MudThemeProvider />
+
+<div style="min-height: 100vh; display: flex; align-items: center; justify-content: center;
+            background: linear-gradient(135deg, #0e7490 0%, #1b2838 100%);">
+    <MudCard Style="width: 440px; border-radius: 16px;" Elevation="8">
+        <MudCardContent Class="pa-8">
+            <div class="d-flex flex-column align-center">
+                <MudIcon Icon="@Icons.Material.Filled.HealthAndSafety"
+                         Style="font-size: 3rem; color: #0e7490;" />
+                <MudText Typo="Typo.h5" Class="mt-2 mb-4" Style="font-weight: 800; color: #0e7490;">
+                    OpenHR
+                </MudText>
+
+                @if (_error is not null)
+                {
+                    <MudAlert Severity="Severity.Error" Class="mb-4" Style="border-radius: 12px;">
+                        @_error
+                    </MudAlert>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                               Href="/login" Style="text-transform: none; border-radius: 12px;">
+                        Till inloggningen
+                    </MudButton>
+                }
+                else
+                {
+                    <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" Class="mb-4" />
+                    <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Verifierar organisationskonto…</MudText>
+                }
+            </div>
+        </MudCardContent>
+    </MudCard>
+</div>
+
+@code {
+    private const string StateKey = "oidc.identity";
+
+    private PersistedEntra? _identity;
+    private string? _error;
+    private PersistingComponentStateSubscription _subscription;
+
+    protected override void OnInitialized()
+    {
+        // Prerender-fasen: HttpContext finns och bär den federerade principalen. Läs och spara.
+        var principal = HttpContextAccessor.HttpContext?.User;
+        if (principal is { Identity.IsAuthenticated: true })
+        {
+            var mapped = Mapper.Map(principal);
+            // Ev. enhets-GUID ur claim måste läsas HÄR (prerender) — HttpContext är null i kretsen.
+            var payload = PersistedEntra.From(mapped, ReadUnitHint(principal));
+            _identity = payload;
+            _subscription = AppState.RegisterOnPersisting(() =>
+            {
+                AppState.PersistAsJson(StateKey, payload);
+                return Task.CompletedTask;
+            });
+        }
+
+        // Interaktiv fas: HttpContext är null — återställ det som persisterades under prerender.
+        if (_identity is null && AppState.TryTakeFromJson<PersistedEntra>(StateKey, out var restored))
+        {
+            _identity = restored;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        // Endast i den interaktiva kretsen (här fungerar ProtectedSessionStorage bakom AuthService).
+        var payload = _identity;
+        if (payload is null)
+        {
+            _error = OidcOptions.Value.IsConfigured
+                ? "Kunde inte läsa uppgifter från organisationskontot. Försök igen."
+                : "Inloggning med organisationskonto är inte aktiverad.";
+            StateHasChanged();
+            return;
+        }
+
+        try
+        {
+            var account = await Linker.ResolveAsync(payload.ToEntraIdentity(), payload.UnitHint);
+            await Auth.LoginAsync(account.DisplayName, account.Role, account.EmployeeId, account.UnitId);
+            Nav.NavigateTo("/", forceLoad: false);
+        }
+        catch
+        {
+            _error = "Något gick fel vid inloggningen. Försök igen.";
+            StateHasChanged();
+        }
+    }
+
+    private Guid? ReadUnitHint(System.Security.Claims.ClaimsPrincipal principal)
+    {
+        var claimType = OidcOptions.Value.UnitClaimType;
+        if (string.IsNullOrWhiteSpace(claimType))
+            return null;
+
+        var value = principal.FindFirst(claimType)?.Value;
+        return Guid.TryParse(value, out var unit) ? unit : null;
+    }
+
+    public void Dispose() => _subscription.Dispose();
+
+    /// <summary>
+    /// Serialiserbar (concrete-list) spegling av <see cref="EntraIdentity"/> + ev. enhets-hint,
+    /// för <see cref="PersistentComponentState"/> över prerender→interaktiv-gränsen.
+    /// </summary>
+    private sealed record PersistedEntra(
+        string DisplayName,
+        string? Email,
+        string? ObjectId,
+        string Role,
+        List<string> Groups,
+        List<string> AppRoles,
+        Guid? UnitHint)
+    {
+        public static PersistedEntra From(EntraIdentity i, Guid? unitHint)
+            => new(i.DisplayName, i.Email, i.ObjectId, i.Role, i.Groups.ToList(), i.AppRoles.ToList(), unitHint);
+
+        public EntraIdentity ToEntraIdentity()
+            => new(DisplayName, Email, ObjectId, Role, Groups, AppRoles);
+    }
+}

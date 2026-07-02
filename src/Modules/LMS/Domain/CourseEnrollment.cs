@@ -9,6 +9,7 @@ public class CourseEnrollment
     public Guid CourseId { get; private set; }
     public EnrollmentProgress Progress { get; private set; }
     public int? Resultat { get; private set; } // 0-100 score
+    public int? GenomforandeGrad { get; private set; } // 0-100 % genomförda lektioner (kursspelare)
     public bool Godkand { get; private set; }
     public DateTime AnmalanVid { get; private set; }
     public DateTime? PaborjadVid { get; private set; }
@@ -40,4 +41,29 @@ public class CourseEnrollment
     }
 
     public void Avbryt() { Progress = EnrollmentProgress.Avbruten; }
+
+    /// <summary>
+    /// Uppdaterar genomförandegrad från kursspelaren (andel genomförda lektioner, 0–100 %).
+    /// 1–99 % markerar kursen som Påbörjad; 100 % markerar den som Genomförd och godkänd.
+    /// Detta är den lektionsbaserade genomförandespårningen (skiljd från <see cref="Genomfor"/>
+    /// som sätter ett numeriskt provresultat).
+    /// </summary>
+    public void UppdateraGenomforande(int procent)
+    {
+        if (procent < 0 || procent > 100) throw new ArgumentOutOfRangeException(nameof(procent));
+        GenomforandeGrad = procent;
+
+        if (procent > 0 && Progress == EnrollmentProgress.Anmalad)
+        {
+            Progress = EnrollmentProgress.Paborjad;
+            PaborjadVid ??= DateTime.UtcNow;
+        }
+
+        if (procent >= 100)
+        {
+            Progress = EnrollmentProgress.Genomford;
+            Godkand = true;
+            GenomfordVid ??= DateTime.UtcNow;
+        }
+    }
 }

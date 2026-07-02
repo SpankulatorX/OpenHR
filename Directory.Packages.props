@@ -36,5 +36,8 @@
     <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="9.0.4" />
     <!-- Email -->
     <PackageVersion Include="MailKit" Version="4.17.0" />
+    <!-- Web Push (VAPID) + Entra/OIDC (config-ready) — våg 7 -->
+    <PackageVersion Include="WebPush" Version="1.0.13" />
+    <PackageVersion Include="Microsoft.Identity.Web" Version="3.15.1" />
   </ItemGroup>
 </Project>

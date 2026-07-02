@@ -64,6 +64,7 @@ public static class RouteAccessPolicy
             ("/kompetens", ChefHrAdmin),
             ("/halsosam", ChefHrAdmin),
             ("/arbetsmiljo", ChefHrAdmin),
+            ("/dokument/earkiv", HrAdmin),
             ("/dokument", ChefHrAdmin),
             ("/medarbetarsamtal", ChefHrAdmin),
             ("/journeys", ChefHrAdmin),

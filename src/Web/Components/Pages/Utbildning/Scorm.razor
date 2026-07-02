@@ -1,0 +1,193 @@
+@page "/utbildning/scorm"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.LMS.Domain
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Storage
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IFileStorageService Storage
+
+<PageTitle>OpenHR — SCORM-paket</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/utbildning/kursinnehall" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">SCORM-paket</MudText>
+<MudText Typo="Typo.body2" Class="mb-2" Style="color: var(--mud-palette-text-secondary);">
+    Ladda upp ett SCORM-paket (.zip). Systemet läser <code>imsmanifest.xml</code> och sparar
+    metadata (titel, version, launch-URL). Zip-filen lagras via fillagringstjänsten.
+</MudText>
+<MudAlert Severity="Severity.Info" Variant="Variant.Outlined" Dense="true" Class="mb-4">
+    <strong>Förenklat:</strong> uppladdning, manifest-tolkning och katalogisering är fullt implementerade.
+    En komplett SCORM-runtime (JS SCORM-API 1.2/2004, cmi-datamodell, uppackning och statisk servering
+    av innehållet, sekvensering) ingår inte — genomförande markeras manuellt i kursspelaren.
+</MudAlert>
+
+@if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+}
+@if (_success != null)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+}
+
+<MudPaper Class="pa-5 mb-4" Elevation="2">
+    <MudGrid Spacing="3">
+        <MudItem xs="12" sm="6">
+            <MudSelect T="Guid?" Value="_selectedCourseId" ValueChanged="OnCourseChanged" Label="Kurs" Variant="Variant.Outlined">
+                @foreach (var c in _courses)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Namn</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="6" Class="d-flex align-center">
+            <MudCheckBox @bind-Value="_skapaLektion" Label="Skapa även en SCORM-lektion i kursen" Color="Color.Primary" />
+        </MudItem>
+        <MudItem xs="12">
+            <MudFileUpload T="IBrowserFile" Accept=".zip" OnFilesChanged="OnFileSelected">
+                <CustomContent>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                               StartIcon="@Icons.Material.Filled.CloudUpload"
+                               OnClick="@context.OpenFilePickerAsync">Välj SCORM-zip</MudButton>
+                </CustomContent>
+            </MudFileUpload>
+            @if (_selectedFile != null)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2"><strong>Vald fil:</strong> @_selectedFile.Name (@FormatSize(_selectedFile.Size))</MudText>
+            }
+        </MudItem>
+    </MudGrid>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-4" Style="min-height: 48px;"
+               OnClick="LaddaUpp" Disabled="@(_uploading || _selectedFile == null || _selectedCourseId == null)">
+        @if (_uploading)
+        {
+            <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+        }
+        Ladda upp och tolka manifest
+    </MudButton>
+</MudPaper>
+
+@if (_selectedCourseId != null && _packages.Count > 0)
+{
+    <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Uppladdade SCORM-paket</MudText>
+    <MudSimpleTable Hover="true" Elevation="2">
+        <thead><tr><th>Titel</th><th>Version</th><th>Launch</th><th>Mastery</th><th>Storlek</th><th>Uppladdad</th></tr></thead>
+        <tbody>
+            @foreach (var p in _packages.OrderByDescending(p => p.UppladdadVid))
+            {
+                <tr>
+                    <td><strong>@p.Titel</strong><br /><MudText Typo="Typo.caption">@p.Identifier</MudText></td>
+                    <td><MudChip T="string" Size="Size.Small" Color="@(p.Version == ScormVersion.Okand ? Color.Warning : Color.Default)">@p.VersionText</MudChip></td>
+                    <td><code>@p.LaunchUrl</code></td>
+                    <td>@(p.MasteryScore?.ToString() ?? "—")</td>
+                    <td>@FormatSize(p.StorlekBytes)</td>
+                    <td>@p.UppladdadVid.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+}
+
+@code {
+    private List<Course> _courses = [];
+    private List<ScormPackage> _packages = [];
+    private Guid? _selectedCourseId;
+    private IBrowserFile? _selectedFile;
+    private bool _skapaLektion = true;
+    private bool _uploading;
+    private string? _error, _success;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _courses = await db.Courses.OrderBy(c => c.Namn).ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta kurser: {ex.Message}"; }
+    }
+
+    private async Task OnCourseChanged(Guid? courseId)
+    {
+        _selectedCourseId = courseId;
+        await LaddaPaket();
+    }
+
+    private async Task LaddaPaket()
+    {
+        if (_selectedCourseId == null) { _packages = []; return; }
+        var courseId = _selectedCourseId.Value;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _packages = await db.Set<ScormPackage>()
+            .Where(p => p.CourseId == courseId)
+            .ToListAsync();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e) => _selectedFile = e.File;
+
+    private async Task LaddaUpp()
+    {
+        var fil = _selectedFile;
+        if (fil == null || _selectedCourseId == null) return;
+        var courseId = _selectedCourseId.Value;
+        _uploading = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            // Läs in zip i minnet (seekbar ström krävs för både manifest-tolkning och lagring).
+            using var mem = new MemoryStream();
+            await using (var upload = fil.OpenReadStream(maxAllowedSize: 100 * 1024 * 1024))
+            {
+                await upload.CopyToAsync(mem);
+            }
+
+            mem.Position = 0;
+            if (!ScormManifestParser.InnehallerManifest(mem))
+            {
+                _error = "Zip-filen saknar imsmanifest.xml — det är inte ett giltigt SCORM-paket.";
+                return;
+            }
+
+            mem.Position = 0;
+            var manifest = ScormManifestParser.Parse(mem);
+
+            mem.Position = 0;
+            var storagePath = await Storage.UploadAsync("scorm", fil.Name, mem);
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var pkg = ScormPackage.Skapa(courseId, manifest, storagePath, fil.Name, mem.Length);
+            db.Set<ScormPackage>().Add(pkg);
+
+            if (_skapaLektion)
+            {
+                var befintliga = await db.Set<Lesson>().Where(l => l.CourseId == courseId).ToListAsync();
+                var nextOrder = befintliga.Count == 0 ? 1 : befintliga.Max(l => l.Ordning) + 1;
+                db.Set<Lesson>().Add(Lesson.SkapaScorm(courseId, nextOrder, pkg.Titel, pkg.Id));
+            }
+
+            await db.SaveChangesAsync();
+            _packages.Add(pkg);
+            _success = $"SCORM-paket \"{pkg.Titel}\" ({pkg.VersionText}) uppladdat. Launch-URL: {pkg.LaunchUrl}";
+            _selectedFile = null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = $"Manifest-tolkning misslyckades: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Uppladdning misslyckades: {ex.Message}";
+        }
+        finally { _uploading = false; }
+    }
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024):F1} MB";
+    }
+}

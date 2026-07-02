@@ -1,0 +1,158 @@
+@page "/dokument/earkiv/gallring"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Documents.Domain
+@using RegionHR.Infrastructure.Documents
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IArchiveService Archive
+@inject AuthenticationStateProvider AuthState
+
+<PageTitle>OpenHR — Gallring</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary"
+           Href="/dokument/earkiv" Style="margin-bottom: 1rem;">Tillbaka till e-arkiv</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Gallring</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Gallring innebär att en handling förstörs enligt gallringsbeslut när gallringsfristen löpt ut.
+    Handlingar som ska bevaras eller har gallringsspärr visas men kan inte gallras. Arkivlagen väger
+    tyngre än GDPR — en handling som fortfarande omfattas av bevarande- eller fristkrav får inte raderas
+    på begäran om radering.
+</MudText>
+
+@if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+}
+@if (_info != null)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _info = null)">@_info</MudAlert>
+}
+
+<MudGrid Class="mb-4">
+    <MudItem xs="12" sm="4"><MudPaper Class="pa-4" Elevation="2"><MudText Typo="Typo.h5" Style="font-weight:700;">@_gallringsbara.Count</MudText><MudText Typo="Typo.body2">Får gallras nu</MudText></MudPaper></MudItem>
+    <MudItem xs="12" sm="4"><MudPaper Class="pa-4" Elevation="2"><MudText Typo="Typo.h5" Style="font-weight:700;">@_kommande.Count</MudText><MudText Typo="Typo.body2">Kommande gallring</MudText></MudPaper></MudItem>
+    <MudItem xs="12" sm="4"><MudPaper Class="pa-4" Elevation="2"><MudText Typo="Typo.h5" Style="font-weight:700;">@_bevaras.Count</MudText><MudText Typo="Typo.body2">Bevaras / spärrade</MudText></MudPaper></MudItem>
+</MudGrid>
+
+<MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">Får gallras nu</MudText>
+@if (_gallringsbara.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Class="mb-4">Inga handlingar är gallringsbara i dag.</MudAlert>
+}
+else
+{
+    <MudSimpleTable Hover="true" Elevation="2" Class="mb-6">
+        <thead><tr><th>Titel</th><th>Diarienummer</th><th>Arkivklass</th><th>Gallringsfrist</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var a in _gallringsbara)
+            {
+                <tr>
+                    <td>@a.Titel</td>
+                    <td>@a.Diarienummer</td>
+                    <td>@ArchiveClassificationPolicy.Etikett(a.Arkivklass)</td>
+                    <td>@a.GallringsFrist?.ToString("yyyy-MM-dd")</td>
+                    <td>
+                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error" StartIcon="@Icons.Material.Filled.DeleteForever"
+                                   OnClick="@(() => Gallra(a.Id))" Disabled="@_arbetar">Gallra</MudButton>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+}
+
+<MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">Kommande gallring</MudText>
+@if (_kommande.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Class="mb-4">Inga kommande gallringsfrister.</MudAlert>
+}
+else
+{
+    <MudSimpleTable Hover="true" Elevation="2" Class="mb-6">
+        <thead><tr><th>Titel</th><th>Diarienummer</th><th>Arkivklass</th><th>Gallras tidigast</th><th>Om</th></tr></thead>
+        <tbody>
+            @foreach (var a in _kommande)
+            {
+                <tr>
+                    <td>@a.Titel</td>
+                    <td>@a.Diarienummer</td>
+                    <td>@ArchiveClassificationPolicy.Etikett(a.Arkivklass)</td>
+                    <td>@a.GallringsFrist?.ToString("yyyy-MM-dd")</td>
+                    <td>@ArDagar(a.GallringsFrist)</td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+}
+
+<MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">Bevaras eller spärrade (gallras aldrig)</MudText>
+@if (_bevaras.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">Inga bevarade eller spärrade handlingar.</MudAlert>
+}
+else
+{
+    <MudSimpleTable Hover="true" Elevation="2">
+        <thead><tr><th>Titel</th><th>Diarienummer</th><th>Arkivklass</th><th>Skäl</th></tr></thead>
+        <tbody>
+            @foreach (var a in _bevaras)
+            {
+                <tr>
+                    <td>@a.Titel</td>
+                    <td>@a.Diarienummer</td>
+                    <td>@ArchiveClassificationPolicy.Etikett(a.Arkivklass)</td>
+                    <td>@(a.GallringsSparr ? $"Gallringsspärr: {a.GallringsSparrOrsak}" : "Bevaras enligt arkivklass")</td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+}
+
+@code {
+    private List<ArchivedDocument> _gallringsbara = [];
+    private List<ArchivedDocument> _kommande = [];
+    private List<ArchivedDocument> _bevaras = [];
+    private string? _error, _info;
+    private bool _arbetar;
+
+    protected override async Task OnInitializedAsync() => await LaddaOm();
+
+    private async Task LaddaOm()
+    {
+        try
+        {
+            var nu = DateTime.UtcNow;
+            _gallringsbara = [.. await Archive.GetGallringsbaraAsync(nu)];
+            var alla = await Archive.GetArkiveradeAsync(inkluderaGallrade: false);
+            _kommande = [.. alla
+                .Where(a => !a.Bevaras && !a.GallringsSparr && a.GallringsFrist != null && a.GallringsFrist > nu)
+                .OrderBy(a => a.GallringsFrist)];
+            _bevaras = [.. alla.Where(a => a.Bevaras || a.GallringsSparr).OrderBy(a => a.Titel)];
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta gallringsdata: {ex.Message}"; }
+    }
+
+    private async Task Gallra(Guid id)
+    {
+        _arbetar = true; _error = null; _info = null;
+        try
+        {
+            var auth = await AuthState.GetAuthenticationStateAsync();
+            var av = auth.User.Identity?.Name is { Length: > 0 } n ? n : "Okänd";
+            await Archive.GallraAsync(id, av);
+            _info = "Handlingen har gallrats.";
+            await LaddaOm();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _arbetar = false; }
+    }
+
+    private static string ArDagar(DateTime? frist)
+    {
+        if (frist is null) return "—";
+        var dagar = (frist.Value.Date - DateTime.UtcNow.Date).Days;
+        if (dagar <= 0) return "nu";
+        if (dagar < 365) return $"{dagar} dagar";
+        return $"{dagar / 365} år";
+    }
+}

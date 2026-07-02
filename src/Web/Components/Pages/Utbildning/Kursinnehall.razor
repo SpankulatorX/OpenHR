@@ -1,0 +1,264 @@
+@page "/utbildning/kursinnehall"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.LMS.Domain
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Storage
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IFileStorageService Storage
+
+<PageTitle>OpenHR — Kursinnehåll</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/utbildning" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Kursinnehåll</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Bygg en kurs av lektioner (text, video eller fil) som visas i ordning i kursspelaren.
+    För interaktivt innehåll: ladda upp ett <MudLink Href="/utbildning/scorm">SCORM-paket</MudLink>.
+</MudText>
+
+@if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+}
+@if (_success != null)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+}
+
+<MudPaper Class="pa-4 mb-4" Elevation="2">
+    <MudSelect T="Guid?" Value="_selectedCourseId" ValueChanged="OnCourseChanged" Label="Välj kurs" Variant="Variant.Outlined">
+        @foreach (var c in _courses)
+        {
+            <MudSelectItem T="Guid?" Value="@((Guid?)c.Id)">@c.Namn (@c.Format)</MudSelectItem>
+        }
+    </MudSelect>
+</MudPaper>
+
+@if (_selectedCourseId != null)
+{
+    <div class="d-flex justify-space-between align-center mb-2">
+        <MudText Typo="Typo.h6" Style="font-weight: 600;">Lektioner (@_lessons.Count)</MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                   OnClick="@(() => _showForm = !_showForm)">Ny lektion</MudButton>
+    </div>
+
+    @if (_showForm)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-primary);">
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="LessonType" @bind-Value="_nyTyp" Label="Typ" Variant="Variant.Outlined">
+                        <MudSelectItem Value="LessonType.Text">Text</MudSelectItem>
+                        <MudSelectItem Value="LessonType.Video">Video (URL)</MudSelectItem>
+                        <MudSelectItem Value="LessonType.Fil">Fil (uppladdning)</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_nyTitel" Label="Titel" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="2">
+                    <MudNumericField @bind-Value="_nyLangd" Label="Längd (min)" Variant="Variant.Outlined" Min="0" />
+                </MudItem>
+
+                @if (_nyTyp == LessonType.Text)
+                {
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="_nyText" Label="Textinnehåll" Variant="Variant.Outlined" Lines="6" />
+                    </MudItem>
+                }
+                else if (_nyTyp == LessonType.Video)
+                {
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="_nyVideoUrl" Label="Video-URL (YouTube/Vimeo/mp4)" Variant="Variant.Outlined" />
+                    </MudItem>
+                }
+                else if (_nyTyp == LessonType.Fil)
+                {
+                    <MudItem xs="12">
+                        <MudFileUpload T="IBrowserFile" Accept=".pdf,.doc,.docx,.ppt,.pptx,.jpg,.png,.txt" OnFilesChanged="OnFileSelected">
+                            <CustomContent>
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                           StartIcon="@Icons.Material.Filled.CloudUpload"
+                                           OnClick="@context.OpenFilePickerAsync">Välj fil</MudButton>
+                            </CustomContent>
+                        </MudFileUpload>
+                        @if (_selectedFile != null)
+                        {
+                            <MudText Typo="Typo.body2" Class="mt-2"><strong>Vald fil:</strong> @_selectedFile.Name</MudText>
+                        }
+                    </MudItem>
+                }
+            </MudGrid>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+                       OnClick="SparaLektion" Disabled="@_sparar">Lägg till lektion</MudButton>
+        </MudPaper>
+    }
+
+    @if (_lessons.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga lektioner ännu. Lägg till den första ovan.</MudAlert>
+    }
+    else
+    {
+        <MudSimpleTable Hover="true" Elevation="2">
+            <thead><tr><th>#</th><th>Titel</th><th>Typ</th><th>Längd</th><th>Innehåll</th><th style="width: 160px;"></th></tr></thead>
+            <tbody>
+                @for (var i = 0; i < _lessons.Count; i++)
+                {
+                    var idx = i;
+                    var l = _lessons[idx];
+                    <tr>
+                        <td>@(idx + 1)</td>
+                        <td><strong>@l.Titel</strong></td>
+                        <td><MudChip T="string" Size="Size.Small">@l.Typ</MudChip></td>
+                        <td>@l.LangdMinuter min</td>
+                        <td><MudText Typo="Typo.caption">@InnehallSammanfattning(l)</MudText></td>
+                        <td>
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
+                                           Disabled="@(idx == 0)" OnClick="@(() => Flytta(idx, -1))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
+                                           Disabled="@(idx == _lessons.Count - 1)" OnClick="@(() => Flytta(idx, 1))" />
+                            <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                           OnClick="@(() => TaBort(l))" />
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+        <MudButton Href="@($"/utbildning/kurs/{_selectedCourseId}")" Variant="Variant.Outlined" Color="Color.Primary"
+                   Class="mt-3" StartIcon="@Icons.Material.Filled.PlayArrow">Förhandsgranska i kursspelaren</MudButton>
+    }
+}
+
+@code {
+    private List<Course> _courses = [];
+    private List<Lesson> _lessons = [];
+    private Guid? _selectedCourseId;
+    private bool _showForm, _sparar;
+    private string? _error, _success;
+
+    private LessonType _nyTyp = LessonType.Text;
+    private string _nyTitel = "";
+    private string _nyText = "";
+    private string _nyVideoUrl = "";
+    private int _nyLangd;
+    private IBrowserFile? _selectedFile;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _courses = await db.Courses.OrderBy(c => c.Namn).ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta kurser: {ex.Message}"; }
+    }
+
+    private async Task OnCourseChanged(Guid? courseId)
+    {
+        _selectedCourseId = courseId;
+        _showForm = false;
+        await LaddaLektioner();
+    }
+
+    private async Task LaddaLektioner()
+    {
+        if (_selectedCourseId == null) { _lessons = []; return; }
+        var courseId = _selectedCourseId.Value;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _lessons = await db.Set<Lesson>()
+            .Where(l => l.CourseId == courseId)
+            .OrderBy(l => l.Ordning).ThenBy(l => l.SkapadVid)
+            .ToListAsync();
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e) => _selectedFile = e.File;
+
+    private async Task SparaLektion()
+    {
+        if (_selectedCourseId == null) return;
+        if (string.IsNullOrWhiteSpace(_nyTitel)) { _error = "Titel krävs."; return; }
+        var courseId = _selectedCourseId.Value;
+        _sparar = true;
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var nextOrder = _lessons.Count == 0 ? 1 : _lessons.Max(l => l.Ordning) + 1;
+            Lesson lektion;
+
+            switch (_nyTyp)
+            {
+                case LessonType.Video:
+                    if (string.IsNullOrWhiteSpace(_nyVideoUrl)) { _error = "Video-URL krävs."; _sparar = false; return; }
+                    lektion = Lesson.SkapaVideo(courseId, nextOrder, _nyTitel, _nyVideoUrl, _nyLangd);
+                    break;
+                case LessonType.Fil:
+                    var fil = _selectedFile;
+                    if (fil == null) { _error = "Välj en fil att ladda upp."; _sparar = false; return; }
+                    using (var stream = fil.OpenReadStream(maxAllowedSize: 25 * 1024 * 1024))
+                    {
+                        var path = await Storage.UploadAsync("lms-lessons", fil.Name, stream);
+                        lektion = Lesson.SkapaFil(courseId, nextOrder, _nyTitel, path, fil.Name, _nyLangd);
+                    }
+                    break;
+                default:
+                    lektion = Lesson.SkapaText(courseId, nextOrder, _nyTitel, _nyText, _nyLangd);
+                    break;
+            }
+
+            db.Set<Lesson>().Add(lektion);
+            await db.SaveChangesAsync();
+            _lessons.Add(lektion);
+            _success = $"Lektion \"{lektion.Titel}\" tillagd.";
+            _nyTitel = ""; _nyText = ""; _nyVideoUrl = ""; _nyLangd = 0; _selectedFile = null;
+            _showForm = false;
+        }
+        catch (Exception ex) { _error = $"Kunde inte spara lektion: {ex.Message}"; }
+        finally { _sparar = false; }
+    }
+
+    private async Task Flytta(int index, int riktning)
+    {
+        var mal = index + riktning;
+        if (mal < 0 || mal >= _lessons.Count) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var a = await db.Set<Lesson>().FirstAsync(l => l.Id == _lessons[index].Id);
+        var b = await db.Set<Lesson>().FirstAsync(l => l.Id == _lessons[mal].Id);
+        var tmp = a.Ordning;
+        a.AndraOrdning(b.Ordning);
+        b.AndraOrdning(tmp);
+        await db.SaveChangesAsync();
+        await LaddaLektioner();
+    }
+
+    private async Task TaBort(Lesson l)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var entity = await db.Set<Lesson>().FirstOrDefaultAsync(x => x.Id == l.Id);
+        if (entity != null)
+        {
+            db.Set<Lesson>().Remove(entity);
+            await db.SaveChangesAsync();
+        }
+        _lessons.Remove(l);
+        _success = "Lektion borttagen.";
+    }
+
+    private static string InnehallSammanfattning(Lesson l) => l.Typ switch
+    {
+        LessonType.Text => Trunkera(l.TextInnehall),
+        LessonType.Video => l.MediaUrl ?? "",
+        LessonType.Fil => l.FilNamn ?? "",
+        LessonType.Scorm => "SCORM-paket",
+        _ => ""
+    };
+
+    private static string Trunkera(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        return s.Length <= 60 ? s : s[..60] + "…";
+    }
+}

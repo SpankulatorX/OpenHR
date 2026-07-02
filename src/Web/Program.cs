@@ -9,6 +9,9 @@ using RegionHR.Web.Middleware;
 using RegionHR.Web.Services;
 using RegionHR.Web.Components;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.Identity.Web;
+using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Authentication;
 
 // Npgsql 6+ mappar timestamptz strikt till UTC. Domänen sätter på många ställen
 // DateTime med Kind=Unspecified (utvecklat mot InMemory som saknar denna kontroll).
@@ -102,6 +105,23 @@ builder.Services.AddScoped<FlexService>();
 builder.Services.AddScoped<RegionHR.Web.Services.RekryteringService>();
 builder.Services.AddScoped<LedighetService>();
 builder.Services.AddScoped<LokalAvvikelseService>();
+// Heroma-import (våg 7): parsad data → riktiga anställda
+builder.Services.AddScoped<RegionHR.Migration.Services.IEmployeeImportSink, RegionHR.Web.Services.EmployeeImportSink>();
+builder.Services.AddScoped<RegionHR.Migration.Services.MigrationImportService>();
+// OIDC / Entra ID (config-ready — default avstängd, se appsettings "Oidc") — våg 7
+builder.Services.AddScoped<RegionHR.Web.Services.Oidc.EntraClaimsMapper>();
+builder.Services.AddScoped<RegionHR.Web.Services.Oidc.OidcAccountLinker>();
+
+// Koppla in Entra ENDAST om sektionen är påslagen + minimalt ifylld. Annars: demo-login som förut.
+var oidcSection = builder.Configuration.GetSection(RegionHR.Web.Services.Oidc.OidcOptions.SectionName);
+var oidcEnabled = oidcSection.GetValue<bool>("Enabled")
+    && !string.IsNullOrWhiteSpace(oidcSection["TenantId"])
+    && !string.IsNullOrWhiteSpace(oidcSection["ClientId"]);
+if (oidcEnabled)
+{
+    builder.Services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+        .AddMicrosoftIdentityWebApp(builder.Configuration, RegionHR.Web.Services.Oidc.OidcOptions.SectionName);
+}
 
 // Rate limiting
 builder.Services.AddRateLimiter(options =>
@@ -146,10 +166,29 @@ app.UseRateLimiter();
 app.UseAntiforgery();
 app.UseRequestLocalization();
 
+if (oidcEnabled)
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+}
+
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
 app.MapHub<NotificationHub>("/hubs/notifications");
+
+if (oidcEnabled)
+{
+    app.MapGet("/auth/oidc/challenge", (HttpContext http) =>
+        Results.Challenge(
+            new AuthenticationProperties { RedirectUri = "/auth/oidc/complete" },
+            new[] { OpenIdConnectDefaults.AuthenticationScheme })).AllowAnonymous();
+    app.MapGet("/auth/oidc/signout", (HttpContext http) =>
+        Results.SignOut(
+            new AuthenticationProperties { RedirectUri = "/login" },
+            new[] { Microsoft.AspNetCore.Authentication.Cookies.CookieAuthenticationDefaults.AuthenticationScheme,
+                    OpenIdConnectDefaults.AuthenticationScheme })).AllowAnonymous();
+}
 
 // Liveness: processen lever (kör inga checks → 200 så länge appen svarar).
 app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false });
