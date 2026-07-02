@@ -84,6 +84,16 @@ public static class DependencyInjection
         // Module contracts
         services.AddScoped<ICoreHRModule, CoreHRModuleService>();
 
+        // LAS — skrivväg + repo (våg 2)
+        services.AddScoped<RegionHR.LAS.Services.ILASRepository, RegionHR.Infrastructure.LAS.LASRepository>();
+        services.AddScoped<RegionHR.LAS.Services.LASService>();
+
+        // HSA-katalogen (Inera) — DEMO/sandbox. Byt SandboxHsaCatalogAdapter mot skarp
+        // adapter (Inera-avtal + SITHS-cert + WS/LDAP-endpoint) när det finns. (våg 2)
+        services.AddSingleton<RegionHR.Infrastructure.Integrations.HSA.IHsaCatalogAdapter,
+                              RegionHR.Infrastructure.Integrations.HSA.SandboxHsaCatalogAdapter>();
+        services.AddScoped<RegionHR.Infrastructure.Integrations.HSA.HsaCatalogSyncService>();
+
         // Payroll services
         services.AddScoped<ITaxTableProvider, TaxTableRepository>();
         services.AddScoped<ICollectiveAgreementRulesEngine, CollectiveAgreementRulesEngine>();
@@ -133,6 +143,11 @@ public static class DependencyInjection
         // Document template engine & e-signing
         services.AddSingleton<DocumentTemplateEngine>();
         services.AddSingleton<ISigningService, SimpleConfirmationSigningService>();
+
+        // Payroll batch-orkestrering (våg 2 slice: lonekorning)
+        services.AddSingleton<RegionHR.Infrastructure.Payroll.PayrollInputBuilder>();
+        services.AddScoped<RegionHR.Payroll.Domain.RetroactiveRecalculationEngine>();
+        services.AddScoped<RegionHR.Infrastructure.Payroll.PayrollBatchService>();
 
         // Swedish payroll engine
         services.AddSingleton<SwedishTaxCalculator>();

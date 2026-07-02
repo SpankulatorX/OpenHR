@@ -1,0 +1,129 @@
+@page "/minsida/saldon"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Web.Services
+@inject FlexService Flex
+@inject SelfServiceApiClient SelfService
+@inject AuthService Auth
+
+<PageTitle>OpenHR - Mina saldon</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/minsida" Style="margin-bottom: 1rem;">
+    Tillbaka
+</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-1" Style="font-weight: 700;">📊 Mina saldon</MudText>
+<MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Flex, komptid och semester — beräknat ur dina stämplingar mot schemat
+</MudText>
+
+@if (Auth.EmployeeId == null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">Saldon kräver en kopplad anställd — logga in med en personalprofil.</MudAlert>
+}
+else if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else if (_flex != null)
+{
+    <MudGrid Spacing="3" Class="mb-4">
+        <MudItem xs="12" sm="4">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h3" Color="@(_flex.Flexsaldo >= 0 ? Color.Success : Color.Error)" Style="font-weight: 800;">
+                    @(_flex.Flexsaldo >= 0 ? "+" : "")@_flex.Flexsaldo.ToString("0.0")h
+                </MudText>
+                <MudText Typo="Typo.body2">Flexsaldo</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="4">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h3" Color="Color.Primary" Style="font-weight: 800;">@_flex.Kompsaldo.ToString("0.0")h</MudText>
+                <MudText Typo="Typo.body2">Komptid (övertid)</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="12" sm="4">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h3" Color="Color.Info" Style="font-weight: 800;">@_semesterdagar dgr</MudText>
+                <MudText Typo="Typo.body2">Semester kvar</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @if (!_flex.FlexAktiverad)
+    {
+        <MudAlert Severity="Severity.Info" Class="mb-4">Flextid är inte aktiverad för dig. Kontakta din chef vid frågor.</MudAlert>
+    }
+    else
+    {
+        <MudText Typo="Typo.body2" Class="mb-2" Style="color: var(--mud-palette-text-secondary);">
+            Flexgränser: golv @_flex.MaxMinus.ToString("0.#")h, tak @(_flex.MaxPlus == 0 ? "obegränsat" : _flex.MaxPlus.ToString("0.#") + "h")
+        </MudText>
+        @if (_flex.NaddeOvreGrans)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-4">Du har nått taket för flexsaldot. Överskjutande tid räknas inte in — planera in ledighet.</MudAlert>
+        }
+        @if (_flex.NaddeUndreGrans)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-4">Du har nått golvet för flexsaldot. Ta igen tid för att komma i balans.</MudAlert>
+        }
+    }
+
+    @if (_flex.Dagsposter.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga stämplade pass i perioden ännu — flexsaldot byggs upp när du stämplar in och ut.</MudAlert>
+    }
+    else
+    {
+        <MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">Flex per dag (senaste @_dagar dagarna)</MudText>
+        <MudSimpleTable Hover="true" Elevation="1">
+            <thead><tr><th>Datum</th><th>Planerat</th><th>Faktiskt</th><th>Flex</th></tr></thead>
+            <tbody>
+                @foreach (var d in _flex.Dagsposter.OrderByDescending(p => p.Datum))
+                {
+                    <tr>
+                        <td>@d.Datum.ToString("ddd d/M")</td>
+                        <td>@d.PlaneradeTimmar.ToString("0.0")h</td>
+                        <td>@d.FaktiskaTimmar.ToString("0.0")h</td>
+                        <td style="@(d.FlexDelta >= 0 ? "color: var(--mud-palette-success);" : "color: var(--mud-palette-error);")">
+                            @(d.FlexDelta >= 0 ? "+" : "")@d.FlexDelta.ToString("0.0")h
+                            @if (d.Kapad)
+                            {
+                                <MudTooltip Text="Dagens flex kapades till din dagliga flexgräns.">
+                                    <MudIcon Icon="@Icons.Material.Filled.ContentCut" Size="Size.Small" />
+                                </MudTooltip>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+}
+
+@code {
+    private const int _dagar = 90;
+    private FlexOversikt? _flex;
+    private int _semesterdagar;
+    private bool _loading = true;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Auth.EmployeeId == null) { _loading = false; return; }
+        try
+        {
+            var idag = DateOnly.FromDateTime(DateTime.Today);
+            _flex = await Flex.BeraknaOversiktAsync(Auth.EmployeeId.Value, idag.AddDays(-_dagar), idag);
+
+            var semester = await SelfService.GetVacationBalanceAsync(Auth.EmployeeId.Value, DateTime.Today.Year);
+            _semesterdagar = semester?.TillgangligaDagar ?? 0;
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta saldon: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+}

@@ -126,6 +126,104 @@ public sealed class LASService
         await _repository.UpdateAsync(acc, ct);
     }
 
+    /// <summary>
+    /// Registrera/korrigera en LAS-period med attestkontroll (HR-åtgärd).
+    /// Systemet är experten: självattest avvisas — HR kan inte registrera sin egen LAS-status.
+    /// </summary>
+    public async Task<LASAccumulation> RegistreraPeriodAsync(
+        EmployeeId anstallId, EmploymentType typ,
+        DateOnly startDatum, DateOnly slutDatum,
+        Guid? utfortAvEmployeeId, string utfortAvNamn,
+        CancellationToken ct = default)
+    {
+        SakerstallEjSjalvattest(anstallId, utfortAvEmployeeId);
+        if (slutDatum < startDatum)
+            throw new ArgumentException("Slutdatum kan inte vara före startdatum.");
+        return await RegistreraPeriodAsync(anstallId, typ, startDatum, slutDatum, ct);
+    }
+
+    /// <summary>Korrigera (ändra datum för) en registrerad LAS-period. HR-åtgärd, ingen självattest.</summary>
+    public async Task<bool> KorrigeraPeriodAsync(
+        EmployeeId anstallId,
+        DateOnly gammalStart, DateOnly gammalSlut,
+        DateOnly nyStart, DateOnly nySlut,
+        Guid? utfortAvEmployeeId, string utfortAvNamn,
+        CancellationToken ct = default)
+    {
+        SakerstallEjSjalvattest(anstallId, utfortAvEmployeeId);
+        var acc = await _repository.GetByEmployeeAsync(anstallId, ct);
+        if (acc is null)
+            return false;
+
+        var andrad = acc.AndraPeriod(gammalStart, gammalSlut, nyStart, nySlut);
+        if (andrad)
+            await _repository.UpdateAsync(acc, ct);
+        return andrad;
+    }
+
+    /// <summary>Ta bort en felregistrerad LAS-period. HR-åtgärd, ingen självattest.</summary>
+    public async Task<bool> TaBortPeriodAsync(
+        EmployeeId anstallId, DateOnly startDatum, DateOnly slutDatum,
+        Guid? utfortAvEmployeeId, string utfortAvNamn,
+        CancellationToken ct = default)
+    {
+        SakerstallEjSjalvattest(anstallId, utfortAvEmployeeId);
+        var acc = await _repository.GetByEmployeeAsync(anstallId, ct);
+        if (acc is null)
+            return false;
+
+        var borttagen = acc.TaBortPeriod(startDatum, slutDatum);
+        if (borttagen)
+            await _repository.UpdateAsync(acc, ct);
+        return borttagen;
+    }
+
+    /// <summary>
+    /// Konvertera visstidsanställning till tillsvidareanställning (formbyte, §5a LAS).
+    /// HR-beslut med attestkontroll. Returnerar false om ingen ackumulering finns eller redan konverterad.
+    /// </summary>
+    public async Task<bool> KonverteraTillTillsvidareAsync(
+        EmployeeId anstallId, DateOnly konverteringsDatum,
+        Guid? utfortAvEmployeeId, string utfortAvNamn,
+        CancellationToken ct = default)
+    {
+        SakerstallEjSjalvattest(anstallId, utfortAvEmployeeId);
+        var acc = await _repository.GetByEmployeeAsync(anstallId, ct);
+        if (acc is null)
+            return false;
+
+        var konverterad = acc.KonverteraTillTillsvidare(konverteringsDatum, utfortAvNamn);
+        if (konverterad)
+            await _repository.UpdateAsync(acc, ct);
+        return konverterad;
+    }
+
+    /// <summary>
+    /// Bevilja företrädesrätt vid anställningens slut (§25 LAS). HR-beslut med attestkontroll.
+    /// Returnerar true om den anställde efter bedömning har företrädesrätt.
+    /// </summary>
+    public async Task<bool> BeviljaForetradesrattAsync(
+        EmployeeId anstallId, DateOnly slutDatum,
+        Guid? utfortAvEmployeeId, string utfortAvNamn,
+        CancellationToken ct = default)
+    {
+        SakerstallEjSjalvattest(anstallId, utfortAvEmployeeId);
+        var acc = await _repository.GetByEmployeeAsync(anstallId, ct);
+        if (acc is null)
+            return false;
+
+        acc.SattForetradesratt(slutDatum);
+        await _repository.UpdateAsync(acc, ct);
+        return acc.HarForetradesratt;
+    }
+
+    private static void SakerstallEjSjalvattest(EmployeeId mal, Guid? utfortAvEmployeeId)
+    {
+        if (utfortAvEmployeeId is { } id && id == mal.Value)
+            throw new InvalidOperationException(
+                "Självattest är inte tillåten: du kan inte registrera, korrigera eller besluta om din egen LAS-status.");
+    }
+
     /// <summary>Generera turordningslista för en driftsenhet.</summary>
     public async Task<IReadOnlyList<TurordningsPost>> GenereraTurordningslistaAsync(
         OrganizationId enhetId, DateOnly datum, CancellationToken ct = default)

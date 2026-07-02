@@ -45,6 +45,19 @@ else if (_showForm)
     <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
 }
 
+@if (_avvisaClaim is not null)
+{
+    <MudPaper Class="pa-5 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-error);">
+        <MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">Avvisa resekrav – @_avvisaClaim.Namn (@_avvisaClaim.Belopp.ToString("N0") kr)</MudText>
+        <MudTextField @bind-Value="_avvisaAnledning" Label="Anledning till avvisning" Variant="Variant.Outlined" Lines="2" Required="true" />
+        <div class="mt-3">
+            <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="AvvisaKrav"
+                       Disabled="@(string.IsNullOrWhiteSpace(_avvisaAnledning) || _saving)">Bekräfta avvisning</MudButton>
+            <MudButton Variant="Variant.Text" Class="ml-2" OnClick="AvbrytAvvisa">Avbryt</MudButton>
+        </div>
+    </MudPaper>
+}
+
 @if (_loading)
 {
     <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
@@ -67,9 +80,18 @@ else
                     <td>@c.Belopp.ToString("N0") kr</td>
                     <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(c.Status)">@StatusText(c.Status)</MudChip></td>
                     <td>
-                        @if (c.Status == TravelClaimStatus.Inskickad && Auth.EmployeeId.HasValue)
+                        @if (c.Status == TravelClaimStatus.Inskickad && Auth.IsChef && !ArEgetKrav(c))
                         {
                             <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => AttesteraKrav(c))">Godkänn</MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" Class="ml-2" OnClick="@(() => VisaAvvisa(c))">Avvisa</MudButton>
+                        }
+                        else if (c.Status == TravelClaimStatus.Inskickad && Auth.IsChef && ArEgetKrav(c))
+                        {
+                            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">Eget krav – kan ej attestera</MudText>
+                        }
+                        @if (c.Status == TravelClaimStatus.Godkand && Auth.IsHR)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => MarkeraUtbetald(c))">Markera utbetald</MudButton>
                         }
                     </td>
                 </tr>
@@ -145,6 +167,10 @@ else
     private DateTime? _formDatum;
     private string _formBeskrivning = "";
 
+    // Avvisning
+    private ClaimVm? _avvisaClaim;
+    private string _avvisaAnledning = "";
+
     // Traktamente
     private DateTime? _traktAvresa = DateTime.Today, _traktHemkomst = DateTime.Today.AddDays(2);
     private string _traktTyp = "Inrikes", _traktLand = "Norge";
@@ -157,16 +183,21 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            var claims = await db.TravelClaims.OrderByDescending(c => c.ReseDatum).Take(50).ToListAsync();
-            var empIds = claims.Select(c => c.AnstallId).Distinct().ToList();
-            var employees = await db.Employees.Where(e => empIds.Contains(e.Id)).ToListAsync();
-            var names = employees.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
-
-            _claims = claims.Select(c => new ClaimVm(c.Id, names.GetValueOrDefault(c.AnstallId.Value, "Okänd"),
-                c.ReseDatum, c.Beskrivning, c.TotalBelopp.Amount, c.Status, c)).ToList();
+            await LaddaKravAsync(db);
         }
         catch (Exception ex) { _error = $"Kunde inte hämta resekrav: {ex.Message}"; }
         finally { _loading = false; }
+    }
+
+    private async Task LaddaKravAsync(RegionHRDbContext db)
+    {
+        var claims = await db.TravelClaims.OrderByDescending(c => c.ReseDatum).Take(50).ToListAsync();
+        var empIds = claims.Select(c => c.AnstallId).Distinct().ToList();
+        var employees = await db.Employees.Where(e => empIds.Contains(e.Id)).ToListAsync();
+        var names = employees.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
+
+        _claims = claims.Select(c => new ClaimVm(c.Id, c.AnstallId.Value, names.GetValueOrDefault(c.AnstallId.Value, "Okänd"),
+            c.ReseDatum, c.Beskrivning, c.TotalBelopp.Amount, c.Status)).ToList();
     }
 
     private async Task SkapaResekrav()
@@ -180,24 +211,95 @@ else
             claim.SkickaIn();
             db.TravelClaims.Add(claim);
             await db.SaveChangesAsync();
-            _claims.Insert(0, new ClaimVm(claim.Id, Auth.UserName ?? "Jag", claim.ReseDatum, claim.Beskrivning, claim.TotalBelopp.Amount, claim.Status, claim));
+            _claims.Insert(0, new ClaimVm(claim.Id, claim.AnstallId.Value, Auth.UserName ?? "Jag", claim.ReseDatum, claim.Beskrivning, claim.TotalBelopp.Amount, claim.Status));
             _showForm = false; _success = "Resekrav skapat."; _formBeskrivning = ""; _formDatum = null;
         }
         catch (Exception ex) { _error = $"Kunde inte skapa: {ex.Message}"; }
         finally { _saving = false; }
     }
 
+    // En anställd får inte attestera sitt eget resekrav (självattest förbjuden).
+    private bool ArEgetKrav(ClaimVm c) => Auth.EmployeeId.HasValue && c.AnstallId == Auth.EmployeeId.Value;
+
+    private EmployeeId? AktuellAttestantId =>
+        Auth.EmployeeId.HasValue ? EmployeeId.From(Auth.EmployeeId.Value) : null;
+
     private async Task AttesteraKrav(ClaimVm vm)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        if (!Auth.EmployeeId.HasValue) { _error = "Kräver kopplad anställd."; return; }
+        _error = null; _success = null;
+        if (!Auth.IsChef) { _error = "Du saknar behörighet att attestera resekrav (kräver chef eller HR)."; return; }
+        _saving = true;
         try
         {
-            vm.Entity.Attestera(Auth.UserName ?? "Chef");
+            // Läs entiteten i SAMMA DbContext som sparar — annars persisteras inte ändringen.
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var claim = await db.TravelClaims.FirstOrDefaultAsync(c => c.Id == vm.Id);
+            if (claim is null) { _error = "Resekravet kunde inte hittas."; return; }
+
+            var attestantNamn = Auth.UserName ?? "Chef";
+            claim.Attestera(AktuellAttestantId, attestantNamn, Auth.IsHR);
             await db.SaveChangesAsync();
-            _success = "Resekrav godkänt.";
+            await LaddaKravAsync(db);
+            _success = $"Resekrav godkänt av {attestantNamn}.";
         }
-        catch (Exception ex) { _error = $"Fel: {ex.Message}"; }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    private void VisaAvvisa(ClaimVm vm)
+    {
+        _error = null; _success = null;
+        _avvisaClaim = vm;
+        _avvisaAnledning = "";
+    }
+
+    private void AvbrytAvvisa()
+    {
+        _avvisaClaim = null;
+        _avvisaAnledning = "";
+    }
+
+    private async Task AvvisaKrav()
+    {
+        if (_avvisaClaim is null) return;
+        _error = null; _success = null;
+        if (!Auth.IsChef) { _error = "Du saknar behörighet att avvisa resekrav (kräver chef eller HR)."; return; }
+        if (string.IsNullOrWhiteSpace(_avvisaAnledning)) { _error = "Ange en anledning till avvisningen."; return; }
+        _saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var claim = await db.TravelClaims.FirstOrDefaultAsync(c => c.Id == _avvisaClaim.Id);
+            if (claim is null) { _error = "Resekravet kunde inte hittas."; return; }
+
+            claim.Avvisa(AktuellAttestantId, Auth.UserName ?? "Chef", _avvisaAnledning);
+            await db.SaveChangesAsync();
+            await LaddaKravAsync(db);
+            _success = "Resekrav avvisat.";
+            _avvisaClaim = null; _avvisaAnledning = "";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    private async Task MarkeraUtbetald(ClaimVm vm)
+    {
+        _error = null; _success = null;
+        if (!Auth.IsHR) { _error = "Endast HR kan markera resekrav som utbetalda."; return; }
+        _saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var claim = await db.TravelClaims.FirstOrDefaultAsync(c => c.Id == vm.Id);
+            if (claim is null) { _error = "Resekravet kunde inte hittas."; return; }
+
+            claim.MarkeraSomUtbetald();
+            await db.SaveChangesAsync();
+            await LaddaKravAsync(db);
+            _success = "Resekrav markerat som utbetalt.";
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _saving = false; }
     }
 
     private void BeraknaTraktamente()
@@ -225,6 +327,6 @@ else
         TravelClaimStatus.Avslagen => Color.Error, _ => Color.Default
     };
 
-    private record ClaimVm(Guid Id, string Namn, DateOnly Datum, string Beskrivning, decimal Belopp, TravelClaimStatus Status, TravelClaim Entity);
+    private record ClaimVm(Guid Id, Guid AnstallId, string Namn, DateOnly Datum, string Beskrivning, decimal Belopp, TravelClaimStatus Status);
 }
 

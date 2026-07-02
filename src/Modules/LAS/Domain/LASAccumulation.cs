@@ -205,6 +205,81 @@ public sealed class LASAccumulation : AggregateRoot<Guid>
         }
     }
 
+    /// <summary>
+    /// Ta bort en felregistrerad period (HR-korrigering). Matchar på start- och slutdatum.
+    /// Omberäknar ackumuleringen och nollställer konverteringsdatum om dagarna faller under gränsen.
+    /// </summary>
+    public bool TaBortPeriod(DateOnly startDatum, DateOnly slutDatum)
+    {
+        var period = _perioder.FirstOrDefault(p => p.StartDatum == startDatum && p.SlutDatum == slutDatum);
+        if (period is null)
+            return false;
+
+        _perioder.Remove(period);
+        _handelser.Add(LASEvent.Skapa(
+            LASEventTyp.PeriodRegistrerad,
+            $"Period borttagen (HR-korrigering): {startDatum:yyyy-MM-dd} – {slutDatum:yyyy-MM-dd}"));
+
+        Omberakna(DateOnly.FromDateTime(DateTime.Today));
+        AterstallKonverteringOmUnderGrans();
+        UpdatedAt = DateTime.UtcNow;
+        return true;
+    }
+
+    /// <summary>
+    /// Ändra datum för en registrerad period (HR-korrigering). Matchar den gamla perioden
+    /// på start- och slutdatum. Omberäknar ackumuleringen.
+    /// </summary>
+    public bool AndraPeriod(DateOnly gammalStart, DateOnly gammalSlut, DateOnly nyStart, DateOnly nySlut)
+    {
+        if (nySlut < nyStart)
+            throw new ArgumentException("Slutdatum kan inte vara före startdatum.");
+
+        var period = _perioder.FirstOrDefault(p => p.StartDatum == gammalStart && p.SlutDatum == gammalSlut);
+        if (period is null)
+            return false;
+
+        period.StartDatum = nyStart;
+        period.SlutDatum = nySlut;
+        period.AntalDagar = nySlut.DayNumber - nyStart.DayNumber + 1;
+        _handelser.Add(LASEvent.Skapa(
+            LASEventTyp.PeriodRegistrerad,
+            $"Period korrigerad (HR): {gammalStart:yyyy-MM-dd}–{gammalSlut:yyyy-MM-dd} → {nyStart:yyyy-MM-dd}–{nySlut:yyyy-MM-dd}"));
+
+        Omberakna(DateOnly.FromDateTime(DateTime.Today));
+        AterstallKonverteringOmUnderGrans();
+        UpdatedAt = DateTime.UtcNow;
+        return true;
+    }
+
+    /// <summary>
+    /// Manuell konvertering av visstidsanställning till tillsvidareanställning (formbyte, HR-beslut).
+    /// Registrerar beslutsdatum och vem som fattade beslutet. Idempotent — redan konverterad = ingen ändring.
+    /// </summary>
+    public bool KonverteraTillTillsvidare(DateOnly konverteringsDatum, string beslutadAv)
+    {
+        if (string.IsNullOrWhiteSpace(beslutadAv))
+            throw new ArgumentException("Beslutsfattare måste anges vid konvertering.");
+        if (Status == LASStatus.KonverteradTillTillsvidare)
+            return false;
+
+        Status = LASStatus.KonverteradTillTillsvidare;
+        KonverteringsDatum = konverteringsDatum;
+        _handelser.Add(LASEvent.Skapa(
+            LASEventTyp.Konvertering,
+            $"Manuell konvertering till tillsvidareanställning {konverteringsDatum:yyyy-MM-dd} " +
+            $"(beslut av {beslutadAv}) efter {AckumuleradeDagar} dagar"));
+        RaiseDomainEvent(new LASConversionTriggeredEvent(AnstallId, Anstallningsform, AckumuleradeDagar));
+        UpdatedAt = DateTime.UtcNow;
+        return true;
+    }
+
+    private void AterstallKonverteringOmUnderGrans()
+    {
+        if (Status != LASStatus.KonverteradTillTillsvidare)
+            KonverteringsDatum = null;
+    }
+
     /// <summary>Generera turordningslista per driftsenhet.</summary>
     public int BeraknaLASDagar() => AckumuleradeDagar;
 }

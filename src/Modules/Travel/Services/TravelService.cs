@@ -82,26 +82,71 @@ public sealed class TravelService
     }
 
     /// <summary>
-    /// Attesterar (godkänner) ett resekrav.
+    /// Attesterar (godkänner) ett resekrav med full behörighetskontroll.
+    /// Kräver att attestanten inte är inlämnaren och att HR-behörighet finns
+    /// för belopp över <see cref="TravelClaim.ATTEST_GRANS_KRAVER_HR"/>.
     /// </summary>
-    public async Task AttesteraAsync(Guid claimId, string attestant, CancellationToken ct)
+    public async Task AttesteraAsync(
+        Guid claimId, EmployeeId attestantId, string attestantNamn, bool attestantArHR, CancellationToken ct)
     {
         var claim = await _repository.GetByIdAsync(claimId, ct)
             ?? throw new InvalidOperationException($"Resekrav {claimId} hittades inte");
 
-        claim.Attestera(attestant);
+        claim.Attestera(attestantId, attestantNamn, attestantArHR);
         await _repository.UpdateAsync(claim, ct);
     }
 
     /// <summary>
-    /// Hämtar resekrav som väntar på attestering av angiven attestant.
+    /// Avvisar ett resekrav med angiven anledning. Attestanten får inte vara
+    /// inlämnaren.
+    /// </summary>
+    public async Task AvvisaAsync(
+        Guid claimId, EmployeeId attestantId, string attestantNamn, string anledning, CancellationToken ct)
+    {
+        var claim = await _repository.GetByIdAsync(claimId, ct)
+            ?? throw new InvalidOperationException($"Resekrav {claimId} hittades inte");
+
+        claim.Avvisa(attestantId, attestantNamn, anledning);
+        await _repository.UpdateAsync(claim, ct);
+    }
+
+    /// <summary>
+    /// Markerar ett godkänt resekrav som utbetalt (anropas efter att
+    /// lönekörningen betalat ut kravet).
+    /// </summary>
+    public async Task MarkeraSomUtbetaldAsync(Guid claimId, CancellationToken ct)
+    {
+        var claim = await _repository.GetByIdAsync(claimId, ct)
+            ?? throw new InvalidOperationException($"Resekrav {claimId} hittades inte");
+
+        claim.MarkeraSomUtbetald();
+        await _repository.UpdateAsync(claim, ct);
+    }
+
+    /// <summary>
+    /// Hämtar resekrav som väntar på attestering. Utesluter attestantens egna
+    /// krav (självattest är inte tillåten).
     /// </summary>
     public async Task<IReadOnlyList<TravelClaim>> HamtaForAttestAsync(
-        string attestant, CancellationToken ct)
+        EmployeeId attestant, CancellationToken ct)
     {
         var alla = await _repository.GetAllAsync(ct);
         return alla
-            .Where(c => c.Status == TravelClaimStatus.Inskickad)
+            .Where(c => c.Status == TravelClaimStatus.Inskickad && c.AnstallId != attestant)
+            .ToList()
+            .AsReadOnly();
+    }
+
+    /// <summary>
+    /// Hämtar attesterade resekrav som är klara för utbetalning via lönekörning.
+    /// Lönekörningen anropar detta, betalar ut, och anropar sedan
+    /// <see cref="MarkeraSomUtbetaldAsync"/> per krav.
+    /// </summary>
+    public async Task<IReadOnlyList<TravelClaim>> HamtaKlaraForUtbetalningAsync(CancellationToken ct)
+    {
+        var alla = await _repository.GetAllAsync(ct);
+        return alla
+            .Where(c => c.ArKlarForUtbetalning)
             .ToList()
             .AsReadOnly();
     }

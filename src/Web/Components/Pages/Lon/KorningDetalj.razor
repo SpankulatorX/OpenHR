@@ -26,7 +26,9 @@ else if (!_found)
 }
 else
 {
-    <MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Lönekörning @_rubrik</MudText>
+    <MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">
+        Lönekörning @_rubrik@(_retroaktiv ? $" (retroaktiv, avser {_retroPeriod})" : "")
+    </MudText>
 
     <MudGrid Spacing="3" Class="mb-6">
         <MudItem xs="6" sm="3">
@@ -49,8 +51,8 @@ else
         </MudItem>
         <MudItem xs="6" sm="3">
             <MudPaper Class="pa-4 text-center" Elevation="2">
-                <MudText Typo="Typo.caption">Anställda</MudText>
-                <MudText Typo="Typo.h5" Style="font-weight: 700;">@_antalAnstallda</MudText>
+                <MudText Typo="Typo.caption">Arbetsgivaravgifter</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700;">@_ag</MudText>
             </MudPaper>
         </MudItem>
     </MudGrid>
@@ -67,7 +69,65 @@ else
         }
     }
 
-    <MudText Typo="Typo.h6" Class="mt-6 mb-3">@_okLoner löner ser bra ut</MudText>
+    <MudText Typo="Typo.h6" Class="mt-6 mb-3">Löneunderlag per anställd (@_loner.Count st)</MudText>
+    <MudTable Items="_loner" Dense="true" Hover="true" Elevation="2" Class="mb-4">
+        <HeaderContent>
+            <MudTh>Anställd</MudTh>
+            <MudTh Style="text-align:right">Brutto</MudTh>
+            <MudTh Style="text-align:right">Skatt</MudTh>
+            <MudTh Style="text-align:right">Netto</MudTh>
+            <MudTh Style="text-align:right">OB</MudTh>
+            <MudTh Style="text-align:right">Arb.giv.avg</MudTh>
+            <MudTh Style="text-align:right">Pension</MudTh>
+            <MudTh Style="text-align:right">Rader</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Anställd">@context.Namn</MudTd>
+            <MudTd DataLabel="Brutto" Style="text-align:right">@Kr(context.Brutto)</MudTd>
+            <MudTd DataLabel="Skatt" Style="text-align:right; color: var(--mud-palette-error)">-@Kr(context.Skatt)</MudTd>
+            <MudTd DataLabel="Netto" Style="text-align:right; font-weight:600">@Kr(context.Netto)</MudTd>
+            <MudTd DataLabel="OB" Style="text-align:right">@Kr(context.OB)</MudTd>
+            <MudTd DataLabel="Arb.giv.avg" Style="text-align:right">@Kr(context.AG)</MudTd>
+            <MudTd DataLabel="Pension" Style="text-align:right">@Kr(context.Pension)</MudTd>
+            <MudTd Style="text-align:right">
+                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                           OnClick="@(() => ToggleRad(context.Index))">
+                    @(_expanded.Contains(context.Index) ? "Dölj" : $"{context.Lonearter.Count} rader")
+                </MudButton>
+            </MudTd>
+        </RowTemplate>
+        <ChildRowContent>
+            @if (_expanded.Contains(context.Index))
+            {
+                <MudTr>
+                    <MudTd colspan="8" Style="padding:0">
+                        <MudSimpleTable Dense="true" Style="background: var(--mud-palette-background-grey)">
+                            <thead>
+                                <tr>
+                                    <th>Löneart</th><th>Benämning</th>
+                                    <th style="text-align:right">Antal</th>
+                                    <th style="text-align:right">Á-pris</th>
+                                    <th style="text-align:right">Belopp</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var rad in context.Lonearter)
+                                {
+                                    <tr>
+                                        <td>@rad.Kod</td>
+                                        <td>@rad.Benamning</td>
+                                        <td style="text-align:right">@rad.Antal.ToString("0.##")</td>
+                                        <td style="text-align:right">@Kr(rad.Sats)</td>
+                                        <td style="text-align:right; @(rad.ArAvdrag ? "color: var(--mud-palette-error)" : "")">@Kr(rad.Belopp)</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </MudSimpleTable>
+                    </MudTd>
+                </MudTr>
+            }
+        </ChildRowContent>
+    </MudTable>
 
     <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Large" FullWidth="true"
                Style="min-height: 64px; font-size: 1.25rem;" Class="mt-4">
@@ -86,9 +146,12 @@ else
     private string _brutto = "";
     private string _skatt = "";
     private string _netto = "";
-    private string _antalAnstallda = "";
-    private int _okLoner;
+    private string _ag = "";
+    private bool _retroaktiv;
+    private string? _retroPeriod;
     private List<Anomali> _anomalier = [];
+    private List<LonRad> _loner = [];
+    private readonly HashSet<int> _expanded = [];
     private bool _loading = true, _found;
     private string? _error;
 
@@ -98,7 +161,7 @@ else
         try
         {
             var run = await db.PayrollRuns
-                .Include(r => r.Resultat)
+                .Include(r => r.Resultat).ThenInclude(res => res.Rader)
                 .FirstOrDefaultAsync(r => r.Id == PayrollRunId.From(Id));
 
             if (run is null)
@@ -110,55 +173,71 @@ else
 
             _found = true;
             _rubrik = FormatPeriod(run.Year, run.Month);
+            _retroaktiv = run.ArRetroaktiv;
+            _retroPeriod = run.RetroaktivtForPeriod;
             _brutto = FormatMoney(run.TotalBrutto);
             _skatt = $"-{FormatMoney(run.TotalSkatt)}";
             _netto = FormatMoney(run.TotalNetto);
-            _antalAnstallda = $"{run.AntalAnstallda:N0}";
+            _ag = FormatMoney(run.TotalArbetsgivaravgifter);
 
-            if (run.Resultat.Count > 0)
-            {
-                var avgBrutto = run.TotalBrutto.Amount / Math.Max(run.AntalAnstallda, 1);
-                var threshold = avgBrutto * 0.10m;
+            var anstallIds = run.Resultat.Select(r => r.AnstallId).Distinct().ToList();
+            var employees = await db.Employees
+                .Where(e => anstallIds.Contains(e.Id))
+                .ToListAsync();
+            var empNames = employees.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
 
-                var anomalousResults = run.Resultat
-                    .Where(r => Math.Abs(r.Brutto.Amount - avgBrutto) > threshold)
-                    .Take(10)
-                    .ToList();
+            _loner = run.Resultat
+                .OrderBy(r => empNames.GetValueOrDefault(r.AnstallId.Value, "Okänd"))
+                .Select((r, index) => new LonRad(
+                    index,
+                    empNames.GetValueOrDefault(r.AnstallId.Value, "Okänd"),
+                    r.Brutto.Amount, r.Skatt.Amount, r.Netto.Amount,
+                    r.OBTillagg.Amount, r.Arbetsgivaravgifter.Amount, r.Pensionsavgift.Amount,
+                    r.Rader
+                        .OrderBy(l => l.LoneartKod)
+                        .Select(l => new LoneartRad(l.LoneartKod, l.Benamning, l.Antal, l.Sats.Amount, l.Belopp.Amount, l.ArAvdrag))
+                        .ToList()))
+                .ToList();
 
-                if (anomalousResults.Count > 0)
-                {
-                    var anstallIds = anomalousResults.Select(r => r.AnstallId).Distinct().ToList();
-                    var employees = await db.Employees
-                        .Where(e => anstallIds.Contains(e.Id))
-                        .ToListAsync();
-                    var empNames = employees.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
-
-                    foreach (var r in anomalousResults)
-                    {
-                        var namn = empNames.GetValueOrDefault(r.AnstallId.Value, "Okänd");
-                        var diff = r.Brutto.Amount - avgBrutto;
-                        var pct = avgBrutto > 0 ? Math.Abs(diff / avgBrutto * 100) : 0;
-                        var direction = diff > 0 ? "+" : "";
-
-                        _anomalier.Add(new Anomali(
-                            namn,
-                            $"{r.Brutto.Amount:N0} kr (snitt {avgBrutto:N0} kr, {direction}{pct:F0}%)",
-                            SummarizeDeviations(r)
-                        ));
-                    }
-                }
-
-                _okLoner = run.AntalAnstallda - _anomalier.Count;
-            }
-            else
-            {
-                _okLoner = run.AntalAnstallda;
-            }
+            BuildAnomalies(run, empNames);
         }
         catch (Exception ex) { _error = $"Kunde inte hämta lönekörning: {ex.Message}"; }
         finally { _loading = false; }
     }
 
+    private void ToggleRad(int index)
+    {
+        if (!_expanded.Add(index))
+            _expanded.Remove(index);
+    }
+
+    private void BuildAnomalies(PayrollRun run, Dictionary<Guid, string> empNames)
+    {
+        if (run.Resultat.Count == 0) return;
+
+        var avgBrutto = run.TotalBrutto.Amount / Math.Max(run.AntalAnstallda, 1);
+        var threshold = avgBrutto * 0.10m;
+
+        var anomalousResults = run.Resultat
+            .Where(r => Math.Abs(r.Brutto.Amount - avgBrutto) > threshold)
+            .Take(10)
+            .ToList();
+
+        foreach (var r in anomalousResults)
+        {
+            var namn = empNames.GetValueOrDefault(r.AnstallId.Value, "Okänd");
+            var diff = r.Brutto.Amount - avgBrutto;
+            var pct = avgBrutto > 0 ? Math.Abs(diff / avgBrutto * 100) : 0;
+            var direction = diff > 0 ? "+" : "";
+
+            _anomalier.Add(new Anomali(
+                namn,
+                $"{r.Brutto.Amount:N0} kr (snitt {avgBrutto:N0} kr, {direction}{pct:F0}%)",
+                SummarizeDeviations(r)));
+        }
+    }
+
+    private static string Kr(decimal amount) => $"{amount:N0} kr";
     private static string FormatMoney(Money m) => $"{m.Amount:N0} kr";
 
     private static string FormatPeriod(int year, int month)
@@ -181,5 +260,10 @@ else
     }
 
     private record Anomali(string Namn, string Belopp, string Forklaring);
-}
 
+    private record LonRad(
+        int Index, string Namn, decimal Brutto, decimal Skatt, decimal Netto,
+        decimal OB, decimal AG, decimal Pension, IReadOnlyList<LoneartRad> Lonearter);
+
+    private record LoneartRad(string Kod, string Benamning, decimal Antal, decimal Sats, decimal Belopp, bool ArAvdrag);
+}

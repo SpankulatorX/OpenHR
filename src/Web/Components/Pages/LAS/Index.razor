@@ -1,11 +1,12 @@
 @page "/las"
 @layout RegionHR.Web.Components.Layout.AdminLayout
-@using RegionHR.Web.Components.Shared
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.LAS.Domain
 @using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.LAS.Services.LASService Las
+@inject RegionHR.Web.Services.AuthService Auth
 @inject ISnackbar Snackbar
 
 <PageTitle>OpenHR - LAS-uppföljning</PageTitle>
@@ -21,6 +22,40 @@ else
         <MudItem xs="4"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-success);"><MudText Typo="Typo.h3" Color="Color.Success" Style="font-weight: 700;">@_rader.Count(a => a.Status == LASStatus.UnderGrans)</MudText><MudText Typo="Typo.body2">Under gräns</MudText></MudPaper></MudItem>
     </MudGrid>
 
+    @if (!_isHR)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-4">
+            Endast HR kan registrera, korrigera och besluta om LAS-perioder. Du ser en läsvy.
+        </MudAlert>
+    }
+    else
+    {
+        <MudPaper Class="pa-5 mb-6" Elevation="2" Style="border-left: 4px solid var(--mud-palette-primary);">
+            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 700;">Registrera LAS-period</MudText>
+            <MudGrid Spacing="3" Class="align-center">
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="Guid?" @bind-Value="_nyAnstalld" Label="Anställd" Variant="Variant.Outlined" Dense="true">
+                        @foreach (var e in _employees)
+                        {
+                            <MudSelectItem T="Guid?" Value="@e.Id">@e.Namn</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="3">
+                    <MudSelect T="EmploymentType" @bind-Value="_nyForm" Label="Anställningsform" Variant="Variant.Outlined" Dense="true">
+                        <MudSelectItem T="EmploymentType" Value="EmploymentType.SAVA">SAVA (visstid)</MudSelectItem>
+                        <MudSelectItem T="EmploymentType" Value="EmploymentType.Vikariat">Vikariat</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="6" sm="2"><MudDatePicker @bind-Date="_nyStart" Label="Från" Variant="Variant.Outlined" DateFormat="yyyy-MM-dd" /></MudItem>
+                <MudItem xs="6" sm="2"><MudDatePicker @bind-Date="_nySlut" Label="Till" Variant="Variant.Outlined" DateFormat="yyyy-MM-dd" /></MudItem>
+                <MudItem xs="12" sm="1">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" OnClick="RegistreraPeriod" Disabled="_arbetar">Lägg till</MudButton>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    }
+
     @if (_rader.Count == 0)
     {
         <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga LAS-ackumuleringar registrerade.</MudAlert>
@@ -33,43 +68,101 @@ else
             <tbody>
                 @foreach (var r in _rader)
                 {
-                    var grans = r.Anstallningsform == RegionHR.SharedKernel.Domain.EmploymentType.SAVA ? 365 : 730;
+                    var grans = r.Anstallningsform == EmploymentType.SAVA ? 365 : 730;
                     <tr>
                         <td><strong>@r.Namn</strong></td>
                         <td>@r.Anstallningsform</td>
                         <td>@r.AckumuleradeDagar dagar</td>
                         <td>@grans</td>
                         <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(r.Status)">@StatusText(r.Status)</MudChip></td>
-                        <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => _valdAck = _valdAck == r ? null : r)">Visa</MudButton></td>
+                        <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Valj(r.AnstallId))">@(_valdAnstallId == r.AnstallId ? "Dölj" : (_isHR ? "Hantera" : "Visa"))</MudButton></td>
                     </tr>
                 }
             </tbody>
         </MudSimpleTable>
 
-        @if (_valdAck != null)
+        @if (_rader.FirstOrDefault(r => r.AnstallId == _valdAnstallId) is { } vald)
         {
             <MudPaper Class="pa-5 mt-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-primary);">
                 <div class="d-flex justify-space-between align-center mb-3">
-                    <MudText Typo="Typo.h6" Style="font-weight: 700;">@_valdAck.Namn — LAS-detaljer</MudText>
-                    <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _valdAck = null)" />
+                    <MudText Typo="Typo.h6" Style="font-weight: 700;">@vald.Namn — LAS-detaljer</MudText>
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _valdAnstallId = null)" />
                 </div>
                 <MudGrid Spacing="3" Class="mb-3">
-                    <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Anställningsform</MudText><MudText Typo="Typo.h6" Style="font-weight: 600;">@_valdAck.Anstallningsform</MudText></MudItem>
-                    <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Ackumulerade dagar</MudText><MudText Typo="Typo.h6" Style="font-weight: 700;" Color="@StatusFarg(_valdAck.Status)">@_valdAck.AckumuleradeDagar</MudText></MudItem>
-                    <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Företrädesrätt</MudText><MudText Typo="Typo.h6">@(_valdAck.Ack.HarForetradesratt ? $"Ja (utgår {_valdAck.Ack.ForetradesrattUtgar?.ToString("yyyy-MM-dd")})" : "Nej")</MudText></MudItem>
+                    <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Anställningsform</MudText><MudText Typo="Typo.h6" Style="font-weight: 600;">@vald.Anstallningsform</MudText></MudItem>
+                    <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Ackumulerade dagar</MudText><MudText Typo="Typo.h6" Style="font-weight: 700;" Color="@StatusFarg(vald.Status)">@vald.AckumuleradeDagar</MudText></MudItem>
+                    <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Status</MudText><MudText Typo="Typo.h6">@StatusText(vald.Status)</MudText></MudItem>
+                    <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Företrädesrätt</MudText><MudText Typo="Typo.h6">@(vald.Ack.HarForetradesratt ? $"Ja (utgår {vald.Ack.ForetradesrattUtgar?.ToString("yyyy-MM-dd")})" : "Nej")</MudText></MudItem>
                 </MudGrid>
-                @if (_valdAck.Ack.Perioder.Count > 0)
+
+                @if (vald.Ack.Perioder.Count > 0)
                 {
                     <MudText Typo="Typo.subtitle2" Class="mb-2">Perioder</MudText>
                     <MudSimpleTable Dense="true" Elevation="0" Class="mb-3">
-                        <thead><tr><th>Från</th><th>Till</th><th>Dagar</th></tr></thead>
+                        <thead><tr><th>Från</th><th>Till</th><th>Dagar</th>@if (_isHR){<th></th>}</tr></thead>
                         <tbody>
-                            @foreach (var p in _valdAck.Ack.Perioder)
+                            @foreach (var p in vald.Ack.Perioder)
                             {
-                                <tr><td>@p.StartDatum.ToString("yyyy-MM-dd")</td><td>@p.SlutDatum.ToString("yyyy-MM-dd")</td><td>@p.AntalDagar</td></tr>
+                                var start = p.StartDatum;
+                                var slut = p.SlutDatum;
+                                <tr>
+                                    <td>@start.ToString("yyyy-MM-dd")</td>
+                                    <td>@slut.ToString("yyyy-MM-dd")</td>
+                                    <td>@p.AntalDagar</td>
+                                    @if (_isHR)
+                                    {
+                                        <td class="text-right">
+                                            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => StartaAndra(start, slut))">Ändra</MudButton>
+                                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => TaBortPeriod(vald.AnstallId, start, slut))" Disabled="_arbetar">Ta bort</MudButton>
+                                        </td>
+                                    }
+                                </tr>
                             }
                         </tbody>
                     </MudSimpleTable>
+
+                    @if (_isHR && _redigerarPeriod != null)
+                    {
+                        <MudPaper Class="pa-4 mb-3" Outlined="true">
+                            <MudText Typo="Typo.subtitle2" Class="mb-2">Korrigera period @_redigerarPeriod.Value.Start.ToString("yyyy-MM-dd") – @_redigerarPeriod.Value.Slut.ToString("yyyy-MM-dd")</MudText>
+                            <MudGrid Spacing="3" Class="align-center">
+                                <MudItem xs="6" sm="4"><MudDatePicker @bind-Date="_redStart" Label="Ny från" Variant="Variant.Outlined" DateFormat="yyyy-MM-dd" /></MudItem>
+                                <MudItem xs="6" sm="4"><MudDatePicker @bind-Date="_redSlut" Label="Ny till" Variant="Variant.Outlined" DateFormat="yyyy-MM-dd" /></MudItem>
+                                <MudItem xs="12" sm="4">
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => SparaAndra(vald.AnstallId))" Disabled="_arbetar" Class="mr-2">Spara</MudButton>
+                                    <MudButton Variant="Variant.Text" OnClick="@(() => _redigerarPeriod = null)">Avbryt</MudButton>
+                                </MudItem>
+                            </MudGrid>
+                        </MudPaper>
+                    }
+                }
+
+                @if (_isHR)
+                {
+                    <MudDivider Class="my-3" />
+                    <MudText Typo="Typo.subtitle2" Class="mb-2">Beslut</MudText>
+                    @if (vald.Status == LASStatus.KonverteradTillTillsvidare)
+                    {
+                        <MudChip T="string" Color="Color.Info" Size="Size.Small">Konverterad till tillsvidare@(vald.Ack.KonverteringsDatum is { } kd ? $" ({kd:yyyy-MM-dd})" : "")</MudChip>
+                    }
+                    else
+                    {
+                        <MudGrid Spacing="3" Class="align-center">
+                            <MudItem xs="12" sm="6">
+                                <MudButton Variant="Variant.Filled" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.SwapHoriz"
+                                           OnClick="@(() => Konvertera(vald.AnstallId))" Disabled="_arbetar" FullWidth="true">
+                                    Konvertera till tillsvidare (formbyte)
+                                </MudButton>
+                            </MudItem>
+                            <MudItem xs="8" sm="4"><MudDatePicker @bind-Date="_slutDatum" Label="Slutdatum (för företrädesrätt)" Variant="Variant.Outlined" DateFormat="yyyy-MM-dd" /></MudItem>
+                            <MudItem xs="4" sm="2">
+                                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => BeviljaForetradesratt(vald.AnstallId))" Disabled="_arbetar" FullWidth="true">Företrädesrätt</MudButton>
+                            </MudItem>
+                        </MudGrid>
+                        <MudText Typo="Typo.caption" Class="mt-2" Style="color: var(--mud-palette-text-secondary);">
+                            Systemet avgör själv om företrädesrätt uppnåtts (SAVA ≥ 9 mån, vikariat ≥ 12 mån i en 3-årsperiod). Ingen självattest tillåts.
+                        </MudText>
+                    }
                 }
             </MudPaper>
         }
@@ -78,27 +171,151 @@ else
 
 @code {
     private List<LASVm> _rader = [];
-    private LASVm? _valdAck;
+    private List<EmpVm> _employees = [];
+    private Guid? _valdAnstallId;
     private bool _loading = true;
+    private bool _isHR;
+    private bool _arbetar;
     private string? _error;
+
+    // Registreringsformulär
+    private Guid? _nyAnstalld;
+    private EmploymentType _nyForm = EmploymentType.SAVA;
+    private DateTime? _nyStart = DateTime.Today.AddMonths(-1);
+    private DateTime? _nySlut = DateTime.Today;
+
+    // Korrigering
+    private (DateOnly Start, DateOnly Slut)? _redigerarPeriod;
+    private DateTime? _redStart;
+    private DateTime? _redSlut;
+
+    // Företrädesrätt
+    private DateTime? _slutDatum = DateTime.Today;
 
     protected override async Task OnInitializedAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
+        await Auth.InitializeAsync();
+        _isHR = Auth.IsHR;
+        await LaddaAsync();
+    }
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        _error = null;
         try
         {
-            var accs = await db.LASAccumulations.ToListAsync();
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var accs = await db.LASAccumulations
+                .Include(a => a.Perioder)
+                .Include(a => a.Handelser)
+                .ToListAsync();
             var empIds = accs.Select(a => a.AnstallId).Distinct().ToList();
-            var employees = await db.Employees.Where(e => empIds.Contains(e.Id)).ToListAsync();
+            var employees = await db.Employees.ToListAsync();
             var names = employees.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
 
             _rader = accs
                 .OrderByDescending(a => a.AckumuleradeDagar)
-                .Select(a => new LASVm(names.GetValueOrDefault(a.AnstallId.Value, "Okänd"), a.Anstallningsform, a.AckumuleradeDagar, a.Status, a))
+                .Select(a => new LASVm(a.AnstallId.Value, names.GetValueOrDefault(a.AnstallId.Value, "Okänd"), a.Anstallningsform, a.AckumuleradeDagar, a.Status, a))
+                .ToList();
+
+            _employees = employees
+                .OrderBy(e => e.Efternamn)
+                .Select(e => new EmpVm(e.Id.Value, $"{e.Fornamn} {e.Efternamn}"))
                 .ToList();
         }
         catch (Exception ex) { _error = $"Kunde inte hämta LAS-data: {ex.Message}"; }
         finally { _loading = false; }
+    }
+
+    private void Valj(Guid anstallId)
+    {
+        _valdAnstallId = _valdAnstallId == anstallId ? null : anstallId;
+        _redigerarPeriod = null;
+    }
+
+    private async Task RegistreraPeriod()
+    {
+        if (_nyAnstalld is null) { Snackbar.Add("Välj en anställd.", Severity.Warning); return; }
+        if (_nyStart is null || _nySlut is null) { Snackbar.Add("Ange både från- och till-datum.", Severity.Warning); return; }
+        await KorAsync(async () =>
+        {
+            await Las.RegistreraPeriodAsync(
+                EmployeeId.From(_nyAnstalld.Value), _nyForm,
+                DateOnly.FromDateTime(_nyStart.Value), DateOnly.FromDateTime(_nySlut.Value),
+                Auth.EmployeeId, Auth.UserName ?? "HR");
+            Snackbar.Add("LAS-period registrerad.", Severity.Success);
+            _valdAnstallId = _nyAnstalld;
+        });
+    }
+
+    private void StartaAndra(DateOnly start, DateOnly slut)
+    {
+        _redigerarPeriod = (start, slut);
+        _redStart = start.ToDateTime(TimeOnly.MinValue);
+        _redSlut = slut.ToDateTime(TimeOnly.MinValue);
+    }
+
+    private async Task SparaAndra(Guid anstallId)
+    {
+        if (_redigerarPeriod is not { } p) return;
+        if (_redStart is null || _redSlut is null) { Snackbar.Add("Ange nya datum.", Severity.Warning); return; }
+        await KorAsync(async () =>
+        {
+            var ok = await Las.KorrigeraPeriodAsync(
+                EmployeeId.From(anstallId), p.Start, p.Slut,
+                DateOnly.FromDateTime(_redStart.Value), DateOnly.FromDateTime(_redSlut.Value),
+                Auth.EmployeeId, Auth.UserName ?? "HR");
+            Snackbar.Add(ok ? "Period korrigerad." : "Perioden kunde inte hittas.", ok ? Severity.Success : Severity.Warning);
+            _redigerarPeriod = null;
+        });
+    }
+
+    private async Task TaBortPeriod(Guid anstallId, DateOnly start, DateOnly slut)
+    {
+        await KorAsync(async () =>
+        {
+            var ok = await Las.TaBortPeriodAsync(
+                EmployeeId.From(anstallId), start, slut, Auth.EmployeeId, Auth.UserName ?? "HR");
+            Snackbar.Add(ok ? "Period borttagen." : "Perioden kunde inte hittas.", ok ? Severity.Success : Severity.Warning);
+        });
+    }
+
+    private async Task Konvertera(Guid anstallId)
+    {
+        await KorAsync(async () =>
+        {
+            var ok = await Las.KonverteraTillTillsvidareAsync(
+                EmployeeId.From(anstallId), DateOnly.FromDateTime(DateTime.Today),
+                Auth.EmployeeId, Auth.UserName ?? "HR");
+            Snackbar.Add(ok ? "Anställningen konverterad till tillsvidare." : "Redan konverterad eller saknar ackumulering.", ok ? Severity.Success : Severity.Info);
+        });
+    }
+
+    private async Task BeviljaForetradesratt(Guid anstallId)
+    {
+        if (_slutDatum is null) { Snackbar.Add("Ange slutdatum.", Severity.Warning); return; }
+        await KorAsync(async () =>
+        {
+            var har = await Las.BeviljaForetradesrattAsync(
+                EmployeeId.From(anstallId), DateOnly.FromDateTime(_slutDatum.Value),
+                Auth.EmployeeId, Auth.UserName ?? "HR");
+            Snackbar.Add(har ? "Företrädesrätt beviljad." : "Villkor för företrädesrätt ej uppfyllda.", har ? Severity.Success : Severity.Info);
+        });
+    }
+
+    private async Task KorAsync(Func<Task> operation)
+    {
+        _arbetar = true;
+        try
+        {
+            await operation();
+            await LaddaAsync();
+        }
+        catch (InvalidOperationException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        catch (ArgumentException ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        catch (Exception ex) { Snackbar.Add($"Åtgärden misslyckades: {ex.Message}", Severity.Error); }
+        finally { _arbetar = false; }
     }
 
     private static string StatusText(LASStatus s) => s switch
@@ -114,6 +331,6 @@ else
         _ => Color.Default
     };
 
-    private record LASVm(string Namn, EmploymentType Anstallningsform, int AckumuleradeDagar, LASStatus Status, LASAccumulation Ack);
+    private record LASVm(Guid AnstallId, string Namn, EmploymentType Anstallningsform, int AckumuleradeDagar, LASStatus Status, LASAccumulation Ack);
+    private record EmpVm(Guid Id, string Namn);
 }
-

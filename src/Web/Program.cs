@@ -68,6 +68,8 @@ builder.Services.AddScoped<ArendeService>();
 builder.Services.AddScoped<SelfServiceApiClient>();
 builder.Services.AddScoped<UserRoleService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<StamplingService>();
+builder.Services.AddScoped<FlexService>();
 
 // Rate limiting
 builder.Services.AddRateLimiter(options =>

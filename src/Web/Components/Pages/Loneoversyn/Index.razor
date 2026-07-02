@@ -5,6 +5,7 @@
 @using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
 
 <PageTitle>OpenHR - Löneöversyn</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -44,17 +45,19 @@ else
     else
     {
         <MudSimpleTable Hover="true" Elevation="2">
-            <thead><tr><th>Runda</th><th>År</th><th>Avtal</th><th>Budget</th><th>Fördelad</th><th>Status</th></tr></thead>
+            <thead><tr><th>Runda</th><th>År</th><th>Avtal</th><th>Budget</th><th>Fördelad</th><th>Förslag</th><th>Status</th><th></th></tr></thead>
             <tbody>
                 @foreach (var r in _rundor)
                 {
-                    <tr>
+                    <tr style="cursor: pointer;" @onclick="@(() => Oppna(r.Id))">
                         <td><strong>@r.Namn</strong></td>
                         <td>@r.Ar</td>
                         <td>@r.Avtalsomrade</td>
                         <td>@r.TotalBudget.Amount.ToString("N0") kr</td>
                         <td>@r.FordeladBudget.Amount.ToString("N0") kr</td>
+                        <td>@r.Forslag.Count</td>
                         <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(r.Status)">@StatusText(r.Status)</MudChip></td>
+                        <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Oppna(r.Id))">Öppna</MudButton></td>
                     </tr>
                 }
             </tbody>
@@ -73,10 +76,12 @@ else
     protected override async Task OnInitializedAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { _rundor = await db.SalaryReviewRounds.OrderByDescending(r => r.Ar).ToListAsync(); }
+        try { _rundor = await db.SalaryReviewRounds.Include(r => r.Forslag).OrderByDescending(r => r.Ar).ToListAsync(); }
         catch (Exception ex) { _error = $"Kunde inte hämta data: {ex.Message}"; }
         finally { _loading = false; }
     }
+
+    private void Oppna(Guid id) => Nav.NavigateTo($"/loneoversyn/{id}");
 
     private async Task SkapaRunda()
     {

@@ -1,0 +1,187 @@
+@page "/integrationer/hsa"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Integrations.HSA
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IHsaCatalogAdapter HsaAdapter
+@inject HsaCatalogSyncService HsaSync
+
+<PageTitle>OpenHR - HSA-katalogen</PageTitle>
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">HSA-katalogen (Inera)</MudText>
+
+<MudAlert Severity="Severity.Warning" Variant="Variant.Filled" Class="mb-4">
+    <strong>Demo — ej skarp HSA-anslutning.</strong> Denna synk genererar deterministiska demo-HSA-id lokalt.
+    Skarp koppling mot HSA (Hälso- och sjukvårdens adressregister) kräver Inera-avtal,
+    SITHS-funktionscertifikat och HSA WS-/LDAP-endpoint.
+</MudAlert>
+
+@if (_status is not null)
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-2">Anslutningsstatus</MudText>
+        <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mb-2">
+            <MudChip T="string" Size="Size.Small" Color="@(_status.IsSandbox ? Color.Warning : Color.Success)">
+                @(_status.IsSandbox ? "Sandbox/Demo" : "Skarp")
+            </MudChip>
+            <MudChip T="string" Size="Size.Small" Color="@(_status.IsReachable ? Color.Success : Color.Error)">
+                @(_status.IsReachable ? "Nåbar" : "Ej nåbar")
+            </MudChip>
+            <MudText Typo="Typo.body2">@HsaAdapter.SystemName</MudText>
+        </MudStack>
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">@_status.Description</MudText>
+    </MudPaper>
+}
+
+<MudPaper Class="pa-4 mb-4" Elevation="2">
+    <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-2">
+        <div>
+            <MudText Typo="Typo.h6">Katalogsynk</MudText>
+            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+                Kopplar HSA-id på enheter och medarbetare som saknar det. Idempotent — redan synkade rörs inte.
+            </MudText>
+        </div>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Sync"
+                   OnClick="RunSync" Disabled="_syncing">
+            @(_syncing ? "Synkar…" : "Kör demo-synk")
+        </MudButton>
+    </MudStack>
+
+    @if (_syncResult is not null)
+    {
+        <MudAlert Severity="@(_syncResult.Success ? Severity.Success : Severity.Error)" Variant="Variant.Text" Class="mt-2">
+            @if (_syncResult.Success)
+            {
+                <MudText Typo="Typo.body2"><strong>Synk klar.</strong>
+                    @_syncResult.EnheterUppdaterade av @_syncResult.EnheterTotalt enheter och
+                    @_syncResult.PersonerUppdaterade av @_syncResult.PersonerTotalt medarbetare fick HSA-id.</MudText>
+                @foreach (var m in _syncResult.Meddelanden)
+                {
+                    <MudText Typo="Typo.caption" Style="display:block;">• @m</MudText>
+                }
+            }
+            else
+            {
+                <MudText Typo="Typo.body2">Synk misslyckades: @_syncResult.Fel</MudText>
+            }
+        </MudAlert>
+    }
+</MudPaper>
+
+<MudText Typo="Typo.h6" Class="mb-2">Enheter och HSA-id</MudText>
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else
+{
+    <MudText Typo="Typo.body2" Class="mb-2" Style="color: var(--mud-palette-text-secondary);">
+        @_enheterMedHsa av @_enheter.Count enheter och @_personerMedHsa av @_antalPersoner medarbetare har HSA-id.
+    </MudText>
+    <MudSimpleTable Hover="true" Elevation="2" Class="mb-6">
+        <thead><tr><th>Enhet</th><th>Kostnadsställe</th><th>HSA-id</th></tr></thead>
+        <tbody>
+            @foreach (var e in _enheter)
+            {
+                <tr>
+                    <td><strong>@e.Namn</strong></td>
+                    <td>@e.Kostnadsstalle</td>
+                    <td>
+                        @if (string.IsNullOrWhiteSpace(e.HsaId))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">Ej synkad</MudChip>
+                        }
+                        else
+                        {
+                            <code>@e.HsaId</code>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+}
+
+<MudText Typo="Typo.h6" Class="mb-2">HSA-organisationsträd (demo-förhandsvy)</MudText>
+<MudSimpleTable Hover="true" Elevation="1">
+    <thead><tr><th>HSA-id</th><th>Namn</th><th>Typ</th><th>Ort</th><th>Överordnad</th></tr></thead>
+    <tbody>
+        @foreach (var u in _tree)
+        {
+            <tr>
+                <td><code>@u.HsaId</code></td>
+                <td>@u.Namn</td>
+                <td>@u.Kind</td>
+                <td>@u.Ort</td>
+                <td>@(u.OverordnadHsaId ?? "—")</td>
+            </tr>
+        }
+    </tbody>
+</MudSimpleTable>
+
+@code {
+    private HsaConnectionStatus? _status;
+    private IReadOnlyList<HsaUnit> _tree = [];
+    private List<EnhetRad> _enheter = [];
+    private int _antalPersoner;
+    private int _enheterMedHsa;
+    private int _personerMedHsa;
+    private bool _loading = true;
+    private bool _syncing;
+    private string? _error;
+    private HsaSyncResult? _syncResult;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _status = await HsaAdapter.GetStatusAsync();
+        _tree = await HsaAdapter.HamtaOrganisationstradAsync();
+        await LoadDataAsync();
+    }
+
+    private async Task LoadDataAsync()
+    {
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var enheter = await db.OrganizationUnits.OrderBy(e => e.Namn).ToListAsync();
+            _enheter = enheter.Select(e => new EnhetRad(e.Namn, e.Kostnadsstalle, e.HsaId)).ToList();
+            _enheterMedHsa = _enheter.Count(e => !string.IsNullOrWhiteSpace(e.HsaId));
+            _antalPersoner = await db.Employees.CountAsync();
+            _personerMedHsa = await db.Employees.CountAsync(e => e.HsaId != null && e.HsaId != "");
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte hämta data: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task RunSync()
+    {
+        _syncing = true;
+        try
+        {
+            _syncResult = await HsaSync.SynkaAsync();
+            await LoadDataAsync();
+        }
+        catch (Exception ex)
+        {
+            _syncResult = new HsaSyncResult(false, HsaAdapter.IsSandbox, 0, 0, 0, 0, [], ex.Message);
+        }
+        finally
+        {
+            _syncing = false;
+        }
+    }
+
+    private record EnhetRad(string Namn, string Kostnadsstalle, string? HsaId);
+}

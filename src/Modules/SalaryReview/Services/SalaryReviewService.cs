@@ -81,7 +81,10 @@ public sealed class SalaryReviewService
     }
 
     /// <summary>
-    /// Genomför löneöversynsrundan — tillämpar alla godkända förslag som löneändringar.
+    /// Flyttar rundan till status Genomförd via aggregatet. Själva appliceringen av
+    /// ny lön på anställningarna görs av <see cref="Domain.SalaryReviewExecutionEngine"/>
+    /// i det lager som har tillgång till Employee-aggregaten (Web-tjänsten
+    /// LoneoversynService), eftersom Employee ligger utanför denna repository.
     /// </summary>
     public async Task GenomforAsync(Guid rundaId, CancellationToken ct)
     {

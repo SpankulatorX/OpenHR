@@ -1,0 +1,177 @@
+@page "/tidrapporter/flex"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Web.Services
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject FlexService FlexSvc
+@inject AuthService Auth
+
+<PageTitle>OpenHR - Flexhantering</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/tidrapporter" Style="margin-bottom: 1rem;">
+    Tillbaka
+</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-1" Style="font-weight: 700;">Flexhantering</MudText>
+<MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Sätt flexgränser per medarbetare och räkna om saldon
+</MudText>
+
+@if (!Auth.IsChef)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">Flexhantering kräver chefs- eller HR-behörighet.</MudAlert>
+}
+else if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="1">
+        <MudSelect T="Guid" Label="Medarbetare" Value="_valdAnstall" ValueChanged="OnValjAnstall"
+                   Variant="Variant.Outlined" Dense="true">
+            @foreach (var a in _anstallda)
+            {
+                <MudSelectItem T="Guid" Value="@a.Id">@a.Namn</MudSelectItem>
+            }
+        </MudSelect>
+    </MudPaper>
+
+    @if (_valdAnstall != Guid.Empty && _oversikt != null)
+    {
+        <MudGrid Spacing="3" Class="mb-4">
+            <MudItem xs="6" sm="4">
+                <MudPaper Class="pa-4 text-center" Elevation="2">
+                    <MudText Typo="Typo.h4" Color="@(_oversikt.Flexsaldo >= 0 ? Color.Success : Color.Error)" Style="font-weight: 800;">
+                        @(_oversikt.Flexsaldo >= 0 ? "+" : "")@_oversikt.Flexsaldo.ToString("0.0")h
+                    </MudText>
+                    <MudText Typo="Typo.body2">Flexsaldo</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="6" sm="4">
+                <MudPaper Class="pa-4 text-center" Elevation="2">
+                    <MudText Typo="Typo.h4" Color="Color.Primary" Style="font-weight: 800;">@_oversikt.Kompsaldo.ToString("0.0")h</MudText>
+                    <MudText Typo="Typo.body2">Komptid</MudText>
+                </MudPaper>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudPaper Class="pa-4 text-center" Elevation="2">
+                    <MudText Typo="Typo.h4" Style="font-weight: 800;">@_oversikt.Dagsposter.Count</MudText>
+                    <MudText Typo="Typo.body2">Stämplade dagar (90d)</MudText>
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+        <MudPaper Class="pa-4 mb-4" Elevation="1">
+            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Flexinställningar</MudText>
+            <MudSwitch T="bool" @bind-Value="_flexAktiverad" Color="Color.Primary" Label="Flextid aktiverad" Class="mb-2" />
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="4">
+                    <MudNumericField T="decimal" @bind-Value="_maxPlus" Label="Tak (h, 0 = obegränsat)" Min="0m" Step="1m" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudNumericField T="decimal" @bind-Value="_maxMinus" Label="Golv (h, negativt)" Max="0m" Step="1m" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudNumericField T="decimal" @bind-Value="_dagligGrans" Label="Daglig flexgräns (h, 0 = ingen)" Min="0m" Step="0.5m" Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+            <MudStack Row="true" Spacing="2" Class="mt-3">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SparaInstallning"
+                           Disabled="_saving" StartIcon="@Icons.Material.Filled.Save">Spara inställningar</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="RaknaOm"
+                           Disabled="_saving" StartIcon="@Icons.Material.Filled.Calculate">Räkna om saldo</MudButton>
+            </MudStack>
+        </MudPaper>
+
+        @if (_resultat != null)
+        {
+            <MudAlert Severity="@_resultatSeverity" Class="mb-4">@_resultat</MudAlert>
+        }
+    }
+}
+
+@code {
+    private List<AnstallRad> _anstallda = [];
+    private Guid _valdAnstall = Guid.Empty;
+    private FlexOversikt? _oversikt;
+
+    private bool _flexAktiverad = true;
+    private decimal _maxPlus = 50m, _maxMinus = -10m, _dagligGrans = 3m;
+
+    private bool _loading = true, _saving;
+    private string? _error, _resultat;
+    private Severity _resultatSeverity = Severity.Success;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Auth.IsChef) { _loading = false; return; }
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var employees = await db.Employees.OrderBy(e => e.Efternamn).ToListAsync();
+            _anstallda = employees.Select(e => new AnstallRad(e.Id.Value, $"{e.Fornamn} {e.Efternamn}")).ToList();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta medarbetare: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task OnValjAnstall(Guid anstallId)
+    {
+        _valdAnstall = anstallId;
+        _resultat = null;
+        if (anstallId == Guid.Empty) { _oversikt = null; return; }
+        await LaddaOversiktAsync();
+
+        var inst = await FlexSvc.HamtaInstallningAsync(anstallId);
+        _flexAktiverad = inst.FlexAktiverad;
+        _maxPlus = inst.MaxPlusTimmar;
+        _maxMinus = inst.MaxMinusTimmar;
+        _dagligGrans = inst.DagligFlexgransTimmar;
+    }
+
+    private async Task LaddaOversiktAsync()
+    {
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+        _oversikt = await FlexSvc.BeraknaOversiktAsync(_valdAnstall, idag.AddDays(-90), idag);
+    }
+
+    private async Task SparaInstallning()
+    {
+        if (_valdAnstall == Guid.Empty || !Auth.EmployeeId.HasValue) return;
+        _saving = true;
+        try
+        {
+            await FlexSvc.SparaInstallningAsync(_valdAnstall, _flexAktiverad, _maxPlus, _maxMinus, _dagligGrans, Auth.EmployeeId.Value);
+            await LaddaOversiktAsync();
+            _resultat = "Flexinställningar sparade.";
+            _resultatSeverity = Severity.Success;
+        }
+        catch (Exception ex) { _resultat = $"Kunde inte spara: {ex.Message}"; _resultatSeverity = Severity.Error; }
+        finally { _saving = false; }
+    }
+
+    private async Task RaknaOm()
+    {
+        if (_valdAnstall == Guid.Empty) return;
+        _saving = true;
+        try
+        {
+            var idag = DateOnly.FromDateTime(DateTime.Today);
+            var balance = await FlexSvc.RaknaOmOchSparaAsync(_valdAnstall, idag.AddDays(-90), idag);
+            await LaddaOversiktAsync();
+            _resultat = $"Saldo omräknat och sparat: {balance.SaldoTimmar:0.0}h flex, {balance.KompsaldoTimmar:0.0}h komp.";
+            _resultatSeverity = Severity.Success;
+        }
+        catch (Exception ex) { _resultat = $"Kunde inte räkna om: {ex.Message}"; _resultatSeverity = Severity.Error; }
+        finally { _saving = false; }
+    }
+
+    private record AnstallRad(Guid Id, string Namn);
+}

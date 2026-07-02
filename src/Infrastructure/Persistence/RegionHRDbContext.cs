@@ -63,6 +63,10 @@ public class RegionHRDbContext : DbContext
     public DbSet<ShiftSwapRequest> ShiftSwapRequests => Set<ShiftSwapRequest>();
     public DbSet<Timesheet> Timesheets => Set<Timesheet>();
 
+    // Flex (schema: scheduling) — våg 2
+    public DbSet<FlexInstallning> FlexInstallningar => Set<FlexInstallning>();
+    public DbSet<FlexBalance> FlexBalances => Set<FlexBalance>();
+
     // Shift Bidding (schema: scheduling)
     public DbSet<OpenShift> OpenShifts => Set<OpenShift>();
     public DbSet<ShiftBid> ShiftBids => Set<ShiftBid>();

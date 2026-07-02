@@ -18,6 +18,9 @@ public sealed class SalaryReviewRound : AggregateRoot<Guid>
     public DateOnly IkrafttradandeDatum { get; private set; }
     public string? FackligRepresentant { get; private set; }
 
+    /// <summary>Datum då rundan faktiskt genomfördes (ny lön applicerades). Null tills status är Genomförd.</summary>
+    public DateOnly? GenomfordDatum { get; private set; }
+
     private readonly List<SalaryProposal> _forslag = [];
     public IReadOnlyList<SalaryProposal> Forslag => _forslag.AsReadOnly();
 
@@ -40,8 +43,18 @@ public sealed class SalaryReviewRound : AggregateRoot<Guid>
     }
 
     public SalaryProposal LaggTillForslag(
-        EmployeeId anstallId, Money nuvarandeLon, Money foreslagenLon, string motivering)
+        EmployeeId anstallId, Money nuvarandeLon, Money foreslagenLon, string motivering,
+        EmploymentId? anstallningId = null)
     {
+        // Systemet är experten: ogiltiga förslag avvisas här, inte i UI:t.
+        // (InvalidOperationException används genomgående för domäninvarianter i denna metod.)
+        if (Status != SalaryReviewStatus.Planering)
+            throw new InvalidOperationException("Löneförslag kan bara läggas till under planeringsfasen.");
+        if (foreslagenLon.Amount <= 0)
+            throw new InvalidOperationException("Föreslagen lön måste vara positiv.");
+        if (string.IsNullOrWhiteSpace(motivering))
+            throw new InvalidOperationException("Motivering måste anges för löneförslaget.");
+
         var okning = foreslagenLon - nuvarandeLon;
         if (FordeladBudget + okning > TotalBudget)
             throw new InvalidOperationException("Budget överskriden");
@@ -49,6 +62,7 @@ public sealed class SalaryReviewRound : AggregateRoot<Guid>
         var forslag = new SalaryProposal
         {
             AnstallId = anstallId,
+            AnstallningId = anstallningId,
             NuvarandeLon = nuvarandeLon,
             ForeslagenLon = foreslagenLon,
             Okning = okning,
@@ -140,12 +154,15 @@ public sealed class SalaryReviewRound : AggregateRoot<Guid>
 
     /// <summary>
     /// Genomför löneöversynsrundan. Kräver att status är Godkand.
+    /// Sätter genomförandedatum som markerar slutet på det retroaktiva fönstret
+    /// [IkrafttradandeDatum, GenomfordDatum] som lönekörningen ska efterbetala.
     /// </summary>
-    public void Genomfor()
+    public void Genomfor(DateOnly? genomfordDatum = null)
     {
         if (Status != SalaryReviewStatus.Godkand)
             throw new InvalidOperationException("Kan bara genomföra från Godkänd status");
         Status = SalaryReviewStatus.Genomford;
+        GenomfordDatum = genomfordDatum ?? DateOnly.FromDateTime(DateTime.UtcNow);
     }
 }
 
@@ -157,6 +174,13 @@ public sealed class SalaryProposal
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public EmployeeId AnstallId { get; set; }
+
+    /// <summary>
+    /// Den specifika anställning som ska få ny lön. Kan vara null om den anställde
+    /// bara har en aktiv anställning — då härleds den vid genomförandet.
+    /// </summary>
+    public EmploymentId? AnstallningId { get; set; }
+
     public Money NuvarandeLon { get; set; }
     public Money ForeslagenLon { get; set; }
     public Money Okning { get; set; }
@@ -164,4 +188,11 @@ public sealed class SalaryProposal
     public string Motivering { get; set; } = string.Empty;
     public SalaryProposalStatus Status { get; set; } = SalaryProposalStatus.Forslag;
     public string? AvvisningsAnledning { get; set; }
+
+    /// <summary>
+    /// Retroaktivt bruttobelopp som beräknats vid genomförandet
+    /// (löneökning × antal månader från ikraftträdande till genomförande).
+    /// Lönekörningen betalar ut detta som retroaktiv differens. Null tills genomfört.
+    /// </summary>
+    public Money? RetroaktivtBelopp { get; set; }
 }

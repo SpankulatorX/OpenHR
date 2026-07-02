@@ -805,6 +805,19 @@ public static class SeedData
             new RegionHR.Scheduling.Domain.ScheduledShift { Id = Guid.NewGuid(), SchemaId = schemaId, AnstallId = employees[9].Id, Datum = idagDatum, PassTyp = RegionHR.Scheduling.Domain.ShiftType.Kvall, PlaneradStart = new TimeOnly(15, 0), PlaneradSlut = new TimeOnly(22, 0), Rast = TimeSpan.FromMinutes(30), Status = RegionHR.Scheduling.Domain.ShiftStatus.Planerad, OBKategori = OBCategory.VardagKvall },
             new RegionHR.Scheduling.Domain.ScheduledShift { Id = Guid.NewGuid(), SchemaId = schemaId, AnstallId = employees[3].Id, Datum = idagDatum, PassTyp = RegionHR.Scheduling.Domain.ShiftType.Natt, PlaneradStart = new TimeOnly(21, 0), PlaneradSlut = new TimeOnly(7, 0), Rast = TimeSpan.FromMinutes(45), Status = RegionHR.Scheduling.Domain.ShiftStatus.Planerad, OBKategori = OBCategory.VardagNatt });
 
+        // Historiska avslutade pass med faktisk tid → ger direkt ett flexsaldo att titta på (Anna, employees[0]) — våg 2/tid-flex
+        db.ScheduledShifts.AddRange(
+            new RegionHR.Scheduling.Domain.ScheduledShift { Id = Guid.NewGuid(), SchemaId = schemaId, AnstallId = employees[0].Id,
+                Datum = DateOnly.FromDateTime(DateTime.Today.AddDays(-3)), PassTyp = RegionHR.Scheduling.Domain.ShiftType.Dag,
+                PlaneradStart = new TimeOnly(8, 0), PlaneradSlut = new TimeOnly(16, 0), Rast = TimeSpan.FromMinutes(30),
+                FaktiskStart = new TimeOnly(8, 0), FaktiskSlut = new TimeOnly(17, 0), OvertidTimmar = 1m,
+                Status = RegionHR.Scheduling.Domain.ShiftStatus.Avslutad, OBKategori = OBCategory.Ingen },
+            new RegionHR.Scheduling.Domain.ScheduledShift { Id = Guid.NewGuid(), SchemaId = schemaId, AnstallId = employees[0].Id,
+                Datum = DateOnly.FromDateTime(DateTime.Today.AddDays(-2)), PassTyp = RegionHR.Scheduling.Domain.ShiftType.Dag,
+                PlaneradStart = new TimeOnly(8, 0), PlaneradSlut = new TimeOnly(16, 0), Rast = TimeSpan.FromMinutes(30),
+                FaktiskStart = new TimeOnly(8, 15), FaktiskSlut = new TimeOnly(15, 30),
+                Status = RegionHR.Scheduling.Domain.ShiftStatus.Avslutad, OBKategori = OBCategory.Ingen });
+
         // === Certifications via domänens Skapa() ===
         db.Certifications.AddRange(
             RegionHR.Competence.Domain.Certification.Skapa(

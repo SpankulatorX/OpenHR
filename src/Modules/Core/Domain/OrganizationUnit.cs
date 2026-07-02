@@ -10,6 +10,12 @@ public sealed class OrganizationUnit : AggregateRoot<OrganizationId>
     public OrganizationId? OverordnadEnhetId { get; private set; }
     public string Kostnadsstalle { get; private set; } = string.Empty;
     public string? CFARKod { get; private set; }
+
+    /// <summary>
+    /// HSA-id (Hälso- och sjukvårdens adressregister, Inera). Nullbart tills enheten
+    /// synkats mot HSA-katalogen. Sätts av HSA-integrationen (demo eller skarp).
+    /// </summary>
+    public string? HsaId { get; private set; }
     public EmployeeId? ChefId { get; private set; }
     public CollectiveAgreementId? DefaultAvtalsId { get; private set; }
     public DateRange Giltighet { get; private set; } = null!;
@@ -48,6 +54,13 @@ public sealed class OrganizationUnit : AggregateRoot<OrganizationId>
     public void SattDefaultKollektivavtal(CollectiveAgreementId avtalsId)
     {
         DefaultAvtalsId = avtalsId;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>Kopplar (eller rensar) enhetens HSA-id efter katalogsynk.</summary>
+    public void SattHsaId(string? hsaId)
+    {
+        HsaId = string.IsNullOrWhiteSpace(hsaId) ? null : hsaId.Trim();
         UpdatedAt = DateTime.UtcNow;
     }
 

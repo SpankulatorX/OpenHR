@@ -1,0 +1,170 @@
+@page "/minsida/stampling"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Web.Services
+@inject StamplingService StamplingSvc
+@inject AuthService Auth
+
+<PageTitle>OpenHR - Stämpling</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/minsida" Style="margin-bottom: 1rem;">
+    Tillbaka
+</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-1" Style="font-weight: 700;">⏱️ Stämpla in och ut</MudText>
+<MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    @DateTime.Now.ToString("dddd d MMMM yyyy", System.Globalization.CultureInfo.GetCultureInfo("sv-SE"))
+</MudText>
+
+@if (Auth.EmployeeId == null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">Stämpling kräver en kopplad anställd — logga in med en personalprofil.</MudAlert>
+}
+else if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else if (_status != null)
+{
+    <MudPaper Class="pa-6 mb-4 text-center" Elevation="2">
+        @if (_status.ArInstamplad)
+        {
+            <MudText Typo="Typo.h5" Color="Color.Success" Style="font-weight: 700;">Instämplad</MudText>
+            @if (_status.InstampladVidUtc.HasValue)
+            {
+                <MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+                    Sedan kl @_status.InstampladVidUtc.Value.ToLocalTime().ToString("HH:mm")
+                </MudText>
+            }
+            <MudButton Variant="Variant.Filled" Color="Color.Error" Size="Size.Large" FullWidth="true"
+                       Style="min-height: 64px; font-size: 1.15rem;"
+                       OnClick="StamplaUt" Disabled="_saving" StartIcon="@Icons.Material.Filled.Logout">
+                Stämpla ut
+            </MudButton>
+        }
+        else
+        {
+            <MudText Typo="Typo.h5" Style="font-weight: 700;">Ej instämplad</MudText>
+            <MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+                Tryck för att registrera din instämpling
+            </MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Large" FullWidth="true"
+                       Style="min-height: 64px; font-size: 1.15rem;"
+                       OnClick="StamplaIn" Disabled="_saving" StartIcon="@Icons.Material.Filled.Login">
+                Stämpla in
+            </MudButton>
+        }
+    </MudPaper>
+
+    @if (_resultat != null)
+    {
+        <MudAlert Severity="@(_resultat.Lyckades ? Severity.Success : Severity.Error)" Class="mb-2">@_resultat.Meddelande</MudAlert>
+        @if (_resultat.AvvikelseText != null)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-4" Icon="@Icons.Material.Filled.Warning">@_resultat.AvvikelseText</MudAlert>
+        }
+    }
+
+    <MudText Typo="Typo.h6" Class="mb-2 mt-4" Style="font-weight: 600;">Dagens pass</MudText>
+    @if (_status.DagensPass.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-4">Inga schemalagda pass idag.</MudAlert>
+    }
+    else
+    {
+        <MudSimpleTable Hover="true" Elevation="1" Class="mb-4">
+            <thead><tr><th>Pass</th><th>Planerat</th><th>Instämplad</th><th>Utstämplad</th><th>Status</th></tr></thead>
+            <tbody>
+                @foreach (var p in _status.DagensPass)
+                {
+                    <tr>
+                        <td>@p.PassTyp</td>
+                        <td>@p.Planerat</td>
+                        <td>@(p.FaktiskStart ?? "—")</td>
+                        <td>@(p.FaktiskSlut ?? "—")</td>
+                        <td>
+                            @p.Status
+                            @if (p.AvvikelseText != null)
+                            {
+                                <MudTooltip Text="@p.AvvikelseText">
+                                    <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small" />
+                                </MudTooltip>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+
+    @if (_status.Handelser.Count > 0)
+    {
+        <MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">Dagens stämplingar</MudText>
+        <MudSimpleTable Hover="true" Elevation="1">
+            <thead><tr><th>Händelse</th><th>Tid</th></tr></thead>
+            <tbody>
+                @foreach (var h in _status.Handelser)
+                {
+                    <tr>
+                        <td>@h.Typ</td>
+                        <td>@h.TidpunktUtc.ToLocalTime().ToString("HH:mm")</td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+}
+
+@code {
+    private StamplingDagsstatus? _status;
+    private StamplingResultat? _resultat;
+    private bool _loading = true, _saving;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Auth.EmployeeId == null) { _loading = false; return; }
+        await LaddaAsync();
+    }
+
+    private async Task LaddaAsync()
+    {
+        try
+        {
+            _status = await StamplingSvc.HamtaDagsstatusAsync(Auth.EmployeeId!.Value);
+            _error = null;
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta stämplingsstatus: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task StamplaIn()
+    {
+        if (Auth.EmployeeId == null) return;
+        _saving = true;
+        try
+        {
+            _resultat = await StamplingSvc.StamplaInAsync(Auth.EmployeeId.Value, null);
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _resultat = new StamplingResultat(false, $"Kunde inte stämpla in: {ex.Message}", null); }
+        finally { _saving = false; }
+    }
+
+    private async Task StamplaUt()
+    {
+        if (Auth.EmployeeId == null) return;
+        _saving = true;
+        try
+        {
+            _resultat = await StamplingSvc.StamplaUtAsync(Auth.EmployeeId.Value, null);
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _resultat = new StamplingResultat(false, $"Kunde inte stämpla ut: {ex.Message}", null); }
+        finally { _saving = false; }
+    }
+}

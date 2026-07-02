@@ -38,6 +38,26 @@ public sealed class TravelClaim : AggregateRoot<Guid>
     private const decimal TRAKTAMENTE_HALVDAG_INRIKES = 150m;  // Skatteverket, inkomstår 2026
     private const decimal MILERSATTNING_SATS = 25m; // kr per mil
 
+    /// <summary>
+    /// Beloppsgräns för attest: resekrav vars totalbelopp överstiger detta belopp
+    /// kräver HR-behörighet, inte enbart chef. Under gränsen räcker chefsattest.
+    /// </summary>
+    public const decimal ATTEST_GRANS_KRAVER_HR = 25_000m;
+
+    /// <summary>
+    /// True när kravet är attesterat (godkänt) och väntar på utbetalning.
+    /// Lönekörningen plockar upp krav med detta tillstånd (se
+    /// <see cref="TravelClaimStatus.Godkand"/>) och anropar sedan
+    /// <see cref="MarkeraSomUtbetald"/> när utbetalning skett.
+    /// </summary>
+    public bool ArKlarForUtbetalning => Status == TravelClaimStatus.Godkand;
+
+    /// <summary>
+    /// True när kravets totalbelopp kräver HR-behörighet för attest (över
+    /// <see cref="ATTEST_GRANS_KRAVER_HR"/>). Chef ensam får inte attestera dessa.
+    /// </summary>
+    public bool KraverHRAttest => TotalBelopp.Amount > ATTEST_GRANS_KRAVER_HR;
+
     public static TravelClaim Skapa(EmployeeId anstallId, string beskrivning, DateOnly datum)
     {
         return new TravelClaim
@@ -101,6 +121,31 @@ public sealed class TravelClaim : AggregateRoot<Guid>
     }
 
     /// <summary>
+    /// Attesterar (godkänner) resekravet med full behörighetskontroll:
+    /// <list type="bullet">
+    /// <item>Självattest är förbjuden — attestanten får inte vara samma person
+    /// som lämnade in kravet (<paramref name="attestantId"/> ≠ inlämnare).</item>
+    /// <item>Krav över <see cref="ATTEST_GRANS_KRAVER_HR"/> kräver HR-behörighet
+    /// (<paramref name="attestantArHR"/> = true).</item>
+    /// </list>
+    /// <paramref name="attestantId"/> = null tolkas som en attestant utan egen
+    /// anställningskoppling (t.ex. central systemadministratör) och kan därmed
+    /// aldrig vara inlämnaren.
+    /// </summary>
+    public void Attestera(EmployeeId? attestantId, string attestantNamn, bool attestantArHR)
+    {
+        if (attestantId.HasValue && attestantId.Value == AnstallId)
+            throw new InvalidOperationException(
+                "En anställd får inte attestera sitt eget resekrav (självattest är inte tillåten).");
+
+        if (KraverHRAttest && !attestantArHR)
+            throw new InvalidOperationException(
+                $"Resekrav över {ATTEST_GRANS_KRAVER_HR:N0} kr kräver HR-behörighet för attest.");
+
+        Attestera(attestantNamn);
+    }
+
+    /// <summary>
     /// Avvisar resekravet.
     /// </summary>
     public void Avvisa(string attestant, string anledning)
@@ -118,6 +163,20 @@ public sealed class TravelClaim : AggregateRoot<Guid>
         AttesteradVid = DateTime.UtcNow;
         AvvisningsAnledning = anledning;
         Status = TravelClaimStatus.Avslagen;
+    }
+
+    /// <summary>
+    /// Avvisar resekravet med självattest-kontroll: attestanten får inte vara
+    /// samma person som lämnade in kravet. <paramref name="attestantId"/> = null
+    /// tolkas som en attestant utan anställningskoppling.
+    /// </summary>
+    public void Avvisa(EmployeeId? attestantId, string attestantNamn, string anledning)
+    {
+        if (attestantId.HasValue && attestantId.Value == AnstallId)
+            throw new InvalidOperationException(
+                "En anställd får inte avvisa sitt eget resekrav.");
+
+        Avvisa(attestantNamn, anledning);
     }
 
     /// <summary>

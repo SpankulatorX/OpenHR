@@ -78,6 +78,14 @@ else
         {
             <MudAlert Severity="Severity.Warning" Class="mb-4">Godkännande kräver en kopplad anställd — logga in med en personalprofil.</MudAlert>
         }
+        else if (!Auth.IsChef)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-4">Attest av tidrapport kräver chefs- eller HR-behörighet.</MudAlert>
+        }
+        else if (Auth.EmployeeId.Value == _ts.AnstallId)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-4">Du kan inte attestera din egen tidrapport — självattest är inte tillåtet.</MudAlert>
+        }
         else
         {
             <MudGrid Spacing="3">
@@ -132,14 +140,22 @@ else
 
     private async Task GodkannTs()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        if (!Auth.EmployeeId.HasValue) { _error = "Godkännande kräver kopplad anställd."; return; }
         if (_ts == null) return;
+        if (!Auth.EmployeeId.HasValue || !Auth.IsChef)
+        { _actionResult = "Attest kräver chefs- eller HR-behörighet."; _actionSeverity = Severity.Error; return; }
         _saving = true;
         try
         {
-            _ts.Godkann(Auth.EmployeeId.Value, null);
+            // Läs, ändra och spara i SAMMA context — annars är entiteten detached och sparas aldrig.
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var ts = await db.Timesheets.FirstOrDefaultAsync(t => t.Id == Id);
+            if (ts == null) { _actionResult = "Tidrapporten hittades inte."; _actionSeverity = Severity.Error; return; }
+            if (ts.AnstallId == Auth.EmployeeId.Value)
+            { _actionResult = "Du kan inte attestera din egen tidrapport."; _actionSeverity = Severity.Error; return; }
+
+            ts.Godkann(Auth.EmployeeId.Value, null);
             await db.SaveChangesAsync();
+            _ts = ts;
             _actionResult = "Tidrapporten har godkänts.";
             _actionSeverity = Severity.Success;
         }
@@ -149,14 +165,22 @@ else
 
     private async Task AvvisaTs()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        if (!Auth.EmployeeId.HasValue) { _error = "Avvisning kräver kopplad anställd."; return; }
         if (_ts == null || string.IsNullOrWhiteSpace(_avvisKommentar)) return;
+        if (!Auth.EmployeeId.HasValue || !Auth.IsChef)
+        { _actionResult = "Attest kräver chefs- eller HR-behörighet."; _actionSeverity = Severity.Error; return; }
         _saving = true;
         try
         {
-            _ts.Avvisa(Auth.EmployeeId.Value, _avvisKommentar);
+            // Läs, ändra och spara i SAMMA context — annars är entiteten detached och sparas aldrig.
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var ts = await db.Timesheets.FirstOrDefaultAsync(t => t.Id == Id);
+            if (ts == null) { _actionResult = "Tidrapporten hittades inte."; _actionSeverity = Severity.Error; return; }
+            if (ts.AnstallId == Auth.EmployeeId.Value)
+            { _actionResult = "Du kan inte attestera din egen tidrapport."; _actionSeverity = Severity.Error; return; }
+
+            ts.Avvisa(Auth.EmployeeId.Value, _avvisKommentar);
             await db.SaveChangesAsync();
+            _ts = ts;
             _actionResult = "Tidrapporten har avslagits.";
             _actionSeverity = Severity.Error;
         }

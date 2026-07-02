@@ -1,0 +1,272 @@
+@page "/loneoversyn/{RundaId:guid}"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.SalaryReview.Domain
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Web.Services
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
+@inject AuthService Auth
+@inject ISnackbar Snackbar
+
+<PageTitle>OpenHR - Löneöversyn</PageTitle>
+
+<MudButton Variant="Variant.Text" StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="@(() => Nav.NavigateTo("/loneoversyn"))" Class="mb-3">Tillbaka</MudButton>
+
+@if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
+else if (_runda is null) { <MudAlert Severity="Severity.Error">Löneöversynsrundan hittades inte.</MudAlert> }
+else
+{
+    <div class="d-flex justify-space-between align-center mb-2">
+        <MudText Typo="Typo.h4" Style="font-weight: 700;">@_runda.Namn</MudText>
+        <MudChip T="string" Color="@StatusFarg(_runda.Status)">@StatusText(_runda.Status)</MudChip>
+    </div>
+    <MudText Typo="Typo.body2" Class="mb-4" Style="opacity:.75;">
+        År @_runda.Ar · Avtal @_runda.Avtalsomrade · Ikraftträdande @_runda.IkrafttradandeDatum.ToString("yyyy-MM-dd")
+    </MudText>
+
+    @if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert> }
+    @if (_info != null) { <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _info = null)">@_info</MudAlert> }
+    @if (!Auth.IsHR) { <MudAlert Severity="Severity.Info" Class="mb-4">Du kan se löneöversynen men bara HR/administratör kan hantera förslag, facklig avstämning och genomförande.</MudAlert> }
+
+    <MudGrid Spacing="3" Class="mb-4">
+        <MudItem xs="12" sm="3"><MudPaper Class="pa-3" Elevation="1"><MudText Typo="Typo.caption">Total budget</MudText><MudText Typo="Typo.h6">@_runda.TotalBudget.Amount.ToString("N0") kr</MudText></MudPaper></MudItem>
+        <MudItem xs="12" sm="3"><MudPaper Class="pa-3" Elevation="1"><MudText Typo="Typo.caption">Fördelad</MudText><MudText Typo="Typo.h6">@_runda.FordeladBudget.Amount.ToString("N0") kr</MudText></MudPaper></MudItem>
+        <MudItem xs="12" sm="3"><MudPaper Class="pa-3" Elevation="1"><MudText Typo="Typo.caption">Återstående</MudText><MudText Typo="Typo.h6">@_runda.AterstaendeBudget.Amount.ToString("N0") kr</MudText></MudPaper></MudItem>
+        <MudItem xs="12" sm="3"><MudPaper Class="pa-3" Elevation="1"><MudText Typo="Typo.caption">Snitt ökning</MudText><MudText Typo="Typo.h6">@_runda.GenomsnittligOkningProcent.ToString("N2") %</MudText></MudPaper></MudItem>
+    </MudGrid>
+
+    @* ---------- PLANERING: lägg till/godkänn förslag ---------- *@
+    @if (_runda.Status == SalaryReviewStatus.Planering && Auth.IsHR)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">Nytt löneförslag</MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="Guid" Value="_valdKandidatKey" ValueChanged="OnKandidatVald" Label="Anställd" Variant="Variant.Outlined">
+                        @foreach (var k in _kandidater)
+                        {
+                            <MudSelectItem T="Guid" Value="@k.AnstallningId.Value">@k.Namn (@k.Befattning)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="3"><MudTextField T="string" Value="@_valdNuvarandeLonText" Label="Nuvarande lön" Variant="Variant.Outlined" ReadOnly="true" /></MudItem>
+                <MudItem xs="12" sm="3"><MudNumericField T="decimal" @bind-Value="_nyLon" Label="Föreslagen lön (kr)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                <MudItem xs="12" sm="2"><MudTextField T="string" Value="@OkningPreview" Label="Ökning" Variant="Variant.Outlined" ReadOnly="true" /></MudItem>
+            </MudGrid>
+            <MudTextField @bind-Value="_motivering" Label="Motivering" Variant="Variant.Outlined" Lines="2" Class="mt-3" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="LaggTillForslag"
+                       Disabled="@(_valdKandidat is null || _nyLon <= 0 || string.IsNullOrWhiteSpace(_motivering) || _busy)">Lägg till förslag</MudButton>
+        </MudPaper>
+    }
+
+    @if (_runda.Forslag.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga löneförslag ännu.</MudAlert>
+    }
+    else
+    {
+        <MudSimpleTable Hover="true" Elevation="2" Class="mb-4">
+            <thead><tr><th>Anställd</th><th>Nuvarande</th><th>Föreslagen</th><th>Ökning</th><th>%</th><th>Status</th>
+                @if (_runda.Status == SalaryReviewStatus.Genomford) { <th>Retroaktivt</th> }
+                @if (_runda.Status == SalaryReviewStatus.Planering && Auth.IsHR) { <th></th> }
+            </tr></thead>
+            <tbody>
+                @foreach (var f in _runda.Forslag)
+                {
+                    <tr>
+                        <td>@Namn(f.AnstallId)</td>
+                        <td>@f.NuvarandeLon.Amount.ToString("N0") kr</td>
+                        <td>@f.ForeslagenLon.Amount.ToString("N0") kr</td>
+                        <td>@f.Okning.Amount.ToString("N0") kr</td>
+                        <td>@f.OkningProcent.ToString("N2")</td>
+                        <td><MudChip T="string" Size="Size.Small" Color="@ForslagFarg(f.Status)">@ForslagText(f.Status)</MudChip></td>
+                        @if (_runda.Status == SalaryReviewStatus.Genomford)
+                        {
+                            <td>@(f.RetroaktivtBelopp?.Amount.ToString("N0") ?? "0") kr</td>
+                        }
+                        @if (_runda.Status == SalaryReviewStatus.Planering && Auth.IsHR)
+                        {
+                            <td>
+                                @if (f.Status == SalaryProposalStatus.Forslag)
+                                {
+                                    <MudButton Size="Size.Small" Color="Color.Success" OnClick="@(() => GodkannForslag(f.Id))" Disabled="_busy">Godkänn</MudButton>
+                                    <MudButton Size="Size.Small" Color="Color.Error" OnClick="@(() => AvvisaForslag(f.Id))" Disabled="_busy">Avvisa</MudButton>
+                                }
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+
+        @if (_runda.Status == SalaryReviewStatus.Planering && Auth.IsHR)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Send"
+                       OnClick="SkickaFacklig" Disabled="@(_busy)">Skicka till facklig avstämning</MudButton>
+        }
+    }
+
+    @* ---------- FACKLIG AVSTÄMNING ---------- *@
+    @if (_runda.Status == SalaryReviewStatus.FackligAvstemning)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2" Style="border-left: 4px solid var(--mud-palette-warning);">
+            <MudText Typo="Typo.h6" Class="mb-2">Facklig avstämning</MudText>
+            <MudText Typo="Typo.body2" Class="mb-3">
+                Löneöversynen ska stämmas av med facklig motpart innan den genomförs.
+                Ökning i snitt @_runda.GenomsnittligOkningProcent.ToString("N2") % för @AntalAktiva förslag.
+            </MudText>
+            @if (Auth.IsHR)
+            {
+                <MudTextField @bind-Value="_fackligRepresentant" Label="Facklig representant (motpart)" Variant="Variant.Outlined" />
+                <MudButton Variant="Variant.Filled" Color="Color.Success" Class="mt-3" OnClick="GodkannFacklig"
+                           Disabled="@(string.IsNullOrWhiteSpace(_fackligRepresentant) || _busy)">Godkänn fackligt</MudButton>
+                <MudText Typo="Typo.caption" Class="d-block mt-2" Style="opacity:.7;">Motparten kan inte vara samma person som handlägger översynen (ingen självattest).</MudText>
+            }
+        </MudPaper>
+    }
+
+    @* ---------- GODKÄND: genomför ---------- *@
+    @if (_runda.Status == SalaryReviewStatus.Godkand)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2" Style="border-left: 4px solid var(--mud-palette-success);">
+            <MudText Typo="Typo.h6" Class="mb-2">Godkänd — redo att genomföras</MudText>
+            <MudText Typo="Typo.body2" Class="mb-3">Fackligt godkänd av <strong>@_runda.FackligRepresentant</strong>. Genomförande applicerar ny lön på berörda anställningar och beräknar retroaktiv efterbetalning från @_runda.IkrafttradandeDatum.ToString("yyyy-MM-dd").</MudText>
+            @if (Auth.IsHR)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.CheckCircle"
+                           OnClick="Genomfor" Disabled="_busy">Genomför löneöversyn</MudButton>
+            }
+        </MudPaper>
+    }
+
+    @* ---------- GENOMFÖRD ---------- *@
+    @if (_runda.Status == SalaryReviewStatus.Genomford)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-2">
+            Genomförd @(_runda.GenomfordDatum?.ToString("yyyy-MM-dd") ?? "-"). Ny lön applicerad på @AntalGodkanda anställning(ar).
+            Total retroaktiv efterbetalning: <strong>@TotalRetro.ToString("N0") kr</strong> (betalas ut i nästa lönekörning).
+        </MudAlert>
+    }
+}
+
+@code {
+    [Parameter] public Guid RundaId { get; set; }
+
+    private LoneoversynService _svc = default!;
+    private SalaryReviewRound? _runda;
+    private List<LoneKandidat> _kandidater = [];
+    private Dictionary<EmployeeId, string> _namn = new();
+    private bool _loading = true, _busy;
+    private string? _error, _info;
+
+    // Formulär
+    private Guid _valdKandidatKey;
+    private LoneKandidat? _valdKandidat;
+    private decimal _nyLon;
+    private string _motivering = "";
+    private string _fackligRepresentant = "";
+
+    private string _valdNuvarandeLonText => _valdKandidat is null ? "-" : $"{_valdKandidat.NuvarandeLon.Amount:N0} kr";
+    private string OkningPreview => _valdKandidat is null ? "-" : $"{(_nyLon - _valdKandidat.NuvarandeLon.Amount):N0} kr";
+    private int AntalAktiva => _runda?.Forslag.Count(f => f.Status != SalaryProposalStatus.Avslagen) ?? 0;
+    private int AntalGodkanda => _runda?.Forslag.Count(f => f.Status == SalaryProposalStatus.Godkand) ?? 0;
+    private decimal TotalRetro => _runda?.Forslag.Sum(f => f.RetroaktivtBelopp?.Amount ?? 0m) ?? 0m;
+
+    protected override void OnInitialized() => _svc = new LoneoversynService(DbFactory);
+
+    protected override async Task OnParametersSetAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        try
+        {
+            _runda = await _svc.HamtaRundaAsync(RundaId);
+            _namn = await _svc.HamtaAnstalldNamnAsync();
+            if (_runda is not null && _runda.Status == SalaryReviewStatus.Planering)
+                _kandidater = await _svc.HamtaKandidaterAsync(_runda.Avtalsomrade, _runda.IkrafttradandeDatum);
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private void OnKandidatVald(Guid key)
+    {
+        _valdKandidatKey = key;
+        _valdKandidat = _kandidater.FirstOrDefault(k => k.AnstallningId.Value == key);
+        if (_valdKandidat is not null && _nyLon <= 0)
+            _nyLon = _valdKandidat.NuvarandeLon.Amount;
+    }
+
+    private string Namn(EmployeeId id) => _namn.TryGetValue(id, out var n) ? n : id.Value.ToString()[..8];
+
+    private async Task Kor(Func<Task> action)
+    {
+        _busy = true; _error = null;
+        try { await action(); await LaddaAsync(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private async Task LaggTillForslag()
+    {
+        if (_valdKandidat is null) return;
+        var kandidat = _valdKandidat;
+        await Kor(async () =>
+        {
+            await _svc.LaggTillForslagAsync(RundaId, kandidat.AnstallId, kandidat.AnstallningId, _nyLon, _motivering);
+            _info = $"Löneförslag för {kandidat.Namn} tillagt.";
+            _valdKandidat = null; _valdKandidatKey = Guid.Empty; _nyLon = 0; _motivering = "";
+        });
+    }
+
+    private async Task GodkannForslag(Guid forslagId) => await Kor(async () =>
+    {
+        await _svc.GodkannForslagAsync(RundaId, forslagId);
+        _info = "Löneförslag godkänt.";
+    });
+
+    private async Task AvvisaForslag(Guid forslagId) => await Kor(async () =>
+    {
+        await _svc.AvvisaForslagAsync(RundaId, forslagId, "Avvisat vid handläggning");
+        _info = "Löneförslag avvisat, budget återställd.";
+    });
+
+    private async Task SkickaFacklig() => await Kor(async () =>
+    {
+        await _svc.SkickaFackligAvstemningAsync(RundaId);
+        _info = "Skickad till facklig avstämning.";
+    });
+
+    private async Task GodkannFacklig()
+    {
+        // Ingen självattest: motparten får inte vara handläggaren själv.
+        if (!string.IsNullOrWhiteSpace(Auth.UserName) &&
+            string.Equals(_fackligRepresentant.Trim(), Auth.UserName.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            _error = "Facklig avstämning kräver en facklig motpart — inte samma person som handlägger översynen (ingen självattest).";
+            return;
+        }
+        await Kor(async () =>
+        {
+            await _svc.GodkannFackligAsync(RundaId, _fackligRepresentant.Trim());
+            _info = "Fackligt godkänd.";
+        });
+    }
+
+    private async Task Genomfor() => await Kor(async () =>
+    {
+        var genomfordAv = Auth.UserName ?? "System";
+        var resultat = await _svc.GenomforAsync(RundaId, genomfordAv);
+        _info = $"Löneöversyn genomförd. Ny lön applicerad på {resultat.AntalAnstallda} anställning(ar), " +
+                $"total retroaktiv efterbetalning {resultat.TotalRetroaktivt.Amount:N0} kr.";
+        Snackbar.Add(_info, Severity.Success);
+    });
+
+    private static string StatusText(SalaryReviewStatus s) => s switch { SalaryReviewStatus.Planering => "Planering", SalaryReviewStatus.FackligAvstemning => "Facklig avstämning", SalaryReviewStatus.Godkand => "Godkänd", SalaryReviewStatus.Genomford => "Genomförd", _ => s.ToString() };
+    private static Color StatusFarg(SalaryReviewStatus s) => s switch { SalaryReviewStatus.Genomford => Color.Success, SalaryReviewStatus.Godkand => Color.Success, SalaryReviewStatus.FackligAvstemning => Color.Warning, _ => Color.Info };
+    private static string ForslagText(SalaryProposalStatus s) => s switch { SalaryProposalStatus.Godkand => "Godkänd", SalaryProposalStatus.Avslagen => "Avslagen", _ => "Förslag" };
+    private static Color ForslagFarg(SalaryProposalStatus s) => s switch { SalaryProposalStatus.Godkand => Color.Success, SalaryProposalStatus.Avslagen => Color.Error, _ => Color.Default };
+}

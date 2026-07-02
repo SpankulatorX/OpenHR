@@ -30,6 +30,12 @@ public sealed class Employee : AggregateRoot<EmployeeId>
     public bool HarJamkning { get; private set; }
     public Money? JamkningBelopp { get; private set; }
 
+    /// <summary>
+    /// HSA-id (Hälso- och sjukvårdens adressregister, Inera) för medarbetaren.
+    /// Nullbart tills personen synkats mot HSA-katalogen. Sätts av HSA-integrationen.
+    /// </summary>
+    public string? HsaId { get; private set; }
+
     // Anställningar
     private readonly List<Employment> _anstallningar = [];
     public IReadOnlyList<Employment> Anstallningar => _anstallningar.AsReadOnly();
@@ -67,6 +73,13 @@ public sealed class Employee : AggregateRoot<EmployeeId>
     {
         Clearingnummer = clearingnummer;
         Kontonummer = kontonummer;
+        UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>Kopplar (eller rensar) medarbetarens HSA-id efter katalogsynk.</summary>
+    public void SattHsaId(string? hsaId)
+    {
+        HsaId = string.IsNullOrWhiteSpace(hsaId) ? null : hsaId.Trim();
         UpdatedAt = DateTime.UtcNow;
     }
 
