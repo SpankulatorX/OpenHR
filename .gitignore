@@ -46,3 +46,10 @@ appsettings.*.json
 supabase/.temp/
 supabase/.branches/
 supabase/.keys/
+
+## Build output (never commit)
+publish/
+publish-linux/
+
+## Tooling
+.superpowers/

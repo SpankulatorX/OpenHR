@@ -38,9 +38,22 @@ System.Globalization.CultureInfo.DefaultThreadCurrentCulture = svCulture;
 System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = svCulture;
 
 // Infrastructure (EF Core, repositories, module contracts)
+// Try PostgreSQL first; if unavailable, fall back to InMemory for development
 var connectionString = builder.Configuration.GetConnectionString("RegionHR")
     ?? "Host=localhost;Port=54322;Database=postgres;Username=postgres;Password=postgres";
-builder.Services.AddInfrastructure(connectionString);
+var useInMemory = false;
+try
+{
+    using var testConn = new Npgsql.NpgsqlConnection(connectionString);
+    testConn.Open();
+    testConn.Close();
+}
+catch
+{
+    useInMemory = true;
+    Console.WriteLine("PostgreSQL unavailable — using InMemory database with seed data.");
+}
+builder.Services.AddInfrastructure(connectionString, useInMemory);
 
 // SignalR
 builder.Services.AddSignalR();
