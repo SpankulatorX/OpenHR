@@ -4,6 +4,7 @@
 @using RegionHR.Leave.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR - Frånvarokalender</PageTitle>
 
@@ -72,6 +73,11 @@ else
                 .Where(r => r.TillDatum >= monday && r.FranDatum <= friday
                     && (r.Status == LeaveRequestStatus.Inskickad || r.Status == LeaveRequestStatus.Godkand))
                 .ToListAsync();
+
+            // Enhets-scoping: chef ser bara sin egen enhet (null = ingen scoping).
+            var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
+            if (scopeIds is not null)
+                requests = requests.Where(r => scopeIds.Contains(r.AnstallId)).ToList();
 
             var anstallGuids = requests.Select(r => r.AnstallId).Distinct().ToList();
             var anstallIds = anstallGuids.Select(g => new EmployeeId(g)).ToList();

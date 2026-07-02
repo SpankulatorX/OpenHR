@@ -1,0 +1,20 @@
+@namespace RegionHR.Web.Components.Shared
+
+<div class="d-flex flex-column align-center justify-center" style="min-height: 50vh; text-align: center; padding: 2rem;">
+    <MudIcon Icon="@Icons.Material.Filled.Lock" Style="font-size: 4rem; color: var(--mud-palette-warning);" Class="mb-4" />
+    <MudText Typo="Typo.h4" Style="font-weight: 700;" Class="mb-2">🔒 Du saknar behörighet</MudText>
+    <MudText Typo="Typo.body1" Style="color: var(--mud-palette-text-secondary); max-width: 480px;" Class="mb-6">
+        @Message
+    </MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Href="/"
+               StartIcon="@Icons.Material.Filled.Home" Style="text-transform: none;">
+        Till startsidan
+    </MudButton>
+</div>
+
+@code {
+    /// <summary>Förklarande text. Standardtexten passar rollbaserad nekning.</summary>
+    [Parameter]
+    public string Message { get; set; } =
+        "Den här sidan är begränsad till en annan roll. Kontakta HR om du behöver åtkomst.";
+}

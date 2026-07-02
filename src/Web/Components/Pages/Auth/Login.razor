@@ -358,19 +358,24 @@
         // Exakt namnmatchning mot Employee-tabellen.
         // Om ingen match: EmployeeId = null (t.ex. Admin).
         Guid? employeeId = null;
+        Guid? unitId = null;
         try
         {
             var parts = _selectedUser.Split(' ', 2);
             if (parts.Length == 2)
             {
                 var employee = await db.Employees
+                    .Include(e => e.Anstallningar)
                     .FirstOrDefaultAsync(e => e.Fornamn == parts[0] && e.Efternamn == parts[1]);
                 employeeId = employee?.Id.Value;
+                // Enhet (EnhetId) för aktiv anställning → "unit_id"-claim + enhets-scoping.
+                var idag = DateOnly.FromDateTime(DateTime.Today);
+                unitId = employee?.AktivAnstallning(idag)?.EnhetId.Value;
             }
         }
         catch { /* DB unavailable — proceed without EmployeeId */ }
 
-        await Auth.LoginAsync(_selectedUser, role, employeeId);
+        await Auth.LoginAsync(_selectedUser, role, employeeId, unitId);
         Nav.NavigateTo("/", forceLoad: false);
     }
 

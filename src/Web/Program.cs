@@ -8,6 +8,7 @@ using RegionHR.Web.Hubs;
 using RegionHR.Web.Middleware;
 using RegionHR.Web.Services;
 using RegionHR.Web.Components;
+using Microsoft.AspNetCore.Components.Authorization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,6 +23,13 @@ builder.Logging.AddJsonConsole(options =>
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 builder.Services.AddMudServices();
+
+// Autentisering/behörighet (demo-inloggning speglad till ClaimsPrincipal).
+// OpenHrAuthStateProvider speglar AuthService → auth-infrastrukturen fungerar
+// (CascadingAuthenticationState / AuthorizeRouteView / AuthorizeView / [Authorize]).
+builder.Services.AddAuthorizationCore();
+builder.Services.AddCascadingAuthenticationState();
+builder.Services.AddScoped<AuthenticationStateProvider, OpenHrAuthStateProvider>();
 
 // Localization (i18n)
 builder.Services.AddLocalization(options => options.ResourcesPath = "Resources");
@@ -81,6 +89,7 @@ builder.Services.AddScoped<ArendeService>();
 builder.Services.AddScoped<SelfServiceApiClient>();
 builder.Services.AddScoped<UserRoleService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<UnitScopeService>();
 builder.Services.AddScoped<StamplingService>();
 builder.Services.AddScoped<FlexService>();
 builder.Services.AddScoped<RegionHR.Web.Services.RekryteringService>();

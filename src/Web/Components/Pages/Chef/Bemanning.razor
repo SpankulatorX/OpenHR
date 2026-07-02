@@ -5,6 +5,7 @@
 @using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR - Bemanning idag</PageTitle>
 
@@ -72,9 +73,13 @@ else
         try
         {
             var idag = DateOnly.FromDateTime(DateTime.Today);
+            // Enhets-scoping: chef ser bara sin egen enhet (null = ingen scoping).
+            var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
             var shifts = await db.ScheduledShifts
                 .Where(s => s.Datum == idag && s.Status != ShiftStatus.Avbokad)
                 .ToListAsync();
+            if (scopeIds is not null)
+                shifts = shifts.Where(s => scopeIds.Contains(s.AnstallId.Value)).ToList();
 
             if (shifts.Count > 0)
             {

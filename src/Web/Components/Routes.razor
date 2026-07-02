@@ -1,8 +1,25 @@
 @rendermode InteractiveServer
+@using Microsoft.AspNetCore.Components.Authorization
 
 <Router AppAssembly="typeof(Program).Assembly">
     <Found Context="routeData">
-        <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.AdminLayout)" />
+        <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.AdminLayout)">
+            <NotAuthorized Context="authState">
+                @if (authState.User.Identity?.IsAuthenticated != true)
+                {
+                    <RedirectToLogin />
+                }
+                else
+                {
+                    <RegionHR.Web.Components.Shared.AccessDenied />
+                }
+            </NotAuthorized>
+            <Authorizing>
+                <div style="display: flex; align-items: center; justify-content: center; height: 100vh;">
+                    <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+                </div>
+            </Authorizing>
+        </AuthorizeRouteView>
         <FocusOnNavigate RouteData="routeData" Selector="h1" />
     </Found>
 </Router>

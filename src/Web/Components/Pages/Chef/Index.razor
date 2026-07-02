@@ -6,6 +6,7 @@
 @using RegionHR.Performance.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR - Chefsportal</PageTitle>
 
@@ -116,10 +117,18 @@ else if (!_loading)
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            // Pending leave requests
-            var pendingLeave = await db.LeaveRequests
+            // Enhets-scoping: chef ser bara sin egen enhet. null = ingen scoping (HR/Admin
+            // eller chef utan enhetskoppling → visa hela organisationen som tidigare).
+            var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
+
+            // Pending leave requests (filtreras till enheten före Take(20)).
+            var pendingLeaveAll = await db.LeaveRequests
                 .Where(r => r.Status == LeaveRequestStatus.Inskickad)
-                .OrderBy(r => r.SkapadVid).Take(20).ToListAsync();
+                .OrderBy(r => r.SkapadVid).ToListAsync();
+            var pendingLeave = (scopeIds is null
+                    ? pendingLeaveAll
+                    : pendingLeaveAll.Where(r => scopeIds.Contains(r.AnstallId)))
+                .Take(20).ToList();
 
             if (pendingLeave.Count > 0)
             {
@@ -142,12 +151,16 @@ else if (!_loading)
                 }
             }
 
-            // KPIs
-            _teamAntal = await db.Employees.CountAsync();
+            // KPIs (enhets-scopade för chef)
+            _teamAntal = scopeIds?.Count ?? await db.Employees.CountAsync();
             var idag = DateOnly.FromDateTime(DateTime.Today);
-            _franvaroIdag = await db.LeaveRequests
-                .CountAsync(r => r.FranDatum <= idag && r.TillDatum >= idag
-                    && (r.Status == LeaveRequestStatus.Inskickad || r.Status == LeaveRequestStatus.Godkand));
+            var franvaroAll = await db.LeaveRequests
+                .Where(r => r.FranDatum <= idag && r.TillDatum >= idag
+                    && (r.Status == LeaveRequestStatus.Inskickad || r.Status == LeaveRequestStatus.Godkand))
+                .ToListAsync();
+            _franvaroIdag = scopeIds is null
+                ? franvaroAll.Count
+                : franvaroAll.Count(r => scopeIds.Contains(r.AnstallId));
 
             // Coaching nudges
             _nudges = await db.CoachingNudges

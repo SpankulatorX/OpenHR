@@ -1,6 +1,8 @@
 @inherits LayoutComponentBase
 @namespace RegionHR.Web.Components.Layout
+@implements IDisposable
 @using Microsoft.Extensions.Localization
+@using RegionHR.Web.Services
 @inject RegionHR.Web.Services.AuthService Auth
 @inject NavigationManager Nav
 @inject IStringLocalizer<RegionHR.Web.SharedResources> L
@@ -35,7 +37,16 @@
             </MudDrawer>
             <MudMainContent Class="pt-16" id="main-content" role="main">
                 <MudContainer MaxWidth="MaxWidth.ExtraLarge" Class="py-6">
-                    @Body
+                    @* Central URL-behörighetskontroll: rendera INTE sidans innehåll om
+                       rollen saknas (då körs inte heller sidans datainladdning). *@
+                    @if (IsCurrentRouteAllowed())
+                    {
+                        @Body
+                    }
+                    else
+                    {
+                        <RegionHR.Web.Components.Shared.AccessDenied />
+                    }
                 </MudContainer>
             </MudMainContent>
             <RegionHR.Web.Components.Shared.OhrAssistant />
@@ -51,6 +62,11 @@
     private bool _drawerOpen = true;
     private bool _isDarkMode;
 
+    protected override void OnInitialized()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -63,6 +79,33 @@
             }
             StateHasChanged();
         }
+    }
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        // Vid varje navigation: oinloggad → /login. Rollkontrollen sker i markup
+        // (IsCurrentRouteAllowed) vid omrenderingen som navigationen utlöser.
+        if (Auth.IsInitialized && !Auth.IsLoggedIn)
+        {
+            Nav.NavigateTo("/login");
+            return;
+        }
+        InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Får den inloggade nå den aktuella rutten enligt <see cref="RouteAccessPolicy"/>?
+    /// Utvärderas per render, dvs. även efter varje navigation.
+    /// </summary>
+    private bool IsCurrentRouteAllowed()
+    {
+        var path = "/" + Nav.ToBaseRelativePath(Nav.Uri);
+        return RouteAccessPolicy.IsAllowed(path, Auth.Role);
+    }
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
     }
 
     private async Task OnDarkModeToggled(bool value)

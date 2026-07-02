@@ -6,12 +6,15 @@
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject ISnackbar Snackbar
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR — Godkännanden</PageTitle>
 
 <MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Godkännanden</MudText>
 <MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
-    Ärenden som väntar på godkännande. Adminvy — visar alla väntande oavsett godkännare.
+    @(_scoped
+        ? "Ärenden som väntar på godkännande för din enhet."
+        : "Ärenden som väntar på godkännande. Adminvy — visar alla väntande oavsett godkännare.")
 </MudText>
 
 @if (_loading)
@@ -68,6 +71,7 @@ else
     private List<Case> _pending = [];
     private Dictionary<EmployeeId, string> _empNames = new();
     private bool _loading = true;
+    private bool _scoped;
     private string? _error;
 
     protected override async Task OnInitializedAsync()
@@ -80,6 +84,14 @@ else
                 .Where(c => c.Status == CaseStatus.VantarGodkannande)
                 .OrderByDescending(c => c.CreatedAt)
                 .ToListAsync();
+
+            // Enhets-scoping: chef ser bara sin egen enhet. HR/Admin ser alla.
+            var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
+            if (scopeIds is not null)
+            {
+                _scoped = true;
+                _pending = _pending.Where(c => scopeIds.Contains(c.AnstallId.Value)).ToList();
+            }
 
             var employees = await db.Employees.ToListAsync();
             _empNames = employees.ToDictionary(e => e.Id, e => $"{e.Fornamn} {e.Efternamn}");

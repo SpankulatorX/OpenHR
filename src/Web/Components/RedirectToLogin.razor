@@ -1,0 +1,16 @@
+@namespace RegionHR.Web.Components
+@inject NavigationManager Nav
+
+@* Sekundärt skyddsnät: skickar oinloggade till /login. Den primära omdirigeringen
+   sker i AdminLayout efter att sessionen lästs in (ProtectedSessionStorage kräver
+   ett aktivt interaktivt circuit). Navigerar därför först vid interaktiv render. *@
+
+@code {
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            Nav.NavigateTo("/login", forceLoad: false);
+        }
+    }
+}
