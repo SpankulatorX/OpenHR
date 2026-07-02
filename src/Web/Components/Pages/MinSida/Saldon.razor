@@ -1,9 +1,11 @@
 @page "/minsida/saldon"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Web.Services
+@using RegionHR.Scheduling.Domain
 @inject FlexService Flex
 @inject SelfServiceApiClient SelfService
 @inject AuthService Auth
+@inject ISnackbar Snackbar
 
 <PageTitle>OpenHR - Mina saldon</PageTitle>
 
@@ -42,8 +44,14 @@ else if (_flex != null)
         </MudItem>
         <MudItem xs="12" sm="4">
             <MudPaper Class="pa-4 text-center" Elevation="2">
-                <MudText Typo="Typo.h3" Color="Color.Primary" Style="font-weight: 800;">@_flex.Kompsaldo.ToString("0.0")h</MudText>
-                <MudText Typo="Typo.body2">Komptid (övertid)</MudText>
+                <MudText Typo="Typo.h3" Color="Color.Primary" Style="font-weight: 800;">@(_komptid?.TillgangligTimmar.ToString("0.0") ?? "0.0")h</MudText>
+                <MudText Typo="Typo.body2">Komptid att ta ut</MudText>
+                @if (_komptid != null)
+                {
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">
+                        Intjänat @_komptid.IntjanatTimmar.ToString("0.0")h · uttaget @_komptid.UttagetTimmar.ToString("0.0")h
+                    </MudText>
+                }
             </MudPaper>
         </MudItem>
         <MudItem xs="12" sm="4">
@@ -71,6 +79,117 @@ else if (_flex != null)
         {
             <MudAlert Severity="Severity.Warning" Class="mb-4">Du har nått golvet för flexsaldot. Ta igen tid för att komma i balans.</MudAlert>
         }
+    }
+
+    @* ── Ta ut komptid ─────────────────────────────────────────────── *@
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">🕑 Ta ut komptid</MudText>
+        @if (_komptid == null || _komptid.TillgangligTimmar <= 0m)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                Du har ingen komptid att ta ut ännu. Komptid byggs upp av registrerad övertid.
+            </MudAlert>
+        }
+        else
+        {
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="3">
+                    <MudNumericField T="decimal" @bind-Value="_uttagTimmar" Label="Antal timmar" Variant="Variant.Outlined"
+                                     Min="0m" Max="@_komptid.TillgangligTimmar" Step="0.5m" HideSpinButtons="false" />
+                </MudItem>
+                <MudItem xs="12" sm="3">
+                    <MudSelect T="KomputtagTyp" @bind-Value="_uttagTyp" Label="Uttag som" Variant="Variant.Outlined">
+                        <MudSelectItem T="KomputtagTyp" Value="@KomputtagTyp.Ledighet">Kompledigt</MudSelectItem>
+                        <MudSelectItem T="KomputtagTyp" Value="@KomputtagTyp.Utbetalning">Utbetalning</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                @if (_uttagTyp == KomputtagTyp.Ledighet)
+                {
+                    <MudItem xs="6" sm="3">
+                        <MudDatePicker @bind-Date="_uttagFran" Label="Från" Variant="Variant.Outlined" />
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudDatePicker @bind-Date="_uttagTill" Label="Till" Variant="Variant.Outlined" />
+                    </MudItem>
+                }
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_uttagBeskrivning" Label="Kommentar (valfritt)" Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Send"
+                               OnClick="BegarAsync" Disabled="_submitting">
+                        Begär uttag
+                    </MudButton>
+                </MudItem>
+            </MudGrid>
+        }
+    </MudPaper>
+
+    @* ── Chef: väntande uttag att besluta om ───────────────────────── *@
+    @if (Auth.IsChef && _vantande.Count > 0)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">✅ Väntande komptidsuttag (@_vantande.Count)</MudText>
+            <MudSimpleTable Hover="true" Elevation="0">
+                <thead><tr><th>Medarbetare</th><th>Timmar</th><th>Typ</th><th>Period</th><th>Motivering vid avslag</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var rad in _vantande)
+                    {
+                        var u = rad.Uttag;
+                        <tr>
+                            <td>@rad.AnstallNamn</td>
+                            <td>@u.Timmar.ToString("0.##")h</td>
+                            <td>@TypText(u.Typ)</td>
+                            <td>@(u.Typ == KomputtagTyp.Ledighet ? $"{u.FranDatum:d/M}–{u.TillDatum:d/M}" : "—")</td>
+                            <td>
+                                <MudTextField T="string" Value="@GetAvslag(u.Id)" ValueChanged="@(v => SetAvslag(u.Id, v))"
+                                              Placeholder="Skäl (krävs vid avslag)" Variant="Variant.Text" Margin="Margin.Dense" />
+                            </td>
+                            <td style="white-space: nowrap;">
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                                           OnClick="@(() => GodkannAsync(u.Id))" Disabled="_submitting">Godkänn</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" Class="ml-1"
+                                           OnClick="@(() => AvslaAsync(u.Id))" Disabled="_submitting">Avslå</MudButton>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    }
+
+    @* ── Mina uttag (historik) ─────────────────────────────────────── *@
+    @if (_minaUttag.Count > 0)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Mina komptidsuttag</MudText>
+            <MudSimpleTable Hover="true" Elevation="0">
+                <thead><tr><th>Begärt</th><th>Timmar</th><th>Typ</th><th>Period</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var u in _minaUttag)
+                    {
+                        <tr>
+                            <td>@u.BegardVid.ToLocalTime().ToString("yyyy-MM-dd")</td>
+                            <td>@u.Timmar.ToString("0.##")h</td>
+                            <td>@TypText(u.Typ)</td>
+                            <td>@(u.Typ == KomputtagTyp.Ledighet ? $"{u.FranDatum:d/M}–{u.TillDatum:d/M}" : "—")</td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(u.Status)">@StatusText(u.Status)</MudChip></td>
+                            <td>
+                                @if (u.Status == KomputtagStatus.Begard)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default"
+                                               OnClick="@(() => AterkallaAsync(u.Id))" Disabled="_submitting">Återkalla</MudButton>
+                                }
+                                else if (u.Status == KomputtagStatus.Avslagen && !string.IsNullOrWhiteSpace(u.Kommentar))
+                                {
+                                    <MudTooltip Text="@u.Kommentar"><MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" /></MudTooltip>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
     }
 
     @if (_flex.Dagsposter.Count == 0)
@@ -108,9 +227,25 @@ else if (_flex != null)
 @code {
     private const int _dagar = 90;
     private FlexOversikt? _flex;
+    private KomptidSaldo? _komptid;
+    private IReadOnlyList<KomptidUttag> _minaUttag = Array.Empty<KomptidUttag>();
+    private IReadOnlyList<KomptidUttagRad> _vantande = Array.Empty<KomptidUttagRad>();
     private int _semesterdagar;
     private bool _loading = true;
+    private bool _submitting;
     private string? _error;
+
+    // Formulär för nytt uttag.
+    private decimal _uttagTimmar = 1m;
+    private KomputtagTyp _uttagTyp = KomputtagTyp.Ledighet;
+    private DateTime? _uttagFran = DateTime.Today;
+    private DateTime? _uttagTill = DateTime.Today;
+    private string? _uttagBeskrivning;
+
+    // Chefens avslagsmotiveringar per rad.
+    private readonly Dictionary<Guid, string> _avslag = new();
+    private string GetAvslag(Guid id) => _avslag.TryGetValue(id, out var v) ? v : string.Empty;
+    private void SetAvslag(Guid id, string v) => _avslag[id] = v;
 
     protected override async Task OnInitializedAsync()
     {
@@ -122,8 +257,113 @@ else if (_flex != null)
 
             var semester = await SelfService.GetVacationBalanceAsync(Auth.EmployeeId.Value, DateTime.Today.Year);
             _semesterdagar = semester?.TillgangligaDagar ?? 0;
+
+            await LaddaKomptidAsync();
         }
         catch (Exception ex) { _error = $"Kunde inte hämta saldon: {ex.Message}"; }
         finally { _loading = false; }
     }
+
+    private async Task LaddaKomptidAsync()
+    {
+        if (Auth.EmployeeId == null) return;
+        _komptid = await Flex.HamtaKomptidsaldoAsync(Auth.EmployeeId.Value);
+        _minaUttag = await Flex.HamtaMinaUttagAsync(Auth.EmployeeId.Value);
+        _vantande = Auth.IsChef
+            ? await Flex.HamtaVantandeUttagAsync()
+            : Array.Empty<KomptidUttagRad>();
+    }
+
+    private async Task BegarAsync()
+    {
+        if (Auth.EmployeeId == null) return;
+        _submitting = true;
+        try
+        {
+            DateOnly? fran = _uttagTyp == KomputtagTyp.Ledighet && _uttagFran.HasValue
+                ? DateOnly.FromDateTime(_uttagFran.Value) : null;
+            DateOnly? till = _uttagTyp == KomputtagTyp.Ledighet && _uttagTill.HasValue
+                ? DateOnly.FromDateTime(_uttagTill.Value) : null;
+
+            await Flex.BegarKomputtagAsync(Auth.EmployeeId.Value, _uttagTimmar, _uttagTyp, fran, till, _uttagBeskrivning);
+            Snackbar.Add($"Uttag av {_uttagTimmar:0.##} h komptid begärt — inväntar chefsgodkännande.", MudBlazor.Severity.Success);
+            _uttagBeskrivning = null;
+            await LaddaKomptidAsync();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, MudBlazor.Severity.Error); }
+        finally { _submitting = false; }
+    }
+
+    private async Task GodkannAsync(Guid id)
+    {
+        if (Auth.EmployeeId == null) return;
+        _submitting = true;
+        try
+        {
+            await Flex.GodkannKomputtagAsync(id, Auth.EmployeeId.Value);
+            Snackbar.Add("Komptidsuttag godkänt.", MudBlazor.Severity.Success);
+            await LaddaKomptidAsync();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, MudBlazor.Severity.Error); }
+        finally { _submitting = false; }
+    }
+
+    private async Task AvslaAsync(Guid id)
+    {
+        if (Auth.EmployeeId == null) return;
+        var skal = GetAvslag(id);
+        if (string.IsNullOrWhiteSpace(skal))
+        {
+            Snackbar.Add("Ange ett skäl innan du avslår.", MudBlazor.Severity.Warning);
+            return;
+        }
+        _submitting = true;
+        try
+        {
+            await Flex.AvslaKomputtagAsync(id, Auth.EmployeeId.Value, skal);
+            Snackbar.Add("Komptidsuttag avslaget.", MudBlazor.Severity.Info);
+            _avslag.Remove(id);
+            await LaddaKomptidAsync();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, MudBlazor.Severity.Error); }
+        finally { _submitting = false; }
+    }
+
+    private async Task AterkallaAsync(Guid id)
+    {
+        if (Auth.EmployeeId == null) return;
+        _submitting = true;
+        try
+        {
+            await Flex.AterkallaKomputtagAsync(id, Auth.EmployeeId.Value);
+            Snackbar.Add("Begäran återkallad.", MudBlazor.Severity.Info);
+            await LaddaKomptidAsync();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, MudBlazor.Severity.Error); }
+        finally { _submitting = false; }
+    }
+
+    private static string TypText(KomputtagTyp typ) => typ switch
+    {
+        KomputtagTyp.Ledighet => "Kompledigt",
+        KomputtagTyp.Utbetalning => "Utbetalning",
+        _ => typ.ToString()
+    };
+
+    private static string StatusText(KomputtagStatus s) => s switch
+    {
+        KomputtagStatus.Begard => "Väntar",
+        KomputtagStatus.Godkand => "Godkänt",
+        KomputtagStatus.Avslagen => "Avslaget",
+        KomputtagStatus.Aterkallad => "Återkallat",
+        _ => s.ToString()
+    };
+
+    private static Color StatusFarg(KomputtagStatus s) => s switch
+    {
+        KomputtagStatus.Begard => Color.Warning,
+        KomputtagStatus.Godkand => Color.Success,
+        KomputtagStatus.Avslagen => Color.Error,
+        _ => Color.Default
+    };
 }

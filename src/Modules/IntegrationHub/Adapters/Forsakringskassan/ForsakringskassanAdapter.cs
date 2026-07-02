@@ -17,11 +17,50 @@ public sealed class ForsakringskassanAdapter : IIntegrationAdapter
     {
         return request.OperationType switch
         {
+            "GenereraFKAnmalan" => await GenereraFKAnmalan(request, ct),
             "SkickaFKSjukanmalan" => await SkickaFKSjukanmalan(request, ct),
             "RapporteraForaldrafranvaro" => await RapporteraForaldrafranvaro(request, ct),
             "TaEmotFKBeslut" => await TaEmotFKBeslut(request, ct),
             _ => new IntegrationResult(false, $"Okänd operation: {request.OperationType}")
         };
+    }
+
+    /// <summary>
+    /// Genererar arbetsgivarens sjukanmälan till Försäkringskassan (strukturerad fil +
+    /// läsbar sammanfattning) via <see cref="FKAnmalanGenerator"/>. Filen ÖVERFÖRS INTE —
+    /// skarp överföring till FK:s e-tjänst kräver avtal/anslutning (se
+    /// <see cref="FKAnmalanGenerator.OverforingStatus"/>).
+    /// </summary>
+    private Task<IntegrationResult> GenereraFKAnmalan(IntegrationRequest request, CancellationToken ct)
+    {
+        FKAnmalanInput? input;
+        try
+        {
+            input = request.Payload is FKAnmalanInput i
+                ? i
+                : JsonSerializer.Deserialize<FKAnmalanInput>(request.Payload?.ToString() ?? "");
+        }
+        catch
+        {
+            return Task.FromResult(new IntegrationResult(false, "Ogiltig payload för FK-anmälan"));
+        }
+
+        if (input is null)
+            return Task.FromResult(new IntegrationResult(false, "FK-anmälan saknas"));
+
+        var result = new FKAnmalanGenerator().Generera(input);
+
+        if (!result.Giltig)
+            return Task.FromResult(new IntegrationResult(
+                false,
+                "FK-anmälan kunde inte genereras: " + string.Join("; ", result.Fel),
+                result));
+
+        return Task.FromResult(new IntegrationResult(
+            true,
+            $"FK-anmälan genererad ({result.Filnamn}). Ej överförd till FK — skarp överföring " +
+            "kräver avtal/anslutning till Försäkringskassans e-tjänst.",
+            result));
     }
 
     /// <summary>
@@ -60,14 +99,16 @@ public sealed class ForsakringskassanAdapter : IIntegrationAdapter
             return Task.FromResult(new IntegrationResult(false,
                 "Sjukanmälan till FK görs först efter dag 14"));
 
-        // I produktion: Skicka till FK:s e-tjänst
-        // POST https://etjanster.forsakringskassan.se/api/v1/sjukanmalan
+        // Underlaget förbereds här. Skarp överföring till FK:s e-tjänst
+        // (POST https://etjanster.forsakringskassan.se/api/v1/sjukanmalan) kräver
+        // tecknat avtal och teknisk anslutning och sker INTE i denna miljö.
         var arendeId = $"FK-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N")[..8]}";
 
         return Task.FromResult(new IntegrationResult(
             true,
-            $"Sjukanmälan skickad till FK med ärende-ID {arendeId}",
-            new { ArendeId = arendeId, Skickad = DateTime.UtcNow }));
+            $"Sjukanmälan förberedd för FK med ärende-ID {arendeId}. Ej överförd — " +
+            "skarp överföring kräver avtal/anslutning till Försäkringskassans e-tjänst.",
+            new { ArendeId = arendeId, Forberedd = DateTime.UtcNow, Overford = false }));
     }
 
     /// <summary>

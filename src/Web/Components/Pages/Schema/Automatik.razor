@@ -1,0 +1,387 @@
+@page "/schema/automatik"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Scheduling.Domain
+@using RegionHR.Scheduling.Optimization
+@using RegionHR.Core.Domain
+@using RegionHR.SharedKernel.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject ISnackbar Snackbar
+
+<PageTitle>OpenHR - Behovsstyrd schemaautomatik</PageTitle>
+
+<div class="d-flex justify-space-between align-center mb-2">
+    <MudText Typo="Typo.h4" Style="font-weight: 700;">Behovsstyrd schemaautomatik</MudText>
+    <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/schema" StartIcon="@Icons.Material.Filled.ArrowBack">Till schemaöversikt</MudButton>
+</div>
+<MudText Typo="Typo.body1" Class="mb-5" Style="color: var(--mud-palette-text-secondary);">
+    Auto-generera ett schema ur en bemanningsmall som täcker behovet per pass och kompetens,
+    respekterar Arbetstidslagen (dygnsvila, veckovila, veckoarbetstid) och fördelar pass rättvist.
+</MudText>
+
+<MudPaper Class="pa-4 mb-6" Elevation="2">
+    <MudGrid Spacing="3">
+        <MudItem xs="12" sm="6" md="3">
+            <MudSelect T="Guid" Label="Enhet" Value="_valdEnhet" ValueChanged="EnhetAndrad" Variant="Variant.Outlined">
+                @foreach (var enhet in _enheter)
+                {
+                    <MudSelectItem T="Guid" Value="@enhet.Id.Value">@enhet.Namn</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudSelect T="Guid" Label="Bemanningsmall" @bind-Value="_valdMall" Variant="Variant.Outlined"
+                       Disabled="_mallarForEnhet.Count == 0">
+                @foreach (var mall in _mallarForEnhet)
+                {
+                    <MudSelectItem T="Guid" Value="@mall.Id.Value">@mall.Namn (@mall.Rader.Count rader)</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="6" sm="3" md="2">
+            <MudDatePicker Label="Från" @bind-Date="_periodFran" Variant="Variant.Outlined" />
+        </MudItem>
+        <MudItem xs="6" sm="3" md="2">
+            <MudDatePicker Label="Till" @bind-Date="_periodTill" Variant="Variant.Outlined" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="2">
+            <MudSelect T="BemanningsMal" Label="Målbemanning" @bind-Value="_mal" Variant="Variant.Outlined">
+                <MudSelectItem T="BemanningsMal" Value="BemanningsMal.Optimal">Optimal</MudSelectItem>
+                <MudSelectItem T="BemanningsMal" Value="BemanningsMal.Minimum">Minimum</MudSelectItem>
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="4" Class="d-flex align-center">
+            <MudSwitch T="bool" @bind-Value="_sjukvard" Color="Color.Primary"
+                       Label="Sjukvårdsundantag (9h dygnsvila)" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="4" Class="d-flex align-center">
+            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+                Tillgänglig personal på enheten: <strong>@_antalPersonal</strong>
+            </MudText>
+        </MudItem>
+        <MudItem xs="12" md="4" Class="d-flex align-end justify-end">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                       OnClick="Generera" Disabled="_arbetar || _valdMall == Guid.Empty"
+                       StartIcon="@Icons.Material.Filled.AutoAwesome" Style="min-height: 48px;">
+                @if (_arbetar)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Surface" Class="mr-2" />
+                }
+                Generera förslag
+            </MudButton>
+        </MudItem>
+    </MudGrid>
+    @if (_mallarForEnhet.Count == 0 && !_loading)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mt-3">
+            Ingen bemanningsmall finns för vald enhet. Skapa en mall med bemanningsbehov per veckodag och pass först.
+        </MudAlert>
+    }
+</MudPaper>
+
+@if (_forslag is not null)
+{
+    <MudGrid Spacing="3" Class="mb-6">
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h4" Color="@TackningsColor" Style="font-weight: 700;">@_forslag.TackningsgradProcent.ToString("0.#")%</MudText>
+                <MudText Typo="Typo.body2">Täckningsgrad (mot min)</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h4" Color="Color.Primary" Style="font-weight: 700;">@_forslag.Tilldelningar.Count</MudText>
+                <MudText Typo="Typo.body2">Genererade pass</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h4" Color="@(_forslag.ATLKompliant ? Color.Success : Color.Error)" Style="font-weight: 700;">
+                    @(_forslag.ATLKompliant ? "Ja" : "Nej")
+                </MudText>
+                <MudText Typo="Typo.body2">ATL-kompliant</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" md="3">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h4" Color="Color.Warning" Style="font-weight: 700;">@_forslag.TotalOBKostnad.Amount.ToString("N0") kr</MudText>
+                <MudText Typo="Typo.body2">OB-kostnad</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @if (_forslag.Underbemannade.Count > 0)
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-4">
+            @_forslag.Underbemannade.Count pass når inte minimibemanning. Detta beror på personalbrist eller
+            ATL-begränsningar — inget pass har schemalagts olagligt. Överväg fler resurser, inhyrd personal eller justerat behov.
+        </MudAlert>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4">
+            Alla pass når minst minimibemanning och schemat uppfyller Arbetstidslagen.
+        </MudAlert>
+    }
+
+    @if (!_forslag.ATLKompliant)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-4">
+            <MudText Typo="Typo.subtitle2" Class="mb-1">ATL-varningar i genererat schema:</MudText>
+            <ul style="margin: 0; padding-left: 1.2rem;">
+                @foreach (var v in _forslag.ATLVarningar.Take(10))
+                {
+                    <li>@v.Regel: @v.Beskrivning</li>
+                }
+            </ul>
+        </MudAlert>
+    }
+
+    <div class="d-flex justify-space-between align-center mb-3">
+        <MudText Typo="Typo.h6">Täckning per pass</MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="SparaSchema"
+                   Disabled="_sparar || _forslag.Tilldelningar.Count == 0"
+                   StartIcon="@Icons.Material.Filled.Save">
+            @if (_sparar)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Surface" Class="mr-2" />
+            }
+            Spara som schema (utkast)
+        </MudButton>
+    </div>
+
+    <MudTable Items="_forslag.Tackning" Hover="true" Elevation="2" Dense="true" Class="mb-4">
+        <HeaderContent>
+            <MudTh>Datum</MudTh>
+            <MudTh>Dag</MudTh>
+            <MudTh>Pass</MudTh>
+            <MudTh>Tid</MudTh>
+            <MudTh>Kompetens</MudTh>
+            <MudTh Style="text-align:center;">Min</MudTh>
+            <MudTh Style="text-align:center;">Optimal</MudTh>
+            <MudTh Style="text-align:center;">Tillsatt</MudTh>
+            <MudTh>Läge</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Datum">@context.Datum.ToString("yyyy-MM-dd")</MudTd>
+            <MudTd DataLabel="Dag">@_sv.DateTimeFormat.GetAbbreviatedDayName(context.Datum.DayOfWeek)</MudTd>
+            <MudTd DataLabel="Pass">@context.PassTyp</MudTd>
+            <MudTd DataLabel="Tid">@context.Start.ToString("HH:mm")–@context.Slut.ToString("HH:mm")</MudTd>
+            <MudTd DataLabel="Kompetens">@(context.KravdaKompetenser.Count == 0 ? "—" : string.Join(", ", context.KravdaKompetenser))</MudTd>
+            <MudTd DataLabel="Min" Style="text-align:center;">@context.MinBehov</MudTd>
+            <MudTd DataLabel="Optimal" Style="text-align:center;">@context.OptimalBehov</MudTd>
+            <MudTd DataLabel="Tillsatt" Style="text-align:center;"><strong>@context.Tillsatt</strong></MudTd>
+            <MudTd DataLabel="Läge">
+                <MudChip T="string" Size="Size.Small" Color="@LageColor(context.Lage)">@LageText(context.Lage)</MudChip>
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private static readonly System.Globalization.CultureInfo _sv = System.Globalization.CultureInfo.GetCultureInfo("sv-SE");
+
+    private List<OrganizationUnit> _enheter = [];
+    private List<StaffingTemplate> _allaMallar = [];
+    private List<StaffingTemplate> _mallarForEnhet = [];
+    private Guid _valdEnhet;
+    private Guid _valdMall;
+    private DateTime? _periodFran = DateTime.Today;
+    private DateTime? _periodTill = DateTime.Today.AddDays(6);
+    private BemanningsMal _mal = BemanningsMal.Optimal;
+    private bool _sjukvard = true;
+    private int _antalPersonal;
+
+    private SchemaForslag? _forslag;
+    private bool _loading = true;
+    private bool _arbetar;
+    private bool _sparar;
+
+    private Color TackningsColor => _forslag is null ? Color.Default
+        : _forslag.TackningsgradProcent >= 100m ? Color.Success
+        : _forslag.TackningsgradProcent >= 80m ? Color.Warning
+        : Color.Error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _enheter = await db.OrganizationUnits.OrderBy(e => e.Namn).ToListAsync();
+        _allaMallar = await db.StaffingTemplates.ToListAsync();
+
+        if (_enheter.Count > 0)
+        {
+            _valdEnhet = _enheter[0].Id.Value;
+            await EnhetAndrad(_valdEnhet);
+        }
+        _loading = false;
+    }
+
+    private async Task EnhetAndrad(Guid enhetId)
+    {
+        _valdEnhet = enhetId;
+        _forslag = null;
+        _mallarForEnhet = _allaMallar.Where(m => m.EnhetId.Value == enhetId).ToList();
+        _valdMall = _mallarForEnhet.Count > 0 ? _mallarForEnhet[0].Id.Value : Guid.Empty;
+        _antalPersonal = await RaknaPersonalAsync(enhetId);
+    }
+
+    private async Task<int> RaknaPersonalAsync(Guid enhetId)
+    {
+        var personal = await HamtaPersonalAsync(enhetId);
+        return personal.Count;
+    }
+
+    private async Task<List<PersonalInfo>> HamtaPersonalAsync(Guid enhetId)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var enhet = OrganizationId.From(enhetId);
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+
+        // Kompetenskarta: anställd -> kompetensnamn.
+        var skills = await db.Skills.ToListAsync();
+        var skillNamn = skills.ToDictionary(s => s.Id, s => s.Namn);
+        var empSkills = await db.EmployeeSkills.ToListAsync();
+        var kompMap = empSkills
+            .GroupBy(es => es.AnstallId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Where(es => skillNamn.ContainsKey(es.SkillId))
+                      .Select(es => skillNamn[es.SkillId])
+                      .Distinct()
+                      .ToList());
+
+        var employees = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
+        return employees
+            .Where(e => e.Anstallningar.Any(a => a.EnhetId == enhet && a.Giltighetsperiod.IsActiveOn(idag)))
+            .Select(e => new PersonalInfo
+            {
+                AnstallId = e.Id,
+                Namn = $"{e.Fornamn} {e.Efternamn}",
+                Sysselsattningsgrad = e.AktivAnstallning(idag)?.Sysselsattningsgrad.Value ?? 100m,
+                Kompetenser = kompMap.GetValueOrDefault(e.Id.Value) ?? [],
+                LedigaDagar = []
+            })
+            .ToList();
+    }
+
+    private async Task Generera()
+    {
+        if (_valdMall == Guid.Empty || _periodFran is null || _periodTill is null) return;
+        if (_periodTill < _periodFran)
+        {
+            Snackbar.Add("Slutdatum kan inte vara före startdatum.", Severity.Error);
+            return;
+        }
+
+        _arbetar = true;
+        try
+        {
+            var mall = _mallarForEnhet.FirstOrDefault(m => m.Id.Value == _valdMall);
+            if (mall is null)
+            {
+                Snackbar.Add("Vald mall kunde inte hittas.", Severity.Error);
+                return;
+            }
+
+            var personal = await HamtaPersonalAsync(_valdEnhet);
+            _antalPersonal = personal.Count;
+
+            var fran = DateOnly.FromDateTime(_periodFran.Value);
+            var till = DateOnly.FromDateTime(_periodTill.Value);
+
+            var request = BehovsstyrdSchemaRequest.FranMall(
+                mall, new RegionHR.SharedKernel.Domain.DateRange(fran, till), personal, _sjukvard, _mal);
+
+            _forslag = new BehovsstyrdSchemaGenerator().Generera(request);
+
+            var lage = _forslag.FullTackning
+                ? Severity.Success
+                : Severity.Warning;
+            Snackbar.Add(
+                $"Förslag genererat: {_forslag.Tilldelningar.Count} pass, {_forslag.TackningsgradProcent:0.#}% täckning.",
+                lage);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte generera schema: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _arbetar = false;
+        }
+    }
+
+    private async Task SparaSchema()
+    {
+        if (_forslag is null || _forslag.Tilldelningar.Count == 0) return;
+
+        _sparar = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var enhet = OrganizationId.From(_valdEnhet);
+            var mall = _mallarForEnhet.FirstOrDefault(m => m.Id.Value == _valdMall);
+            var fran = _forslag.Period.Start;
+            var till = _forslag.Period.End ?? fran;
+
+            var schema = Schedule.SkapaPeriodschema(
+                enhet, $"Auto: {mall?.Namn ?? "bemanningsmall"} {fran:yyyy-MM-dd}", fran, till);
+
+            foreach (var a in _forslag.Tilldelningar)
+            {
+                var pass = schema.LaggTillPass(a.AnstallId, a.Datum, a.PassTyp, a.Start, a.Slut, a.Rast);
+                pass.OBKategori = BeraknaOB(a.PassTyp, a.Datum);
+            }
+            db.Schedules.Add(schema);
+
+            var run = SchedulingRun.Starta(enhet, fran, till,
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    mall = mall?.Namn,
+                    fran,
+                    till,
+                    mal = _mal.ToString(),
+                    sjukvard = _sjukvard
+                }));
+            run.Slutfor(_forslag.Tilldelningar.Count, _forslag.TotalOBKostnad.Amount, 0m, _forslag.ATLKompliant);
+            db.SchedulingRuns.Add(run);
+
+            await db.SaveChangesAsync();
+            Snackbar.Add($"Schema sparat som utkast med {_forslag.Tilldelningar.Count} pass.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte spara schema: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _sparar = false;
+        }
+    }
+
+    private static OBCategory BeraknaOB(ShiftType passTyp, DateOnly datum)
+    {
+        if (datum.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday) return OBCategory.Helg;
+        return passTyp switch
+        {
+            ShiftType.Natt => OBCategory.VardagNatt,
+            ShiftType.Kvall => OBCategory.VardagKvall,
+            _ => OBCategory.Ingen
+        };
+    }
+
+    private static Color LageColor(BemanningsLage lage) => lage switch
+    {
+        BemanningsLage.Underbemannad => Color.Error,
+        BemanningsLage.Overbemannad => Color.Info,
+        _ => Color.Success
+    };
+
+    private static string LageText(BemanningsLage lage) => lage switch
+    {
+        BemanningsLage.Underbemannad => "Underbemannad",
+        BemanningsLage.Overbemannad => "Överbemannad",
+        _ => "Balanserad"
+    };
+}

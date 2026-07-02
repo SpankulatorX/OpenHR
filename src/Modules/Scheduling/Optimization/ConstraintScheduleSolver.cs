@@ -23,12 +23,29 @@ namespace RegionHR.Scheduling.Optimization;
 /// </summary>
 public sealed class ConstraintScheduleSolver
 {
-    private readonly ArbetstidslagenValidator _atlValidator = new();
+    private readonly ArbetstidslagenValidator _atlValidator;
 
     /// <summary>
     /// Maximal rekursionsdjup vid backtracking.
     /// </summary>
     private const int MAX_BACKTRACK_DJUP = 3;
+
+    /// <summary>
+    /// Skapar lösaren med standardvalidering av Arbetstidslagen (11h dygnsvila).
+    /// </summary>
+    public ConstraintScheduleSolver() : this(new ArbetstidslagenValidator())
+    {
+    }
+
+    /// <summary>
+    /// Skapar lösaren med en angiven ATL-validator. Används för att aktivera
+    /// sjukvårdsundantaget (9h dygnsvila) vid behovsstyrd schemagenerering
+    /// utan att duplicera lösningslogiken.
+    /// </summary>
+    public ConstraintScheduleSolver(ArbetstidslagenValidator atlValidator)
+    {
+        _atlValidator = atlValidator ?? throw new ArgumentNullException(nameof(atlValidator));
+    }
 
     /// <summary>
     /// Lös ett schemaoptimeringsproblem.

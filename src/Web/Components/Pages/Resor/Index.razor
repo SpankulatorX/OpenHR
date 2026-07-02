@@ -2,11 +2,14 @@
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.Infrastructure.Payroll
+@using RegionHR.Infrastructure.Storage
 @using RegionHR.Travel.Domain
 @using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject TraktamentsCalculator TraktCalc
+@inject IFileStorageService Storage
+@inject IJSRuntime JS
 @inject RegionHR.Web.Services.AuthService Auth
 
 <PageTitle>OpenHR - Resor och utlägg</PageTitle>
@@ -80,9 +83,14 @@ else
                     <td>@c.Belopp.ToString("N0") kr</td>
                     <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(c.Status)">@StatusText(c.Status)</MudChip></td>
                     <td>
+                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.ReceiptLong" OnClick="@(() => VisaUtlagg(c))">Utlägg</MudButton>
+                        @if (c.Status == TravelClaimStatus.Utkast && ArEgetKrav(c))
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Class="ml-2" OnClick="@(() => SkickaInKrav(c))" Disabled="@_saving">Skicka in</MudButton>
+                        }
                         @if (c.Status == TravelClaimStatus.Inskickad && Auth.IsChef && !ArEgetKrav(c))
                         {
-                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => AttesteraKrav(c))">Godkänn</MudButton>
+                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" Class="ml-2" OnClick="@(() => AttesteraKrav(c))">Godkänn</MudButton>
                             <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" Class="ml-2" OnClick="@(() => VisaAvvisa(c))">Avvisa</MudButton>
                         }
                         else if (c.Status == TravelClaimStatus.Inskickad && Auth.IsChef && ArEgetKrav(c))
@@ -98,6 +106,85 @@ else
             }
         </tbody>
     </MudSimpleTable>
+}
+
+@if (_expenseClaimId is not null)
+{
+    <MudPaper Class="pa-5 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-secondary);">
+        <div class="d-flex justify-space-between align-center mb-3">
+            <MudText Typo="Typo.h6" Style="font-weight: 600;">Utlägg och kvitton</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="StangUtlagg" />
+        </div>
+
+        @if (_expenses.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-3">Inga utlägg registrerade på detta resekrav.</MudAlert>
+        }
+        else
+        {
+            <MudSimpleTable Hover="true" Elevation="1" Class="mb-3">
+                <thead><tr><th>Beskrivning</th><th>Belopp</th><th>Kvitto</th></tr></thead>
+                <tbody>
+                    @foreach (var e in _expenses)
+                    {
+                        <tr>
+                            <td>@e.Beskrivning</td>
+                            <td>@e.Belopp.ToString("N2") kr</td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(e.KvittoBildId))
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                                               StartIcon="@Icons.Material.Filled.Download" OnClick="@(() => LaddaNerKvitto(e))">
+                                        @KvittoFilnamn(e.KvittoBildId!)
+                                    </MudButton>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">Inget kvitto</MudText>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+
+        @if (KanRedigeraUtlagg)
+        {
+            <MudDivider Class="my-3" />
+            <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight: 600;">Lägg till utlägg</MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="5"><MudTextField @bind-Value="_expenseBeskrivning" Label="Beskrivning" Variant="Variant.Outlined" /></MudItem>
+                <MudItem xs="12" sm="3"><MudNumericField @bind-Value="_expenseBelopp" Label="Belopp (kr)" Variant="Variant.Outlined" Min="0m" /></MudItem>
+                <MudItem xs="12" sm="4" Class="d-flex align-center">
+                    <MudFileUpload T="IBrowserFile" Accept=".pdf,.jpg,.jpeg,.png" OnFilesChanged="OnKvittoSelected">
+                        <CustomContent>
+                            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                                       StartIcon="@Icons.Material.Filled.CloudUpload" OnClick="@context.OpenFilePickerAsync">
+                                Välj kvitto (valfritt)
+                            </MudButton>
+                        </CustomContent>
+                    </MudFileUpload>
+                </MudItem>
+            </MudGrid>
+            @if (_kvittoFile != null)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2"><strong>Valt kvitto:</strong> @_kvittoFile.Name (@FormatSize(_kvittoFile.Size))</MudText>
+            }
+            @if (_kvittoFileError != null)
+            {
+                <MudAlert Severity="Severity.Warning" Class="mt-2" Dense="true">@_kvittoFileError</MudAlert>
+            }
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="LaggTillUtlagg"
+                       Disabled="@(_saving || string.IsNullOrWhiteSpace(_expenseBeskrivning) || _expenseBelopp <= 0)">Lägg till utlägg</MudButton>
+        }
+        else
+        {
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">
+                Utlägg kan bara läggas till på egna resekrav med status Utkast. Kvitton kan laddas ner för granskning.
+            </MudText>
+        }
+    </MudPaper>
 }
 
 <MudDivider Class="my-6" />
@@ -120,7 +207,7 @@ else
         {
             <MudItem xs="12" md="2">
                 <MudSelect T="string" @bind-Value="_traktLand" Label="Land" Variant="Variant.Outlined">
-                    @foreach (var l in new[] { "Norge", "Danmark", "Finland", "Tyskland", "Frankrike", "Storbritannien", "USA" })
+                    @foreach (var l in TraktamentsCalculator.UtrikesLander(_traktAvresa?.Year ?? DateTime.Today.Year))
                     {
                         <MudSelectItem T="string" Value="@l">@l</MudSelectItem>
                     }
@@ -171,6 +258,22 @@ else
     private ClaimVm? _avvisaClaim;
     private string _avvisaAnledning = "";
 
+    // Utlägg och kvitton
+    private const long MaxKvittoBytes = 10 * 1024 * 1024; // 10 MB
+    private static readonly string[] TillatnaKvittoTyper = { ".pdf", ".jpg", ".jpeg", ".png" };
+    private Guid? _expenseClaimId;
+    private TravelClaimStatus _expenseClaimStatus;
+    private Guid _expenseClaimOwner;
+    private List<ExpenseVm> _expenses = [];
+    private string _expenseBeskrivning = "";
+    private decimal _expenseBelopp;
+    private IBrowserFile? _kvittoFile;
+    private string? _kvittoFileError;
+
+    private bool KanRedigeraUtlagg =>
+        _expenseClaimStatus == TravelClaimStatus.Utkast
+        && Auth.EmployeeId.HasValue && _expenseClaimOwner == Auth.EmployeeId.Value;
+
     // Traktamente
     private DateTime? _traktAvresa = DateTime.Today, _traktHemkomst = DateTime.Today.AddDays(2);
     private string _traktTyp = "Inrikes", _traktLand = "Norge";
@@ -207,12 +310,17 @@ else
         _saving = true; _error = null;
         try
         {
+            // Skapas som utkast så att utlägg och kvitton kan läggas till innan inskick.
             var claim = TravelClaim.Skapa(EmployeeId.From(Auth.EmployeeId.Value), _formBeskrivning, DateOnly.FromDateTime(_formDatum.Value));
-            claim.SkickaIn();
             db.TravelClaims.Add(claim);
             await db.SaveChangesAsync();
-            _claims.Insert(0, new ClaimVm(claim.Id, claim.AnstallId.Value, Auth.UserName ?? "Jag", claim.ReseDatum, claim.Beskrivning, claim.TotalBelopp.Amount, claim.Status));
-            _showForm = false; _success = "Resekrav skapat."; _formBeskrivning = ""; _formDatum = null;
+            var vm = new ClaimVm(claim.Id, claim.AnstallId.Value, Auth.UserName ?? "Jag", claim.ReseDatum, claim.Beskrivning, claim.TotalBelopp.Amount, claim.Status);
+            _claims.Insert(0, vm);
+            _showForm = false; _formBeskrivning = ""; _formDatum = null;
+            // Öppna utläggspanelen direkt för det nya utkastet (VisaUtlagg nollställer _success,
+            // så sätt bekräftelsen efteråt).
+            await VisaUtlagg(vm);
+            _success = "Resekrav skapat som utkast. Lägg till utlägg och kvitton, skicka sedan in för attestering.";
         }
         catch (Exception ex) { _error = $"Kunde inte skapa: {ex.Message}"; }
         finally { _saving = false; }
@@ -302,6 +410,161 @@ else
         finally { _saving = false; }
     }
 
+    // ---------- Utlägg och kvitton ----------
+
+    private async Task VisaUtlagg(ClaimVm c)
+    {
+        _error = null; _success = null;
+        _expenseClaimId = c.Id;
+        _expenseClaimStatus = c.Status;
+        _expenseClaimOwner = c.AnstallId;
+        _expenseBeskrivning = ""; _expenseBelopp = 0; _kvittoFile = null; _kvittoFileError = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await LaddaUtlaggAsync(db, c.Id);
+    }
+
+    private void StangUtlagg()
+    {
+        _expenseClaimId = null;
+        _expenses = [];
+        _kvittoFile = null; _kvittoFileError = null;
+    }
+
+    private async Task LaddaUtlaggAsync(RegionHRDbContext db, Guid claimId)
+    {
+        var claim = await db.TravelClaims.AsNoTracking()
+            .Include(c => c.Utlagg)
+            .FirstOrDefaultAsync(c => c.Id == claimId);
+        _expenses = claim is null
+            ? []
+            : claim.Utlagg.Select(u => new ExpenseVm(u.Id, u.Beskrivning, u.Belopp.Amount, u.KvittoBildId)).ToList();
+    }
+
+    private void OnKvittoSelected(InputFileChangeEventArgs e)
+    {
+        _kvittoFileError = null;
+        var file = e.File;
+        var ext = System.IO.Path.GetExtension(file.Name).ToLowerInvariant();
+        if (!TillatnaKvittoTyper.Contains(ext))
+        {
+            _kvittoFile = null;
+            _kvittoFileError = $"Otillåten filtyp ({ext}). Tillåtet: PDF, JPG, PNG.";
+            return;
+        }
+        if (file.Size > MaxKvittoBytes)
+        {
+            _kvittoFile = null;
+            _kvittoFileError = "Filen är för stor (max 10 MB).";
+            return;
+        }
+        _kvittoFile = file;
+    }
+
+    private async Task LaggTillUtlagg()
+    {
+        if (_expenseClaimId is null) return;
+        _error = null; _success = null;
+        if (string.IsNullOrWhiteSpace(_expenseBeskrivning)) { _kvittoFileError = "Ange en beskrivning för utlägget."; return; }
+        if (_expenseBelopp <= 0) { _kvittoFileError = "Ange ett belopp större än noll."; return; }
+        _saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            // Ladda med utläggen så att totalberäkningen behåller tidigare utlägg.
+            var claim = await db.TravelClaims.Include(c => c.Utlagg).FirstOrDefaultAsync(c => c.Id == _expenseClaimId);
+            if (claim is null) { _error = "Resekravet kunde inte hittas."; return; }
+            if (claim.Status != TravelClaimStatus.Utkast) { _error = "Utlägg kan bara läggas till på resekrav med status Utkast."; return; }
+            if (!(Auth.EmployeeId.HasValue && claim.AnstallId.Value == Auth.EmployeeId.Value))
+            {
+                _error = "Du kan bara lägga till utlägg på dina egna resekrav.";
+                return;
+            }
+
+            string? kvittoId = null;
+            if (_kvittoFile is not null)
+            {
+                using var stream = _kvittoFile.OpenReadStream(maxAllowedSize: MaxKvittoBytes);
+                // Sparas via IFileStorageService (kategori "kvitton"); returnerad lagringsväg blir KvittoBildId.
+                kvittoId = await Storage.UploadAsync("kvitton", _kvittoFile.Name, stream);
+            }
+
+            claim.LaggTillUtlagg(_expenseBeskrivning.Trim(), Money.SEK(_expenseBelopp), kvittoId);
+            await db.SaveChangesAsync();
+
+            await LaddaUtlaggAsync(db, claim.Id);
+            await LaddaKravAsync(db);
+            _success = kvittoId is null ? "Utlägg tillagt." : "Utlägg med kvitto tillagt.";
+            _expenseBeskrivning = ""; _expenseBelopp = 0; _kvittoFile = null; _kvittoFileError = null;
+        }
+        catch (Exception ex) { _error = $"Kunde inte lägga till utlägg: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task LaddaNerKvitto(ExpenseVm e)
+    {
+        var kvittoId = e.KvittoBildId;
+        if (string.IsNullOrEmpty(kvittoId)) return;
+        _error = null;
+        try
+        {
+            await using var stream = await Storage.DownloadAsync(kvittoId);
+            if (stream is null) { _error = "Kvittofilen kunde inte hittas i lagringen."; return; }
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            var filnamn = KvittoFilnamn(kvittoId);
+            var base64 = Convert.ToBase64String(ms.ToArray());
+            await JS.InvokeVoidAsync("downloadFile", filnamn, base64, MimeForFil(filnamn));
+        }
+        catch (Exception ex) { _error = $"Kunde inte ladda ner kvitto: {ex.Message}"; }
+    }
+
+    private async Task SkickaInKrav(ClaimVm c)
+    {
+        _error = null; _success = null;
+        if (!(Auth.EmployeeId.HasValue && c.AnstallId == Auth.EmployeeId.Value))
+        {
+            _error = "Du kan bara skicka in dina egna resekrav.";
+            return;
+        }
+        _saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var claim = await db.TravelClaims.FirstOrDefaultAsync(x => x.Id == c.Id);
+            if (claim is null) { _error = "Resekravet kunde inte hittas."; return; }
+            claim.SkickaIn();
+            await db.SaveChangesAsync();
+            await LaddaKravAsync(db);
+            _success = "Resekrav inskickat för attestering.";
+            if (_expenseClaimId == c.Id) _expenseClaimStatus = TravelClaimStatus.Inskickad;
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    // Storage-vägen är "{guid}_{originalnamn}" i sista segmentet — visa originalnamnet.
+    private static string KvittoFilnamn(string storagePath)
+    {
+        var name = System.IO.Path.GetFileName(storagePath);
+        var idx = name.IndexOf('_');
+        return idx >= 0 && idx < name.Length - 1 ? name[(idx + 1)..] : name;
+    }
+
+    private static string MimeForFil(string filnamn) => System.IO.Path.GetExtension(filnamn).ToLowerInvariant() switch
+    {
+        ".pdf" => "application/pdf",
+        ".png" => "image/png",
+        ".jpg" or ".jpeg" => "image/jpeg",
+        _ => "application/octet-stream"
+    };
+
+    private static string FormatSize(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+        return $"{bytes / (1024.0 * 1024):F1} MB";
+    }
+
     private void BeraknaTraktamente()
     {
         _traktResultat = null; _traktFel = null;
@@ -328,5 +591,7 @@ else
     };
 
     private record ClaimVm(Guid Id, Guid AnstallId, string Namn, DateOnly Datum, string Beskrivning, decimal Belopp, TravelClaimStatus Status);
+
+    private record ExpenseVm(Guid Id, string Beskrivning, decimal Belopp, string? KvittoBildId);
 }
 

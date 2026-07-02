@@ -18,8 +18,13 @@ namespace RegionHR.Infrastructure.Payroll;
 ///
 /// Utlands-normalbeloppen (per land) fastställs årligen i Skatteverkets allmänna råd
 /// ("Normalbelopp för ökade levnadskostnader i utlandet"). Den fullständiga listan (~200 länder)
-/// bör laddas från datakälla/DB — tabellen i <see cref="UtrikesNormalbelopp"/> är en <b>provisorisk
-/// delmängd</b> för att UI:t ska fungera och ska verifieras mot årets allmänna råd innan produktion.
+/// publiceras även som CSV/API på skatteverket.se/utlandstraktamente och bör på sikt laddas
+/// därifrån. Tabellen i <see cref="UtrikesNormalbelopp"/> täcker ~50 av de vanligaste
+/// resmålen för inkomstår 2026 och är <b>urvalsverifierad</b>: de belopp som ingår är avstämda
+/// mot Skatteverkets normalbelopp 2026 via två oberoende sammanställningar (Björn Lundén samt
+/// foretagande.se, hämtade 2026-07) som samstämmigt återger Skatteverkets värden. Länder som
+/// saknas i tabellen faller tillbaka på det dokumenterade default-normalbeloppet
+/// (<see cref="UtrikesDefaultNormalbelopp"/>, "Övriga länder och områden").
 /// </summary>
 public class TraktamentsCalculator
 {
@@ -41,21 +46,44 @@ public class TraktamentsCalculator
     };
 
     /// <summary>
-    /// Provisorisk utlands-normalbelopp/hel dag i SEK (verifieras mot Skatteverkets allmänna råd).
-    /// Nycklar i gemener. Land som saknas → <see cref="UtrikesDefaultNormalbelopp"/>.
+    /// Utlands-normalbelopp/hel dag i SEK per land och inkomstår, avstämt mot Skatteverkets
+    /// normalbelopp 2026 (se klassdok för källor). Nycklar lagras med svenskt visningsnamn men
+    /// slås upp skiftlägesokänsligt (<see cref="StringComparer.OrdinalIgnoreCase"/>). Land som
+    /// saknas → <see cref="UtrikesDefaultNormalbelopp"/>.
     /// </summary>
     private static readonly IReadOnlyDictionary<int, IReadOnlyDictionary<string, decimal>> UtrikesNormalbelopp =
         new Dictionary<int, IReadOnlyDictionary<string, decimal>>
         {
-            [2026] = new Dictionary<string, decimal>
+            // Inkomstår 2026 — Skatteverkets normalbelopp (SKV allmänna råd, hel dag exkl. logi).
+            // Belopp urvalsverifierade mot två oberoende sammanställningar (se klassdok).
+            [2026] = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase)
             {
-                ["norge"] = 1054m, ["danmark"] = 1226m, ["finland"] = 968m,
-                ["tyskland"] = 760m, ["frankrike"] = 850m, ["storbritannien"] = 901m,
-                ["usa"] = 1049m, ["spanien"] = 635m, ["italien"] = 802m,
+                // Norden
+                ["Norge"] = 1054m, ["Danmark"] = 1226m, ["Finland"] = 968m, ["Island"] = 1125m,
+                // Västeuropa
+                ["Tyskland"] = 760m, ["Frankrike"] = 850m, ["Storbritannien"] = 901m,
+                ["Spanien"] = 635m, ["Italien"] = 802m, ["Belgien"] = 897m,
+                ["Nederländerna"] = 745m, ["Schweiz"] = 1332m, ["Österrike"] = 730m,
+                ["Portugal"] = 616m, ["Irland"] = 1038m, ["Luxemburg"] = 953m,
+                // Central- och Östeuropa
+                ["Polen"] = 597m, ["Tjeckien"] = 695m, ["Ungern"] = 679m, ["Kroatien"] = 550m,
+                ["Slovenien"] = 574m, ["Slovakien"] = 737m, ["Rumänien"] = 414m, ["Bulgarien"] = 459m,
+                ["Estland"] = 683m, ["Lettland"] = 763m, ["Litauen"] = 635m, ["Ryssland"] = 661m,
+                // Nord- och Sydamerika
+                ["USA"] = 1049m, ["Kanada"] = 895m, ["Mexiko"] = 562m, ["Brasilien"] = 376m,
+                ["Argentina"] = 388m,
+                // Asien och Mellanöstern
+                ["Japan"] = 386m, ["Kina"] = 581m, ["Indien"] = 300m, ["Sydkorea"] = 517m,
+                ["Singapore"] = 845m, ["Hongkong"] = 895m, ["Thailand"] = 521m, ["Vietnam"] = 328m,
+                ["Indonesien"] = 418m, ["Malaysia"] = 319m, ["Filippinerna"] = 466m,
+                ["Förenade Arabemiraten"] = 883m, ["Israel"] = 956m, ["Turkiet"] = 366m,
+                // Afrika och Oceanien
+                ["Egypten"] = 300m, ["Marocko"] = 507m, ["Sydafrika"] = 349m,
+                ["Australien"] = 727m, ["Nya Zeeland"] = 525m,
             },
         };
 
-    /// <summary>"Övriga länder och områden" — dokumenterad default när land saknas i tabellen (provisorisk).</summary>
+    /// <summary>"Övriga länder och områden" — dokumenterad default när land saknas i tabellen.</summary>
     public const decimal UtrikesDefaultNormalbelopp = 493m;
 
     /// <summary>Hämtar satser för angivet inkomstår med fallback till närmaste tidigare kända år (annars äldsta).</summary>
@@ -70,18 +98,33 @@ public class TraktamentsCalculator
         return Satser[narmaste];
     }
 
-    /// <summary>Utlands-normalbelopp för land/år (provisoriskt, se klassdok). Okänt land → default.</summary>
+    /// <summary>Utlands-normalbelopp för land/år (se klassdok för källor). Okänt land → default.</summary>
     public static decimal GetUtrikesNormalbelopp(string land, int inkomstAr)
     {
-        var arNycklar = UtrikesNormalbelopp.Keys.OrderBy(k => k).ToList();
-        var arKey = UtrikesNormalbelopp.ContainsKey(inkomstAr)
-            ? inkomstAr
-            : (inkomstAr < arNycklar[0] ? arNycklar[0] : arNycklar.Where(k => k <= inkomstAr).Max());
-
-        var tabell = UtrikesNormalbelopp[arKey];
-        return tabell.TryGetValue((land ?? string.Empty).Trim().ToLowerInvariant(), out var belopp)
+        var tabell = UtrikesNormalbelopp[ResolveNormalbeloppArKey(inkomstAr)];
+        // Skiftlägesokänslig uppslagning (comparer = OrdinalIgnoreCase); Trim tål mellanslag i UI-val.
+        return tabell.TryGetValue((land ?? string.Empty).Trim(), out var belopp)
             ? belopp
             : UtrikesDefaultNormalbelopp;
+    }
+
+    /// <summary>
+    /// Länder (svenska visningsnamn) som har ett fastställt normalbelopp för angivet inkomstår,
+    /// sorterade alfabetiskt. Avsett för landsval i UI. Övriga länder använder
+    /// <see cref="UtrikesDefaultNormalbelopp"/> och behöver inte listas.
+    /// </summary>
+    public static IReadOnlyList<string> UtrikesLander(int inkomstAr)
+        => UtrikesNormalbelopp[ResolveNormalbeloppArKey(inkomstAr)]
+            .Keys
+            .OrderBy(k => k, StringComparer.Create(new System.Globalization.CultureInfo("sv-SE"), ignoreCase: false))
+            .ToList();
+
+    /// <summary>Väljer tabellår med fallback till närmaste tidigare år (annars äldsta kända).</summary>
+    private static int ResolveNormalbeloppArKey(int inkomstAr)
+    {
+        if (UtrikesNormalbelopp.ContainsKey(inkomstAr)) return inkomstAr;
+        var arNycklar = UtrikesNormalbelopp.Keys.OrderBy(k => k).ToList();
+        return inkomstAr < arNycklar[0] ? arNycklar[0] : arNycklar.Where(k => k <= inkomstAr).Max();
     }
 
     /// <summary>

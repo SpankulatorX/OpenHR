@@ -1,0 +1,295 @@
+@page "/halsosam/{Id:guid}/fk-anmalan"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Text
+@using RegionHR.HalsoSAM.Domain
+@using RegionHR.HalsoSAM.Services
+@using RegionHR.IntegrationHub.Adapters.Forsakringskassan
+@using RegionHR.Infrastructure.Persistence
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+@inject RegionHR.Web.Services.AuthService Auth
+
+<PageTitle>OpenHR — FK-anmälan</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary"
+           Href="/halsosam" Style="margin-bottom: 1rem;">Tillbaka till översikt</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Sjukanmälan till Försäkringskassan</MudText>
+
+<MudAlert Severity="Severity.Warning" Variant="Variant.Filled" Class="mb-4" Icon="@Icons.Material.Filled.CloudOff">
+    <strong>Ingen skarp FK-koppling.</strong> OpenHR genererar anmälningsfilen som underlag.
+    Skarp överföring till Försäkringskassans e-tjänst kräver tecknat avtal och teknisk
+    anslutning — filen måste därför lämnas in manuellt tills anslutningen är på plats.
+</MudAlert>
+
+@if (!Auth.IsHR)
+{
+    <MudAlert Severity="Severity.Info">
+        FK-anmälan innehåller lönekänsliga (sjukersättningsgrundande) uppgifter och hanteras av HR/Admin.
+    </MudAlert>
+}
+else if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else if (_case == null)
+{
+    <MudAlert Severity="Severity.Warning">Rehabärendet hittades inte.</MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-5 mb-4" Elevation="2">
+        <MudText Typo="Typo.subtitle1" Style="font-weight: 600;" Class="mb-1">@_empNamn</MudText>
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+            Personnummer: @_pnrMask · Arbetsgivare: @_arbetsgivareNamn
+            @(string.IsNullOrWhiteSpace(_arbetsgivareOrgNr) ? "" : $" (org.nr {_arbetsgivareOrgNr})")
+        </MudText>
+
+        @if (!_case.SjukfallDag1.HasValue)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Text" Dense="true" Class="mt-3">
+                Sjukfallets dag 1 saknas på ärendet — anmälan kan inte beräknas. Registrera dag 1 på
+                <MudLink Href="@($"/halsosam/{_case.Id}/uppfoljning")">uppföljningssidan</MudLink> först.
+            </MudAlert>
+        }
+        else
+        {
+            <MudGrid Spacing="3" Class="mt-2">
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Första sjukdag</MudText>
+                    <MudText Style="font-weight: 600;">@_case.SjukfallDag1.Value.ToString("yyyy-MM-dd")</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Sjukdagar hittills</MudText>
+                    <MudText Style="font-weight: 600;">@(_bedomning?.AntalKalenderdagar.ToString() ?? "—")</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">FK-anmälan aktuell (dag 15)</MudText>
+                    <MudChip T="string" Size="Size.Small" Color="@((_bedomning?.ArFKAnmalanAktuell ?? false) ? Color.Success : Color.Warning)">
+                        @((_bedomning?.ArFKAnmalanAktuell ?? false) ? "Ja" : "Ännu ej")
+                    </MudChip>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">FK tar vid</MudText>
+                    <MudText Style="font-weight: 600;">@(_bedomning?.ForsakringskassanFranDatum.ToString("yyyy-MM-dd") ?? "—")</MudText>
+                </MudItem>
+            </MudGrid>
+        }
+    </MudPaper>
+
+    @if (_case.SjukfallDag1.HasValue)
+    {
+        <MudPaper Class="pa-5 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Uppgifter för anmälan</MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="int" @bind-Value="_sjukskrivningsgrad" Label="Sjukskrivningsgrad" Variant="Variant.Outlined">
+                        <MudSelectItem T="int" Value="25">25 %</MudSelectItem>
+                        <MudSelectItem T="int" Value="50">50 %</MudSelectItem>
+                        <MudSelectItem T="int" Value="75">75 %</MudSelectItem>
+                        <MudSelectItem T="int" Value="100">100 %</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudNumericField T="decimal?" @bind-Value="_utbetaldSjuklon" Label="Utbetald sjuklön (kr, valfritt)"
+                                     Variant="Variant.Outlined" HideSpinButtons="true" />
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="d-flex align-center">
+                    <MudCheckBox T="bool" @bind-Value="_lakarintygFinns" Label="Läkarintyg finns" Color="Color.Primary" />
+                </MudItem>
+                @if (_lakarintygFinns)
+                {
+                    <MudItem xs="12" sm="4">
+                        <MudDatePicker @bind-Date="_lakarintygDatum" Label="Läkarintygets datum"
+                                       Variant="Variant.Outlined" MaxDate="DateTime.Today" />
+                    </MudItem>
+                }
+            </MudGrid>
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-4"
+                       Style="min-height: 48px;" OnClick="Generera"
+                       StartIcon="@Icons.Material.Filled.Description" Disabled="@_genererar">
+                Ta fram FK-anmälan
+            </MudButton>
+        </MudPaper>
+    }
+
+    @if (_result != null)
+    {
+        @if (!_result.Giltig)
+        {
+            <MudAlert Severity="Severity.Error" Class="mb-4">
+                Anmälan kunde inte genereras:
+                <ul style="margin: 0.25rem 0 0 1rem;">
+                    @foreach (var f in _result.Fel) { <li>@f</li> }
+                </ul>
+            </MudAlert>
+        }
+        else
+        {
+            <MudPaper Class="pa-5 mb-4" Elevation="2">
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <MudText Typo="Typo.h6" Style="font-weight: 600;">Genererad anmälan</MudText>
+                    <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                               OnClick="LaddaNer" StartIcon="@Icons.Material.Filled.Download"
+                               Disabled="@_genererar">
+                        Ladda ner (@_result.Filnamn)
+                    </MudButton>
+                </div>
+
+                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Class="mb-3">
+                    Överföringsstatus: @_result.Overforingsstatus
+                </MudChip>
+
+                @if (_result.Varningar.Count > 0)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Text" Dense="true" Class="mb-3">
+                        <ul style="margin: 0 0 0 1rem;">
+                            @foreach (var v in _result.Varningar) { <li>@v</li> }
+                        </ul>
+                    </MudAlert>
+                }
+
+                <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600;">Sammanfattning</MudText>
+                <pre style="white-space: pre-wrap; background: var(--mud-palette-background-grey); padding: 1rem; border-radius: 4px; font-size: 0.85rem; overflow-x: auto;">@_result.Sammanfattning</pre>
+
+                <MudButton Variant="Variant.Text" Color="Color.Primary" Class="mt-3"
+                           OnClick="@(() => _visaXml = !_visaXml)"
+                           StartIcon="@(_visaXml ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)">
+                    @(_visaXml ? "Dölj XML-innehåll" : "Visa XML-innehåll")
+                </MudButton>
+                @if (_visaXml)
+                {
+                    <pre style="white-space: pre-wrap; font-size: 0.8rem; overflow-x: auto; background: var(--mud-palette-background-grey); padding: 1rem; border-radius: 4px;">@_result.XmlInnehall</pre>
+                }
+            </MudPaper>
+        }
+    }
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private RehabCase? _case;
+    private string _empNamn = "Okänd";
+    private string _pnrMask = "";
+    private string _arbetsgivareNamn = "";
+    private string _arbetsgivareOrgNr = "";
+    private string _personnummer = "";
+    private string _fornamn = "";
+    private string _efternamn = "";
+    private decimal? _manadslon;
+    private decimal? _sysselsattningsgrad;
+
+    private FKAnmalanBedomning? _bedomning;
+
+    // Formulärfält
+    private int _sjukskrivningsgrad = 100;
+    private decimal? _utbetaldSjuklon;
+    private bool _lakarintygFinns;
+    private DateTime? _lakarintygDatum;
+
+    private FKAnmalanResult? _result;
+    private bool _loading = true, _genererar, _visaXml;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Lönekänslig sida — ladda ingen data för användare utan HR/Admin-behörighet.
+        if (!Auth.IsHR) { _loading = false; return; }
+
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _case = await db.RehabCases
+                .Include(c => c.Uppfoljningar)
+                .FirstOrDefaultAsync(c => c.Id == Id);
+
+            if (_case == null) return;
+
+            var emp = await db.Employees
+                .Include(e => e.Anstallningar)
+                .FirstOrDefaultAsync(e => e.Id == _case.AnstallId);
+
+            if (emp != null)
+            {
+                _empNamn = $"{emp.Fornamn} {emp.Efternamn}";
+                _fornamn = emp.Fornamn;
+                _efternamn = emp.Efternamn;
+                _personnummer = emp.Personnummer.ToString();
+                _pnrMask = emp.Personnummer.ToMaskedString();
+
+                var idag = DateOnly.FromDateTime(DateTime.Today);
+                var aktiv = emp.Anstallningar.FirstOrDefault(a => a.Giltighetsperiod.IsActiveOn(idag))
+                            ?? emp.Anstallningar.OrderByDescending(a => a.Giltighetsperiod.Start).FirstOrDefault();
+                if (aktiv != null)
+                {
+                    _manadslon = aktiv.Manadslon.Amount;
+                    _sysselsattningsgrad = aktiv.Sysselsattningsgrad.Value;
+                }
+            }
+
+            var tenant = await db.TenantConfigurations
+                .Where(t => t.ArAktiv)
+                .OrderByDescending(t => t.SkapadVid)
+                .FirstOrDefaultAsync()
+                ?? await db.TenantConfigurations.FirstOrDefaultAsync();
+            _arbetsgivareNamn = tenant?.TenantNamn ?? "Arbetsgivare ej konfigurerad";
+            _arbetsgivareOrgNr = tenant?.Organisationsnummer ?? "";
+
+            if (_case.SjukfallDag1 is { } dag1)
+                _bedomning = FKAnmalanBedomning.For(dag1, sistaSjukdag: null,
+                    DateOnly.FromDateTime(DateTime.Today), _lakarintygFinns);
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta data: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private void Generera()
+    {
+        if (_case?.SjukfallDag1 is not { } dag1) return;
+        _genererar = true;
+        try
+        {
+            var input = new FKAnmalanInput
+            {
+                Typ = FKAnmalanTyp.Rehabarende,
+                Personnummer = _personnummer,
+                Fornamn = _fornamn,
+                Efternamn = _efternamn,
+                ArbetsgivareNamn = _arbetsgivareNamn,
+                ArbetsgivareOrgNr = _arbetsgivareOrgNr,
+                SjukfranvaroStart = dag1,
+                SjukfranvaroSlut = null, // pågående rehabärende
+                Sjukskrivningsgrad = _sjukskrivningsgrad,
+                Manadslon = _manadslon,
+                Sysselsattningsgrad = _sysselsattningsgrad,
+                UtbetaldSjuklon = _utbetaldSjuklon,
+                LakarintygFinns = _lakarintygFinns,
+                LakarintygDatum = _lakarintygDatum.HasValue
+                    ? DateOnly.FromDateTime(_lakarintygDatum.Value)
+                    : null,
+                Idag = DateOnly.FromDateTime(DateTime.Today)
+            };
+
+            _result = new FKAnmalanGenerator().Generera(input);
+        }
+        catch (Exception ex) { _error = $"Kunde inte generera anmälan: {ex.Message}"; }
+        finally { _genererar = false; }
+    }
+
+    private async Task LaddaNer()
+    {
+        if (_result is null || !_result.Giltig) return;
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }
+            .Concat(Encoding.UTF8.GetBytes(_result.XmlInnehall)).ToArray();
+        var base64 = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("downloadFile", _result.Filnamn, base64, "application/xml");
+    }
+}

@@ -87,6 +87,11 @@ public static class DependencyInjection
         // LAS — skrivväg + repo (våg 2)
         services.AddScoped<RegionHR.LAS.Services.ILASRepository, RegionHR.Infrastructure.LAS.LASRepository>();
         services.AddScoped<RegionHR.LAS.Services.LASService>();
+        // LAS auto-kedja (våg 6): anställningsevents → LAS-ackumulering automatiskt
+        services.AddScoped<RegionHR.LAS.Services.IEmploymentLookup, RegionHR.Infrastructure.LAS.EmploymentLookup>();
+        services.AddScoped<RegionHR.LAS.Services.LASAutoChainService>();
+        services.AddScoped<IDomainEventHandler<RegionHR.Core.Domain.EmploymentCreatedEvent>, RegionHR.Infrastructure.LAS.EmploymentCreatedLASHandler>();
+        services.AddScoped<IDomainEventHandler<RegionHR.Core.Domain.EmploymentEndedEvent>, RegionHR.Infrastructure.LAS.EmploymentEndedLASHandler>();
 
         // HSA-katalogen (Inera) — DEMO/sandbox. Byt SandboxHsaCatalogAdapter mot skarp
         // adapter (Inera-avtal + SITHS-cert + WS/LDAP-endpoint) när det finns. (våg 2)
