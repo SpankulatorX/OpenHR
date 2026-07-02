@@ -10,6 +10,13 @@ using RegionHR.Web.Services;
 using RegionHR.Web.Components;
 using Microsoft.AspNetCore.Components.Authorization;
 
+// Npgsql 6+ mappar timestamptz strikt till UTC. Domänen sätter på många ställen
+// DateTime med Kind=Unspecified (utvecklat mot InMemory som saknar denna kontroll).
+// Legacy-läget accepterar Unspecified/Local för timestamptz — annars kastar varje
+// sådan write (seed OCH användarskapade poster) i drift. Måste sättas före första
+// Npgsql-datakälla byggs.
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Structured JSON logging
