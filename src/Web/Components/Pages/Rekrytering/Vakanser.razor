@@ -1,10 +1,10 @@
 @page "/rekrytering/vakanser"
 @layout RegionHR.Web.Components.Layout.AdminLayout
-@using RegionHR.Infrastructure.Persistence
 @using RegionHR.Recruitment.Domain
 @using RegionHR.SharedKernel.Domain
-@using Microsoft.EntityFrameworkCore
-@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@using RegionHR.Web.Services
+@inject RekryteringService Service
+@inject NavigationManager Nav
 
 <PageTitle>OpenHR - Rekrytering</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -15,11 +15,16 @@
 else if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert> }
 else
 {
+    @if (_flashMeddelande is not null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _flashMeddelande = null)">@_flashMeddelande</MudAlert>
+    }
+
     <MudGrid Spacing="3" Class="mb-4">
         <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Primary" Style="font-weight: 700;">@_vakanser.Count</MudText><MudText Typo="Typo.body2">Vakanser totalt</MudText></MudPaper></MudItem>
         <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Success" Style="font-weight: 700;">@_vakanser.Count(v => v.Status == VacancyStatus.Publicerad)</MudText><MudText Typo="Typo.body2">Publicerade</MudText></MudPaper></MudItem>
-        <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Info" Style="font-weight: 700;">@_vakanser.Count(v => v.Status == VacancyStatus.Stangd)</MudText><MudText Typo="Typo.body2">Stängda</MudText></MudPaper></MudItem>
-        <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Warning" Style="font-weight: 700;">@_totalAnsokngar</MudText><MudText Typo="Typo.body2">Ansökningar</MudText></MudPaper></MudItem>
+        <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Primary" Style="font-weight: 700;">@_vakanser.Count(v => v.Status == VacancyStatus.Tillsatt)</MudText><MudText Typo="Typo.body2">Tillsatta</MudText></MudPaper></MudItem>
+        <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Warning" Style="font-weight: 700;">@_vakanser.Sum(v => v.Ansokningar.Count)</MudText><MudText Typo="Typo.body2">Ansökningar</MudText></MudPaper></MudItem>
     </MudGrid>
 
     @if (_vakanser.Count == 0) { <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga vakanser registrerade.</MudAlert> }
@@ -32,26 +37,137 @@ else
                 {
                     <tr>
                         <td><strong>@v.Titel</strong><br /><MudText Typo="Typo.caption">@v.EnhetNamn</MudText></td>
-                        <td>@v.Anstallningsform</td>
+                        <td>@FormNamn(v.Anstallningsform)</td>
                         <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(v.Status)">@StatusText(v.Status)</MudChip></td>
                         <td>@(v.SistaAnsokningsDag.ToString("yyyy-MM-dd"))</td>
-                        <td>@v.AntalAnsokngar</td>
-                        <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => _valdVakans = _valdVakans == v ? null : v)">Visa</MudButton></td>
+                        <td>@v.Ansokningar.Count</td>
+                        <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => VaxlaVakans(v.Id))">@(_oppenVakansId == v.Id ? "Dölj" : "Hantera")</MudButton></td>
                     </tr>
-                    @if (_valdVakans == v)
+                    @if (_oppenVakansId == v.Id)
                     {
                         <tr><td colspan="6">
                             <MudPaper Class="pa-4" Elevation="0" Style="background: var(--mud-palette-background-grey);">
-                                <MudText Typo="Typo.body2" Class="mb-2">@v.Beskrivning</MudText>
-                                @if (v.AntalAnsokngar > 0)
+                                @if (v.Ansokningar.Count == 0)
                                 {
-                                    <MudText Typo="Typo.subtitle2" Class="mb-1">Ansökningar:</MudText>
-                                    @foreach (var a in v.Ansokngar)
+                                    <MudText Typo="Typo.body2">Inga ansökningar än.</MudText>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.subtitle2" Class="mb-2">Kandidater — flöde ansökan → erbjudande → tillsättning</MudText>
+                                    @foreach (var a in v.Ansokningar)
                                     {
-                                        <MudText Typo="Typo.body2">@a.Namn — @a.Epost — <MudChip T="string" Size="Size.Small">@a.Status</MudChip></MudText>
+                                        <MudPaper Class="pa-3 mb-2" Elevation="1">
+                                            <div class="d-flex justify-space-between align-center flex-wrap">
+                                                <div>
+                                                    <MudText Typo="Typo.body1" Style="font-weight: 600;">@a.Namn</MudText>
+                                                    <MudText Typo="Typo.caption">@a.Epost @(a.Poang is int p ? $"· {p} poäng" : "")</MudText>
+                                                </div>
+                                                <div class="d-flex align-center" style="gap: 0.5rem;">
+                                                    <MudChip T="string" Size="Size.Small" Color="@AnsFarg(a.Status)">@AnsStatusText(a.Status)</MudChip>
+                                                    @switch (a.Status)
+                                                    {
+                                                        case ApplicationStatus.Mottagen:
+                                                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => OppnaBedom(a))">Bedöm</MudButton>
+                                                            break;
+                                                        case ApplicationStatus.UnderGranskning:
+                                                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => OppnaIntervju(a))">Boka intervju</MudButton>
+                                                            break;
+                                                        case ApplicationStatus.Intervju:
+                                                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ErbjudTjanst(v, a))">Erbjud tjänst</MudButton>
+                                                            break;
+                                                        case ApplicationStatus.Erbjudande:
+                                                            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => OppnaTillsatt(v, a))">Tillsätt &amp; anställ</MudButton>
+                                                            break;
+                                                    }
+                                                    @if (a.Status is not ApplicationStatus.Anstalld and not ApplicationStatus.Avslagen)
+                                                    {
+                                                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => OppnaAvsla(a))">Avslå</MudButton>
+                                                    }
+                                                </div>
+                                            </div>
+
+                                            @if (_aktivAnsokanId == a.Id)
+                                            {
+                                                <div class="mt-3">
+                                                    @if (_felmeddelande is not null)
+                                                    {
+                                                        <MudAlert Severity="Severity.Error" Class="mb-3">@_felmeddelande</MudAlert>
+                                                    }
+                                                    @switch (_lage)
+                                                    {
+                                                        case Lage.Bedom:
+                                                            <MudText Typo="Typo.subtitle2" Class="mb-2">Bedöm kandidat</MudText>
+                                                            <MudGrid Spacing="2">
+                                                                <MudItem xs="12" sm="3"><MudNumericField @bind-Value="_poang" Label="Poäng (0–100)" Min="0" Max="100" Variant="Variant.Outlined" /></MudItem>
+                                                                <MudItem xs="12" sm="9"><MudTextField @bind-Value="_kommentar" Label="Kommentar" Variant="Variant.Outlined" /></MudItem>
+                                                            </MudGrid>
+                                                            <div class="mt-2 d-flex" style="gap: 0.5rem;">
+                                                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@_sparar" OnClick="@(() => SparaBedomning(v, a))">Spara bedömning</MudButton>
+                                                                <MudButton Variant="Variant.Text" OnClick="Avbryt">Avbryt</MudButton>
+                                                            </div>
+                                                            break;
+                                                        case Lage.Intervju:
+                                                            <MudText Typo="Typo.subtitle2" Class="mb-2">Boka intervju</MudText>
+                                                            <MudGrid Spacing="2">
+                                                                <MudItem xs="12" sm="6"><MudDatePicker @bind-Date="_intervjuDatum" Label="Intervjudatum" Variant="Variant.Outlined" /></MudItem>
+                                                            </MudGrid>
+                                                            <div class="mt-2 d-flex" style="gap: 0.5rem;">
+                                                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@_sparar" OnClick="@(() => BokaIntervju(v, a))">Boka intervju</MudButton>
+                                                                <MudButton Variant="Variant.Text" OnClick="Avbryt">Avbryt</MudButton>
+                                                            </div>
+                                                            break;
+                                                        case Lage.Avsla:
+                                                            <MudText Typo="Typo.subtitle2" Class="mb-2">Avslå ansökan</MudText>
+                                                            <MudTextField @bind-Value="_avslagAnledning" Label="Anledning" Variant="Variant.Outlined" />
+                                                            <div class="mt-2 d-flex" style="gap: 0.5rem;">
+                                                                <MudButton Variant="Variant.Filled" Color="Color.Error" Disabled="@_sparar" OnClick="@(() => Avsla(v, a))">Bekräfta avslag</MudButton>
+                                                                <MudButton Variant="Variant.Text" OnClick="Avbryt">Avbryt</MudButton>
+                                                            </div>
+                                                            break;
+                                                        case Lage.Tillsatt:
+                                                            <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600;">Tillsätt tjänsten &amp; skapa anställning</MudText>
+                                                            <MudText Typo="Typo.caption" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                                                                Kandidaten blir en riktig anställd på @v.EnhetNamn. Systemet kontrollerar att anställningen följer LAS.
+                                                            </MudText>
+                                                            <MudGrid Spacing="2">
+                                                                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_tPersonnummer" Label="Personnummer" Placeholder="ÅÅÅÅMMDD-NNNN" Variant="Variant.Outlined" Required="true" /></MudItem>
+                                                                <MudItem xs="12" sm="3"><MudTextField @bind-Value="_tFornamn" Label="Förnamn" Variant="Variant.Outlined" Required="true" /></MudItem>
+                                                                <MudItem xs="12" sm="3"><MudTextField @bind-Value="_tEfternamn" Label="Efternamn" Variant="Variant.Outlined" Required="true" /></MudItem>
+                                                                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_tEpost" Label="E-post" Variant="Variant.Outlined" InputType="InputType.Email" /></MudItem>
+                                                                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_tTelefon" Label="Telefon" Variant="Variant.Outlined" InputType="InputType.Telephone" /></MudItem>
+                                                                <MudItem xs="12" sm="6">
+                                                                    <MudSelect T="EmploymentType" @bind-Value="_tAnstallningsform" Label="Anställningsform" Variant="Variant.Outlined">
+                                                                        @foreach (var f in Enum.GetValues<EmploymentType>())
+                                                                        {
+                                                                            <MudSelectItem T="EmploymentType" Value="@f">@FormNamn(f)</MudSelectItem>
+                                                                        }
+                                                                    </MudSelect>
+                                                                </MudItem>
+                                                                <MudItem xs="12" sm="6">
+                                                                    <MudSelect T="CollectiveAgreementType" @bind-Value="_tKollektivavtal" Label="Kollektivavtal" Variant="Variant.Outlined">
+                                                                        @foreach (var k in Enum.GetValues<CollectiveAgreementType>())
+                                                                        {
+                                                                            <MudSelectItem T="CollectiveAgreementType" Value="@k">@k</MudSelectItem>
+                                                                        }
+                                                                    </MudSelect>
+                                                                </MudItem>
+                                                                <MudItem xs="12" sm="6"><MudNumericField @bind-Value="_tManadslon" Label="Månadslön (kr, heltid)" Min="0m" Step="500m" Variant="Variant.Outlined" /></MudItem>
+                                                                <MudItem xs="12" sm="6"><MudNumericField @bind-Value="_tGrad" Label="Sysselsättningsgrad (%)" Min="1m" Max="100m" Step="5m" Variant="Variant.Outlined" /></MudItem>
+                                                                <MudItem xs="12" sm="6"><MudDatePicker @bind-Date="_tStartdatum" Label="Startdatum" Variant="Variant.Outlined" /></MudItem>
+                                                                <MudItem xs="12" sm="6"><MudDatePicker @bind-Date="_tSlutdatum" Label="@SlutdatumLabel" Variant="Variant.Outlined" Clearable="true" HelperText="@SlutdatumHjalp" /></MudItem>
+                                                                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_tBefattning" Label="Befattning" Variant="Variant.Outlined" /></MudItem>
+                                                            </MudGrid>
+                                                            <div class="mt-3 d-flex" style="gap: 0.5rem;">
+                                                                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Style="min-height: 48px;" Disabled="@_sparar" OnClick="@(() => TillsattOchAnstall(v, a))">@(_sparar ? "Anställer..." : "Tillsätt & anställ")</MudButton>
+                                                                <MudButton Variant="Variant.Outlined" OnClick="Avbryt">Avbryt</MudButton>
+                                                            </div>
+                                                            break;
+                                                    }
+                                                </div>
+                                            }
+                                        </MudPaper>
                                     }
                                 }
-                                <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => _valdVakans = null)" Class="mt-2">Stäng</MudButton>
                             </MudPaper>
                         </td></tr>
                     }
@@ -62,32 +178,185 @@ else
 }
 
 @code {
-    private List<VakansVm> _vakanser = [];
-    private VakansVm? _valdVakans;
-    private int _totalAnsokngar;
+    private enum Lage { Ingen, Bedom, Intervju, Avsla, Tillsatt }
+
+    private List<VakansOversikt> _vakanser = [];
+    private Guid? _oppenVakansId;
+    private Guid? _aktivAnsokanId;
+    private Lage _lage = Lage.Ingen;
     private bool _loading = true;
     private string? _error;
+    private string? _flashMeddelande;
+    private string? _felmeddelande;
+    private bool _sparar;
 
-    protected override async Task OnInitializedAsync()
+    // Bedöm / intervju / avslå
+    private int _poang = 70;
+    private string _kommentar = "";
+    private DateTime? _intervjuDatum = DateTime.Today.AddDays(7);
+    private string _avslagAnledning = "";
+
+    // Tillsätt-formulär
+    private string _tPersonnummer = "";
+    private string _tFornamn = "";
+    private string _tEfternamn = "";
+    private string? _tEpost;
+    private string? _tTelefon;
+    private EmploymentType _tAnstallningsform = EmploymentType.Tillsvidare;
+    private CollectiveAgreementType _tKollektivavtal = CollectiveAgreementType.AB;
+    private decimal _tManadslon = 30000m;
+    private decimal _tGrad = 100m;
+    private DateTime? _tStartdatum = DateTime.Today;
+    private DateTime? _tSlutdatum;
+    private string _tBefattning = "";
+
+    private bool KraverSlutdatum => RegionHR.Core.Domain.Employment.KraverSlutdatum(_tAnstallningsform);
+    private string SlutdatumLabel => KraverSlutdatum ? "Slutdatum (obligatoriskt)" : "Slutdatum (endast tidsbegränsad)";
+    private string SlutdatumHjalp => _tAnstallningsform switch
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        try
-        {
-            var vacancies = await db.Vacancies.OrderByDescending(v => v.SistaAnsokningsDag).ToListAsync();
-            var enheter = await db.OrganizationUnits.ToListAsync();
-            var enhetNamn = enheter.ToDictionary(e => e.Id.Value, e => e.Namn);
+        EmploymentType.Tillsvidare => "Lämna tomt — en tillsvidareanställning har inget slutdatum.",
+        EmploymentType.Provanstallning => "Provanställning får vara i högst 6 månader (LAS 6 §).",
+        _ when KraverSlutdatum => "Tidsbegränsad anställning kräver ett slutdatum.",
+        _ => ""
+    };
 
-            _vakanser = vacancies.Select(v => new VakansVm(
-                v.Titel, enhetNamn.GetValueOrDefault(v.EnhetId.Value, "—"),
-                v.Anstallningsform, v.Status, v.SistaAnsokningsDag,
-                v.Beskrivning, v.Ansokngar.Count,
-                v.Ansokngar.Select(a => new AnsVm(a.Namn, a.Epost, a.Status.ToString())).ToList()
-            )).ToList();
-            _totalAnsokngar = vacancies.Sum(v => v.Ansokngar.Count);
-        }
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        try { _vakanser = await Service.HamtaVakanserAsync(); _error = null; }
         catch (Exception ex) { _error = $"Kunde inte hämta vakanser: {ex.Message}"; }
         finally { _loading = false; }
     }
+
+    private void VaxlaVakans(Guid vakansId)
+    {
+        _oppenVakansId = _oppenVakansId == vakansId ? null : vakansId;
+        Avbryt();
+    }
+
+    private void Avbryt()
+    {
+        _aktivAnsokanId = null;
+        _lage = Lage.Ingen;
+        _felmeddelande = null;
+    }
+
+    private void OppnaBedom(AnsokanOversikt a) { StartAtgard(a, Lage.Bedom); _poang = a.Poang ?? 70; _kommentar = ""; }
+    private void OppnaIntervju(AnsokanOversikt a) { StartAtgard(a, Lage.Intervju); _intervjuDatum = DateTime.Today.AddDays(7); }
+    private void OppnaAvsla(AnsokanOversikt a) { StartAtgard(a, Lage.Avsla); _avslagAnledning = ""; }
+
+    private void OppnaTillsatt(VakansOversikt v, AnsokanOversikt a)
+    {
+        StartAtgard(a, Lage.Tillsatt);
+        var delar = a.Namn.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        _tFornamn = delar.Length > 0 ? delar[0] : "";
+        _tEfternamn = delar.Length > 1 ? delar[1] : "";
+        _tPersonnummer = "";
+        _tEpost = a.Epost;
+        _tTelefon = null;
+        _tAnstallningsform = v.Anstallningsform;
+        _tKollektivavtal = CollectiveAgreementType.AB;
+        _tManadslon = MittLon(v);
+        _tGrad = 100m;
+        _tStartdatum = DateTime.Today;
+        _tSlutdatum = null;
+        _tBefattning = v.Titel;
+    }
+
+    private void StartAtgard(AnsokanOversikt a, Lage lage) { _aktivAnsokanId = a.Id; _lage = lage; _felmeddelande = null; }
+
+    private static decimal MittLon(VakansOversikt v) => (v.LonMin, v.LonMax) switch
+    {
+        ({ } min, { } max) => Math.Round((min + max) / 2m),
+        ({ } min, null) => min,
+        (null, { } max) => max,
+        _ => 30000m
+    };
+
+    private async Task SparaBedomning(VakansOversikt v, AnsokanOversikt a) =>
+        await Kor(() => Service.BedomAsync(v.Id, a.Id, _poang, string.IsNullOrWhiteSpace(_kommentar) ? "—" : _kommentar), $"{a.Namn} bedömd ({_poang} p).");
+
+    private async Task BokaIntervju(VakansOversikt v, AnsokanOversikt a)
+    {
+        if (_intervjuDatum is null) { _felmeddelande = "Ange ett intervjudatum."; return; }
+        await Kor(() => Service.BokaIntervjuAsync(v.Id, a.Id, _intervjuDatum.Value), $"Intervju bokad för {a.Namn}.");
+    }
+
+    private async Task ErbjudTjanst(VakansOversikt v, AnsokanOversikt a) =>
+        await Kor(() => Service.ErbjudTjanstAsync(v.Id, a.Id), $"Tjänst erbjuden till {a.Namn}.");
+
+    private async Task Avsla(VakansOversikt v, AnsokanOversikt a)
+    {
+        if (string.IsNullOrWhiteSpace(_avslagAnledning)) { _felmeddelande = "Ange en anledning."; return; }
+        await Kor(() => Service.AvslutaAnsokanAsync(v.Id, a.Id, _avslagAnledning), $"{a.Namn} avslogs.");
+    }
+
+    private async Task TillsattOchAnstall(VakansOversikt v, AnsokanOversikt a)
+    {
+        if (string.IsNullOrWhiteSpace(_tPersonnummer)) { _felmeddelande = "Personnummer är obligatoriskt."; return; }
+        if (string.IsNullOrWhiteSpace(_tFornamn) || string.IsNullOrWhiteSpace(_tEfternamn)) { _felmeddelande = "För- och efternamn är obligatoriskt."; return; }
+        if (_tStartdatum is null) { _felmeddelande = "Startdatum är obligatoriskt."; return; }
+
+        var start = DateOnly.FromDateTime(_tStartdatum.Value);
+        var slut = _tSlutdatum is null ? (DateOnly?)null : DateOnly.FromDateTime(_tSlutdatum.Value);
+
+        _sparar = true;
+        _felmeddelande = null;
+        try
+        {
+            var res = await Service.TillsattOchAnstallAsync(
+                v.Id, a.Id, _tPersonnummer, _tFornamn, _tEfternamn, _tEpost, _tTelefon,
+                _tAnstallningsform, _tKollektivavtal, _tManadslon, _tGrad, start, slut, _tBefattning);
+
+            Avbryt();
+            // Kandidaten är nu en sökbar anställd — visa den nya personalakten som bevis på stängd kedja.
+            Nav.NavigateTo($"/anstallda/{res.AnstalldId.Value}");
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            _felmeddelande = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            _felmeddelande = $"Kunde inte tillsätta: {ex.Message}";
+        }
+        finally { _sparar = false; }
+    }
+
+    private async Task Kor(Func<Task> atgard, string framgang)
+    {
+        _sparar = true;
+        _felmeddelande = null;
+        try
+        {
+            await atgard();
+            _flashMeddelande = framgang;
+            Avbryt();
+            await LaddaAsync();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            _felmeddelande = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            _felmeddelande = $"Åtgärden misslyckades: {ex.Message}";
+        }
+        finally { _sparar = false; }
+    }
+
+    private static string FormNamn(EmploymentType f) => f switch
+    {
+        EmploymentType.Tillsvidare => "Tillsvidare",
+        EmploymentType.Vikariat => "Vikariat",
+        EmploymentType.Provanstallning => "Provanställning",
+        EmploymentType.SAVA => "Särskild visstid",
+        EmploymentType.Timavlonad => "Timavlönad",
+        EmploymentType.Sasongsanstallning => "Säsongsanställning",
+        _ => f.ToString()
+    };
 
     private static string StatusText(VacancyStatus s) => s switch
     {
@@ -100,7 +369,22 @@ else
         VacancyStatus.Tillsatt => Color.Primary, _ => Color.Default
     };
 
-    private record AnsVm(string Namn, string Epost, string Status);
-    private record VakansVm(string Titel, string EnhetNamn, EmploymentType Anstallningsform, VacancyStatus Status, DateOnly SistaAnsokningsDag, string Beskrivning, int AntalAnsokngar, List<AnsVm> Ansokngar);
+    private static string AnsStatusText(ApplicationStatus s) => s switch
+    {
+        ApplicationStatus.Mottagen => "Mottagen",
+        ApplicationStatus.UnderGranskning => "Under granskning",
+        ApplicationStatus.Intervju => "Intervju",
+        ApplicationStatus.Erbjudande => "Erbjudande",
+        ApplicationStatus.Anstalld => "Anställd",
+        ApplicationStatus.Avslagen => "Avslagen",
+        _ => s.ToString()
+    };
+    private static Color AnsFarg(ApplicationStatus s) => s switch
+    {
+        ApplicationStatus.Anstalld => Color.Success,
+        ApplicationStatus.Erbjudande => Color.Primary,
+        ApplicationStatus.Intervju => Color.Info,
+        ApplicationStatus.Avslagen => Color.Error,
+        _ => Color.Default
+    };
 }
-

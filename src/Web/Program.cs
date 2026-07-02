@@ -2,7 +2,8 @@ using MudBlazor.Services;
 using Microsoft.AspNetCore.Localization;
 using RegionHR.Infrastructure;
 using RegionHR.Infrastructure.Persistence;
-using RegionHR.Web.Health;
+using RegionHR.Infrastructure.Diagnostics;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using RegionHR.Web.Hubs;
 using RegionHR.Web.Middleware;
 using RegionHR.Web.Services;
@@ -41,26 +42,38 @@ System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = svCulture;
 // Try PostgreSQL first; if unavailable, fall back to InMemory for development
 var connectionString = builder.Configuration.GetConnectionString("RegionHR")
     ?? "Host=localhost;Port=54322;Database=postgres;Username=postgres;Password=postgres";
+// Startup-vakt: endast Development får falla tillbaka på InMemory. Alla andra
+// miljöer hård-failar hellre än att tyst servera en tom InMemory-databas
+// (lönedata får aldrig hamna i flyktigt minne).
 var useInMemory = false;
-try
+if (!StartupDatabaseGuard.CanReachPostgres(connectionString, out var dbError))
 {
-    using var testConn = new Npgsql.NpgsqlConnection(connectionString);
-    testConn.Open();
-    testConn.Close();
-}
-catch
-{
-    useInMemory = true;
-    Console.WriteLine("PostgreSQL unavailable — using InMemory database with seed data.");
+    if (StartupDatabaseGuard.AllowInMemoryFallback(builder.Environment.EnvironmentName))
+    {
+        useInMemory = true;
+        Console.Error.WriteLine("============================================================");
+        Console.Error.WriteLine("  VARNING: PostgreSQL är otillgänglig.");
+        Console.Error.WriteLine("  Startar med InMemory-databas (endast Development).");
+        Console.Error.WriteLine("  INGEN data persisteras — allt försvinner vid omstart.");
+        Console.Error.WriteLine("============================================================");
+    }
+    else
+    {
+        var fatal = StartupDatabaseGuard.BuildFatalNoDatabaseException(
+            builder.Environment.EnvironmentName, connectionString, dbError);
+        Console.Error.WriteLine(fatal.Message);
+        throw fatal;
+    }
 }
 builder.Services.AddInfrastructure(connectionString, useInMemory);
 
 // SignalR
 builder.Services.AddSignalR();
 
-// Health checks
+// Health checks — DB-anslutning + kärnschema. Taggen "ready" gatar readiness.
+string[] readinessTags = { "ready", "db" };
 builder.Services.AddHealthChecks()
-    .AddCheck<DatabaseHealthCheck>("postgresql");
+    .AddCheck<DatabaseHealthCheck>("database", tags: readinessTags);
 
 // Application services
 builder.Services.AddScoped<AnstallningService>();
@@ -70,6 +83,8 @@ builder.Services.AddScoped<UserRoleService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<StamplingService>();
 builder.Services.AddScoped<FlexService>();
+builder.Services.AddScoped<RegionHR.Web.Services.RekryteringService>();
+builder.Services.AddScoped<LedighetService>();
 
 // Rate limiting
 builder.Services.AddRateLimiter(options =>
@@ -119,6 +134,12 @@ app.MapRazorComponents<App>()
 
 app.MapHub<NotificationHub>("/hubs/notifications");
 
-app.MapHealthChecks("/health");
+// Liveness: processen lever (kör inga checks → 200 så länge appen svarar).
+app.MapHealthChecks("/health", new HealthCheckOptions { Predicate = _ => false });
+// Readiness: DB nås + kärnschema finns (InMemory rapporteras som ohälsosam).
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready")
+});
 
 app.Run();

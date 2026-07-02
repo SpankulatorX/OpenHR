@@ -1,12 +1,14 @@
 @page "/rekrytering/pipeline"
 @layout RegionHR.Web.Components.Layout.AdminLayout
-@using RegionHR.Infrastructure.Persistence
 @using RegionHR.Recruitment.Domain
-@using Microsoft.EntityFrameworkCore
-@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@using RegionHR.Web.Services
+@inject RekryteringService Service
 
 <PageTitle>OpenHR - Rekryteringspipeline</PageTitle>
-<MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Rekryteringspipeline</MudText>
+<div class="d-flex justify-space-between align-center mb-4">
+    <MudText Typo="Typo.h4" Style="font-weight: 700;">Rekryteringspipeline</MudText>
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Handshake" Href="/rekrytering/vakanser">Erbjud &amp; tillsätt</MudButton>
+</div>
 
 @if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
 else if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert> }
@@ -16,44 +18,55 @@ else
     @foreach (var v in _vakanser)
     {
         <MudPaper Class="pa-4 mb-4" Elevation="2">
-            <MudText Typo="Typo.h6" Style="font-weight: 600;" Class="mb-2">@v.Titel</MudText>
-            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);" Class="mb-3">@v.EnhetNamn — @v.AntalAnsokngar ansökningar</MudText>
-            @if (v.AntalAnsokngar > 0)
-            {
-                <MudSimpleTable Dense="true" Elevation="0">
-                    <thead><tr><th>Kandidat</th><th>E-post</th><th>Status</th></tr></thead>
-                    <tbody>
-                        @foreach (var a in v.Ansokngar)
-                        {
-                            <tr><td><strong>@a.Namn</strong></td><td>@a.Epost</td><td><MudChip T="string" Size="Size.Small">@a.Status</MudChip></td></tr>
-                        }
-                    </tbody>
-                </MudSimpleTable>
-            }
+            <div class="d-flex justify-space-between align-center mb-3">
+                <div>
+                    <MudText Typo="Typo.h6" Style="font-weight: 600;">@v.Titel</MudText>
+                    <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">@v.EnhetNamn — @v.Ansokningar.Count ansökningar</MudText>
+                </div>
+                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" Href="/rekrytering/vakanser">Hantera</MudButton>
+            </div>
+            <MudGrid Spacing="2">
+                @foreach (var steg in _steg)
+                {
+                    var kandidater = v.Ansokningar.Where(a => a.Status == steg.Status).ToList();
+                    <MudItem xs="12" sm="6" md="2">
+                        <MudPaper Class="pa-2" Elevation="1" Style="@($"border-top: 3px solid {steg.Farg}; min-height: 90px;")">
+                            <MudText Typo="Typo.caption" Style="font-weight: 600;">@steg.Rubrik (@kandidater.Count)</MudText>
+                            @foreach (var a in kandidater)
+                            {
+                                <MudText Typo="Typo.body2" Class="mt-1">@a.Namn</MudText>
+                            }
+                        </MudPaper>
+                    </MudItem>
+                }
+            </MudGrid>
         </MudPaper>
     }
 }
 
 @code {
-    private List<VakansVm> _vakanser = [];
+    private List<VakansOversikt> _vakanser = [];
     private bool _loading = true;
     private string? _error;
 
+    private readonly (ApplicationStatus Status, string Rubrik, string Farg)[] _steg =
+    [
+        (ApplicationStatus.Mottagen, "Mottagna", "var(--mud-palette-text-disabled)"),
+        (ApplicationStatus.UnderGranskning, "Granskas", "var(--mud-palette-warning)"),
+        (ApplicationStatus.Intervju, "Intervju", "var(--mud-palette-info)"),
+        (ApplicationStatus.Erbjudande, "Erbjudande", "var(--mud-palette-primary)"),
+        (ApplicationStatus.Anstalld, "Anställd", "var(--mud-palette-success)"),
+        (ApplicationStatus.Avslagen, "Avslag", "var(--mud-palette-error)")
+    ];
+
     protected override async Task OnInitializedAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            var vacancies = await db.Vacancies.Where(v => v.Status == VacancyStatus.Publicerad || v.Status == VacancyStatus.Stangd).OrderByDescending(v => v.SistaAnsokningsDag).ToListAsync();
-            var enheter = await db.OrganizationUnits.ToListAsync();
-            var enhetNamn = enheter.ToDictionary(e => e.Id.Value, e => e.Namn);
-            _vakanser = vacancies.Where(v => v.Ansokngar.Count > 0).Select(v => new VakansVm(v.Titel, enhetNamn.GetValueOrDefault(v.EnhetId.Value, "—"), v.Ansokngar.Count, v.Ansokngar.Select(a => new AnsVm(a.Namn, a.Epost, a.Status.ToString())).ToList())).ToList();
+            var alla = await Service.HamtaVakanserAsync();
+            _vakanser = alla.Where(v => v.Ansokningar.Count > 0).ToList();
         }
         catch (Exception ex) { _error = $"Kunde inte hämta pipeline: {ex.Message}"; }
         finally { _loading = false; }
     }
-
-    private record AnsVm(string Namn, string Epost, string Status);
-    private record VakansVm(string Titel, string EnhetNamn, int AntalAnsokngar, List<AnsVm> Ansokngar);
 }
-

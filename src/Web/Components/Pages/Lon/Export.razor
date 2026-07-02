@@ -1,0 +1,380 @@
+@page "/lon/export"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.IO.Compression
+@using System.Text
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Payroll.Domain
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Core.Domain
+@using RegionHR.IntegrationHub.Adapters.Skatteverket
+@using RegionHR.IntegrationHub.Adapters.Nordea
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - Export (AGI & betalfil)</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/lon/korningar" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Export till Skatteverket &amp; bank</MudText>
+<MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Skapar arbetsgivardeklaration på individnivå (AGI-XML) och betalningsfil (ISO 20022 pain.001.001.03)
+    ur en vald lönekörning. Filerna laddas ner direkt med verkliga personnummer och bankuppgifter.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">1. Välj lönekörning</MudText>
+        @if (_korningar.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                Det finns inga lönekörningar att exportera ännu. Skapa och beräkna en körning under
+                <MudLink Href="/lon/korningar">Lönekörningar</MudLink> först.
+            </MudAlert>
+        }
+        else
+        {
+            <MudSelect T="Guid" Value="_valdKorning" ValueChanged="OnKorningVald"
+                       Label="Lönekörning" Variant="Variant.Outlined">
+                @foreach (var k in _korningar)
+                {
+                    <MudSelectItem T="Guid" Value="k.Id">@k.Etikett</MudSelectItem>
+                }
+            </MudSelect>
+        }
+    </MudPaper>
+
+    @if (_valdKorning != Guid.Empty && _sammanfattning is not null)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">Underlag</MudText>
+            <MudGrid Spacing="3" Class="mb-2">
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Anställda</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@_sammanfattning.AntalRader st</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Total brutto</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_sammanfattning.TotalBrutto)</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Summa skatteavdrag (fält 497)</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_sammanfattning.TotalSkatt)</MudText>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudText Typo="Typo.caption">Summa arb.giv.avgifter (fält 487)</MudText>
+                    <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(_sammanfattning.TotalAg)</MudText>
+                </MudItem>
+            </MudGrid>
+
+            @if (_sammanfattning.Status != PayrollRunStatus.Godkand && _sammanfattning.Status != PayrollRunStatus.Utbetald)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Text" Class="mt-2">
+                    Körningen har status <strong>@_sammanfattning.Status</strong>. AGI och betalfil skapas normalt
+                    först efter att körningen är <strong>godkänd</strong>.
+                </MudAlert>
+            }
+            @if (_sammanfattning.AntalUtanBank > 0)
+            {
+                <MudAlert Severity="Severity.Warning" Variant="Variant.Text" Class="mt-2">
+                    @_sammanfattning.AntalUtanBank av @_sammanfattning.AntalRader anställda saknar clearing-/kontonummer
+                    och kommer <strong>inte</strong> med i betalfilen. AGI omfattar alla.
+                </MudAlert>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">2. Uppgiftslämnare</MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_orgnr" Label="Arbetsgivarens registrerade id (AgRegistreradId)"
+                                  Variant="Variant.Outlined"
+                                  HelperText="12 siffror, t.ex. 16 + organisationsnummer" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_avsandareNamn" Label="Arbetsgivarens namn"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField @bind-Value="_kontaktNamn" Label="Kontaktperson"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField @bind-Value="_kontaktTelefon" Label="Telefon"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudTextField @bind-Value="_kontaktEpost" Label="E-post"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_iban" Label="Utbetalande konto (IBAN)"
+                                  Variant="Variant.Outlined" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudDatePicker @bind-Date="_utbetalningsdatum" Label="Utbetalningsdatum"
+                                   Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">3. Ladda ner filer</MudText>
+            <MudStack Row="true" Spacing="3">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           Disabled="@(_genererar || string.IsNullOrWhiteSpace(_orgnr) || _sammanfattning.AntalRader == 0)"
+                           OnClick="LaddaNerAgi">
+                    AGI-XML (Skatteverket)
+                </MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.Download"
+                           Disabled="@(_genererar || string.IsNullOrWhiteSpace(_iban) || _utbetalningsdatum is null || _sammanfattning.AntalBetalbara == 0)"
+                           OnClick="LaddaNerBetalning">
+                    pain.001 (betalfil)
+                </MudButton>
+            </MudStack>
+            @if (_status is not null)
+            {
+                <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-3">@_status</MudAlert>
+            }
+            @if (_fel is not null)
+            {
+                <MudAlert Severity="Severity.Error" Variant="Variant.Text" Class="mt-3">@_fel</MudAlert>
+            }
+        </MudPaper>
+    }
+}
+
+@code {
+    private bool _loading = true;
+    private bool _genererar;
+    private Guid _valdKorning = Guid.Empty;
+    private List<KorningRad> _korningar = [];
+    private Sammanfattning? _sammanfattning;
+    private List<ExportRad> _rader = [];
+    private string _period = "";
+    private string? _status;
+    private string? _fel;
+
+    // Uppgiftslämnare (demo-defaultar för Region Örebro län).
+    private string _orgnr = "162321000016";
+    private string _avsandareNamn = "Region Örebro län";
+    private string _kontaktNamn = "HR-avdelningen";
+    private string _kontaktTelefon = "019-602 10 00";
+    private string _kontaktEpost = "lon@regionorebrolan.se";
+    private string _iban = "SE4550000000058398257466";
+    private DateTime? _utbetalningsdatum = DateTime.Today;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var runs = await db.PayrollRuns
+            .OrderByDescending(r => r.Year).ThenByDescending(r => r.Month)
+            .Take(24)
+            .ToListAsync();
+
+        _korningar = runs.Select(r => new KorningRad(
+            r.Id.Value,
+            $"{FormatPeriod(r.Year, r.Month)} — {r.Status} ({r.AntalAnstallda} anställda)")).ToList();
+        _loading = false;
+    }
+
+    private async Task OnKorningVald(Guid id)
+    {
+        _valdKorning = id;
+        _status = null;
+        _fel = null;
+        await LaddaUnderlag(id);
+    }
+
+    private async Task LaddaUnderlag(Guid id)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var run = await db.PayrollRuns.FirstOrDefaultAsync(r => r.Id == PayrollRunId.From(id));
+        if (run is null)
+        {
+            _sammanfattning = null;
+            return;
+        }
+
+        _period = run.Period;
+        _utbetalningsdatum = new DateTime(run.Year, run.Month, 25);
+
+        var results = await db.PayrollResults
+            .Where(r => r.KorningsId == PayrollRunId.From(id))
+            .ToListAsync();
+
+        var anstallIds = results.Select(r => r.AnstallId).Distinct().ToList();
+        var employees = await db.Employees
+            .Where(e => anstallIds.Contains(e.Id))
+            .ToListAsync();
+        var empById = employees.ToDictionary(e => e.Id);
+
+        _rader = results
+            .Where(r => empById.ContainsKey(r.AnstallId))
+            .Select(r =>
+            {
+                var e = empById[r.AnstallId];
+                return new ExportRad(
+                    (string)e.Personnummer,
+                    e.FulltNamn,
+                    e.Clearingnummer,
+                    e.Kontonummer,
+                    r.Brutto.Amount,
+                    r.Skatt.Amount,
+                    r.Netto.Amount,
+                    r.Arbetsgivaravgifter.Amount);
+            })
+            .ToList();
+
+        var betalbara = _rader.Count(r => !string.IsNullOrWhiteSpace(r.Clearing) && !string.IsNullOrWhiteSpace(r.Konto));
+        _sammanfattning = new Sammanfattning(
+            run.Status,
+            _rader.Count,
+            betalbara,
+            _rader.Count - betalbara,
+            _rader.Sum(r => r.Brutto),
+            _rader.Sum(r => r.Skatt),
+            _rader.Sum(r => r.Ag));
+    }
+
+    private async Task LaddaNerAgi()
+    {
+        _genererar = true;
+        _status = null;
+        _fel = null;
+        try
+        {
+            var input = new AGIInput
+            {
+                Organisationsnummer = _orgnr.Trim(),
+                Period = _period.Replace("-", ""),
+                KontaktpersonNamn = _kontaktNamn,
+                KontaktpersonTelefon = _kontaktTelefon,
+                KontaktpersonEpost = _kontaktEpost,
+                Individer = _rader.Select(r => new AGIIndivid
+                {
+                    Personnummer = r.Personnummer,
+                    Namn = r.Namn,
+                    KontantBruttolonMm = r.Brutto,
+                    AvdragenSkatt = r.Skatt,
+                    Avgiftsunderlag = r.Brutto,
+                    Arbetsgivaravgifter = r.Ag
+                }).ToList()
+            };
+
+            var files = new AGIXmlGenerator().Generate(input);
+
+            if (files.Count == 1)
+            {
+                var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(files[0].XmlContent));
+                await JS.InvokeVoidAsync("downloadFile", files[0].FileName, base64, "application/xml");
+            }
+            else
+            {
+                using var ms = new MemoryStream();
+                using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+                {
+                    foreach (var f in files)
+                    {
+                        var entry = zip.CreateEntry(f.FileName);
+                        await using var es = entry.Open();
+                        var bytes = Encoding.UTF8.GetBytes(f.XmlContent);
+                        await es.WriteAsync(bytes);
+                    }
+                }
+                var base64 = Convert.ToBase64String(ms.ToArray());
+                await JS.InvokeVoidAsync("downloadFile", $"AGI_{_orgnr}_{_period.Replace("-", "")}.zip", base64, "application/zip");
+            }
+
+            _status = $"AGI-fil genererad för {_rader.Count} anställda (period {_period}).";
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte skapa AGI-filen: {ex.Message}";
+        }
+        finally
+        {
+            _genererar = false;
+        }
+    }
+
+    private async Task LaddaNerBetalning()
+    {
+        _genererar = true;
+        _status = null;
+        _fel = null;
+        try
+        {
+            var betalbara = _rader
+                .Where(r => !string.IsNullOrWhiteSpace(r.Clearing) && !string.IsNullOrWhiteSpace(r.Konto))
+                .ToList();
+
+            if (betalbara.Count == 0)
+            {
+                _fel = "Inga anställda har clearing-/kontonummer — betalfil kan inte skapas.";
+                return;
+            }
+
+            var utbetalning = DateOnly.FromDateTime(_utbetalningsdatum ?? DateTime.Today);
+            var batch = new PaymentBatch
+            {
+                Period = _period,
+                OrganizationNumber = _orgnr.Trim(),
+                InitiatorName = _avsandareNamn,
+                DebtorName = _avsandareNamn,
+                DebtorIBAN = _iban.Replace(" ", ""),
+                ExecutionDate = utbetalning,
+                Payments = betalbara.Select(r => new SalaryPayment
+                {
+                    RecipientName = r.Namn,
+                    Amount = r.Netto,
+                    Period = _period,
+                    ClearingNumber = r.Clearing!,
+                    AccountNumber = r.Konto!
+                }).ToList()
+            };
+
+            var xml = new NordeaPaymentFileGenerator().Generate(batch);
+            var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(xml));
+            var fileName = $"SALARY_{_period}_{DateTime.Now:yyyyMMddHHmmss}.xml";
+            await JS.InvokeVoidAsync("downloadFile", fileName, base64, "application/xml");
+
+            _status = $"Betalfil genererad med {betalbara.Count} betalningar (utbetalning {utbetalning:yyyy-MM-dd}).";
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte skapa betalfilen: {ex.Message}";
+        }
+        finally
+        {
+            _genererar = false;
+        }
+    }
+
+    private static string Kr(decimal amount) => $"{amount:N0} kr";
+
+    private static string FormatPeriod(int year, int month)
+    {
+        var monthNames = new[] { "", "Januari", "Februari", "Mars", "April", "Maj", "Juni",
+            "Juli", "Augusti", "September", "Oktober", "November", "December" };
+        return $"{monthNames[month]} {year}";
+    }
+
+    private record KorningRad(Guid Id, string Etikett);
+
+    private record ExportRad(
+        string Personnummer, string Namn, string? Clearing, string? Konto,
+        decimal Brutto, decimal Skatt, decimal Netto, decimal Ag);
+
+    private record Sammanfattning(
+        PayrollRunStatus Status, int AntalRader, int AntalBetalbara, int AntalUtanBank,
+        decimal TotalBrutto, decimal TotalSkatt, decimal TotalAg);
+}

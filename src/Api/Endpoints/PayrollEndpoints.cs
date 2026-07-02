@@ -1,3 +1,5 @@
+using System.IO.Compression;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RegionHR.Infrastructure.Persistence;
 using RegionHR.Payroll.Domain;
@@ -200,6 +202,13 @@ public static class PayrollEndpoints
                 .Where(r => r.KorningsId == PayrollRunId.From(id))
                 .ToListAsync(ct);
 
+            // Slå upp verkliga personnummer per anställd (aldrig GUID i AGI-filen).
+            var agiAnstallIds = results.Select(r => r.AnstallId).Distinct().ToList();
+            var agiEmployees = await db.Employees
+                .Where(e => agiAnstallIds.Contains(e.Id))
+                .ToListAsync(ct);
+            var agiEmpById = agiEmployees.ToDictionary(e => e.Id);
+
             var generator = new AGIXmlGenerator();
             var input = new AGIInput
             {
@@ -208,18 +217,46 @@ public static class PayrollEndpoints
                 KontaktpersonNamn = req.KontaktpersonNamn,
                 KontaktpersonTelefon = req.KontaktpersonTelefon,
                 KontaktpersonEpost = req.KontaktpersonEpost,
-                Individer = results.Select(r => new AGIIndivid
-                {
-                    Personnummer = r.AnstallId.Value.ToString(), // TODO: lookup real personnummer
-                    KontantBruttolonMm = r.Brutto.Amount,
-                    AvdragenSkatt = r.Skatt.Amount,
-                    Avgiftsunderlag = r.Brutto.Amount,
-                    Arbetsgivaravgifter = r.Arbetsgivaravgifter.Amount
-                }).ToList()
+                Individer = results
+                    .Where(r => agiEmpById.ContainsKey(r.AnstallId))
+                    .Select(r =>
+                    {
+                        var emp = agiEmpById[r.AnstallId];
+                        return new AGIIndivid
+                        {
+                            Personnummer = (string)emp.Personnummer, // 12-siffrigt YYYYMMDDNNNN
+                            Namn = emp.FulltNamn,
+                            KontantBruttolonMm = r.Brutto.Amount,
+                            AvdragenSkatt = r.Skatt.Amount,
+                            Avgiftsunderlag = r.Brutto.Amount,
+                            Arbetsgivaravgifter = r.Arbetsgivaravgifter.Amount
+                        };
+                    })
+                    .ToList()
             };
 
             var files = generator.Generate(input);
-            return Results.Ok(files.Select(f => new { f.FileName, ContentLength = f.XmlContent.Length }));
+
+            // Leverera själva filen (inte metadata). En fil → XML, flera → ZIP.
+            if (files.Count == 1)
+            {
+                var xmlBytes = Encoding.UTF8.GetBytes(files[0].XmlContent);
+                return Results.File(xmlBytes, "application/xml", files[0].FileName);
+            }
+
+            using var zipStream = new MemoryStream();
+            using (var zip = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                foreach (var f in files)
+                {
+                    var entry = zip.CreateEntry(f.FileName);
+                    await using var entryStream = entry.Open();
+                    var entryBytes = Encoding.UTF8.GetBytes(f.XmlContent);
+                    await entryStream.WriteAsync(entryBytes, ct);
+                }
+            }
+            return Results.File(zipStream.ToArray(), "application/zip",
+                $"AGI_{req.Organisationsnummer}_{run.Year}{run.Month:D2}.zip");
         }).WithName("ExportAGI");
 
         lon.MapPost("/korning/{id:guid}/export/betalning", async (
@@ -232,6 +269,41 @@ public static class PayrollEndpoints
                 .Where(r => r.KorningsId == PayrollRunId.From(id))
                 .ToListAsync(ct);
 
+            // Slå upp verkliga namn + bankuppgifter per anställd (aldrig hårdkodat 3300/0000000000).
+            var betAnstallIds = results.Select(r => r.AnstallId).Distinct().ToList();
+            var betEmployees = await db.Employees
+                .Where(e => betAnstallIds.Contains(e.Id))
+                .ToListAsync(ct);
+            var betEmpById = betEmployees.ToDictionary(e => e.Id);
+
+            var payments = new List<SalaryPayment>();
+            var saknarBankuppgifter = new List<string>();
+            foreach (var r in results)
+            {
+                if (!betEmpById.TryGetValue(r.AnstallId, out var emp))
+                    continue;
+                if (string.IsNullOrWhiteSpace(emp.Clearingnummer) || string.IsNullOrWhiteSpace(emp.Kontonummer))
+                {
+                    saknarBankuppgifter.Add(emp.FulltNamn);
+                    continue;
+                }
+                payments.Add(new SalaryPayment
+                {
+                    RecipientName = emp.FulltNamn,
+                    Amount = r.Netto.Amount,
+                    Period = run.Period,
+                    ClearingNumber = emp.Clearingnummer,
+                    AccountNumber = emp.Kontonummer
+                });
+            }
+
+            if (payments.Count == 0)
+                return Results.BadRequest(new
+                {
+                    error = "Inga betalningar kunde skapas — bankuppgifter (clearing-/kontonummer) saknas för samtliga anställda i körningen.",
+                    saknarBankuppgifter
+                });
+
             var generator = new NordeaPaymentFileGenerator();
             var batch = new PaymentBatch
             {
@@ -241,24 +313,13 @@ public static class PayrollEndpoints
                 DebtorName = req.AvsandareNamn,
                 DebtorIBAN = req.IBAN,
                 ExecutionDate = req.Utbetalningsdatum,
-                Payments = results.Select(r => new SalaryPayment
-                {
-                    RecipientName = r.AnstallId.Value.ToString(), // TODO: lookup real name
-                    Amount = r.Netto.Amount,
-                    Period = run.Period,
-                    ClearingNumber = "3300", // TODO: from employee bank details
-                    AccountNumber = "0000000000" // TODO: from employee bank details
-                }).ToList()
+                Payments = payments
             };
 
             var xml = generator.Generate(batch);
-            return Results.Ok(new
-            {
-                FileName = $"SALARY_{run.Period}_{DateTime.UtcNow:yyyyMMddHHmmss}.xml",
-                ContentLength = xml.Length,
-                AntalBetalningar = batch.Payments.Count,
-                TotalBelopp = batch.Payments.Sum(p => p.Amount)
-            });
+            var betBytes = Encoding.UTF8.GetBytes(xml);
+            var fileName = $"SALARY_{run.Period}_{DateTime.UtcNow:yyyyMMddHHmmss}.xml";
+            return Results.File(betBytes, "application/xml", fileName);
         }).WithName("ExportPaymentFile");
 
         // ============================================================

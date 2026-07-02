@@ -1,90 +1,80 @@
+using System.Globalization;
 using System.Text;
 using System.Xml;
 using System.Xml.Linq;
-using RegionHR.SharedKernel.Domain;
 
 namespace RegionHR.IntegrationHub.Adapters.Skatteverket;
 
 /// <summary>
-/// Genererar AGI-XML (Arbetsgivardeklaration på individnivå) per Skatteverkets spec.
-/// Skapas månadsvis, innehåller bruttolön, skatteavdrag, förmåner och arbetsgivaravgifter per individ.
-/// Max 1000 individer per fil.
+/// Genererar AGI-XML (Arbetsgivardeklaration på individnivå) enligt Skatteverkets
+/// officiella tekniska beskrivning (SKV 269, schemaversion 1.1).
+///
+/// Filen är uppbyggd som ett <c>Skatteverket</c>-dokument med:
+/// <list type="bullet">
+///   <item>Avsändare (programnamn, org.nr, teknisk kontaktperson)</item>
+///   <item>Blankettgemensamt (arbetsgivare + kontaktperson)</item>
+///   <item>En huvuduppgift (HU) per fil med summa arbetsgivaravgifter/skatteavdrag</item>
+///   <item>En individuppgift (IU) per betalningsmottagare med fältkodsattribut</item>
+/// </list>
+/// Varje värdebärande element har ett <c>faltkod</c>-attribut och varje IU har ett
+/// unikt <c>Specifikationsnummer</c> (fältkod 570). Max 1000 individer per fil.
 /// </summary>
 public sealed class AGIXmlGenerator
 {
-    private const string AGI_NAMESPACE = "http://xmls.skatteverket.se/se/skatteverket/ai/instans/inkomstdeklaration/1.1";
+    // Instansschema (rot) och komponentschema (agd-prefix) enligt Skatteverkets XSD.
+    private const string INSTANS_NS = "http://xmls.skatteverket.se/se/skatteverket/da/instans/schema/1.1";
+    private const string KOMPONENT_NS = "http://xmls.skatteverket.se/se/skatteverket/da/komponent/schema/1.1";
+    private const string XSI_NS = "http://www.w3.org/2001/XMLSchema-instance";
+    private const string SCHEMA_LOCATION =
+        "http://xmls.skatteverket.se/se/skatteverket/da/instans/schema/1.1 " +
+        "http://xmls.skatteverket.se/se/skatteverket/da/arbetsgivardeklaration/arbetsgivardeklaration_1.1.xsd";
+
     private const int MAX_INDIVIDER_PER_FIL = 1000;
 
     /// <summary>
-    /// Generera AGI-XML-filer för en löneperiod.
-    /// Returnerar en eller flera XML-filer (max 1000 individer per fil).
+    /// Generera AGI-XML-filer för en löneperiod. Returnerar en eller flera XML-filer
+    /// (max 1000 individer per fil). Varje fil är ett fullständigt Skatteverket-dokument.
     /// </summary>
     public IReadOnlyList<AGIFile> Generate(AGIInput input)
     {
-        var files = new List<AGIFile>();
-        var batches = input.Individer
-            .Select((ind, i) => new { ind, batch = i / MAX_INDIVIDER_PER_FIL })
-            .GroupBy(x => x.batch)
-            .Select(g => g.Select(x => x.ind).ToList())
-            .ToList();
+        ArgumentNullException.ThrowIfNull(input);
 
-        for (int i = 0; i < batches.Count; i++)
+        var files = new List<AGIFile>();
+        var totalt = input.Individer.Count;
+        var antalFiler = Math.Max(1, (int)Math.Ceiling(totalt / (double)MAX_INDIVIDER_PER_FIL));
+
+        for (var filIndex = 0; filIndex < antalFiler; filIndex++)
         {
-            var xml = GenerateXml(input, batches[i], i + 1, batches.Count);
-            var fileName = $"AGI_{input.Organisationsnummer}_{input.Period}_{i + 1:D3}.xml";
+            var start = filIndex * MAX_INDIVIDER_PER_FIL;
+            var batch = input.Individer.Skip(start).Take(MAX_INDIVIDER_PER_FIL).ToList();
+            var xml = GenerateXml(input, batch, start);
+            var fileName = $"AGI_{input.Organisationsnummer}_{input.Period}_{filIndex + 1:D3}.xml";
             files.Add(new AGIFile(fileName, xml));
         }
 
         return files;
     }
 
-    private string GenerateXml(AGIInput input, List<AGIIndivid> individer, int filNr, int totaltAntalFiler)
+    private static string GenerateXml(AGIInput input, List<AGIIndivid> individer, int globalStartIndex)
     {
-        var ns = XNamespace.Get(AGI_NAMESPACE);
+        XNamespace instans = INSTANS_NS;
+        XNamespace agd = KOMPONENT_NS;
+        XNamespace xsi = XSI_NS;
 
-        var doc = new XDocument(
-            new XDeclaration("1.0", "UTF-8", null),
-            new XElement(ns + "Arbetsgivardeklaration",
-                new XAttribute("version", "1.1"),
-                new XElement(ns + "Avsandare",
-                    new XElement(ns + "Programnamn", "RegionHR"),
-                    new XElement(ns + "Organisationsnummer", input.Organisationsnummer),
-                    new XElement(ns + "TekniskKontaktperson",
-                        new XElement(ns + "Namn", input.KontaktpersonNamn),
-                        new XElement(ns + "Telefon", input.KontaktpersonTelefon),
-                        new XElement(ns + "Epostadress", input.KontaktpersonEpost)
-                    )
-                ),
-                new XElement(ns + "Blankettgemensamt",
-                    new XElement(ns + "Arbetsgivare",
-                        new XElement(ns + "AgRegistreradId", input.Organisationsnummer),
-                        new XElement(ns + "Kontaktperson",
-                            new XElement(ns + "Namn", input.KontaktpersonNamn),
-                            new XElement(ns + "Telefon", input.KontaktpersonTelefon),
-                            new XElement(ns + "Epostadress", input.KontaktpersonEpost)
-                        )
-                    ),
-                    new XElement(ns + "Period", input.Period)
-                ),
-                new XElement(ns + "Blankett",
-                    // Huvuduppgift (arbetsgivaravgifter)
-                    new XElement(ns + "HU",
-                        new XElement(ns + "AvgifterSumma",
-                            FormatDecimal(individer.Sum(i => i.Arbetsgivaravgifter))),
-                        new XElement(ns + "AvdragenSkattSumma",
-                            FormatDecimal(individer.Sum(i => i.AvdragenSkatt))),
-                        new XElement(ns + "SummaArbetsgivaravgifter",
-                            FormatDecimal(individer.Sum(i => i.Arbetsgivaravgifter))),
-                        new XElement(ns + "AvgiftsunderlagSumma",
-                            FormatDecimal(individer.Sum(i => i.Avgiftsunderlag)))
-                    ),
-                    // Individuppgifter
-                    individer.Select(ind => GenerateIndividElement(ns, ind))
-                )
-            )
-        );
+        var root = new XElement(instans + "Skatteverket",
+            new XAttribute("omrade", "Arbetsgivardeklaration"),
+            new XAttribute(XNamespace.Xmlns + "agd", KOMPONENT_NS),
+            new XAttribute(XNamespace.Xmlns + "xsi", XSI_NS),
+            new XAttribute(xsi + "schemaLocation", SCHEMA_LOCATION),
+            BuildAvsandare(agd, input),
+            BuildBlankettgemensamt(agd, input),
+            BuildHuvuduppgift(agd, input, individer),
+            individer.Select((ind, i) =>
+                BuildIndividuppgift(agd, input, ind, globalStartIndex + i)));
 
-        using var writer = new StringWriter();
+        var doc = new XDocument(new XDeclaration("1.0", "UTF-8", "no"), root);
+
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
         using var xmlWriter = XmlWriter.Create(writer, new XmlWriterSettings
         {
             Indent = true,
@@ -96,50 +86,89 @@ public sealed class AGIXmlGenerator
         return writer.ToString();
     }
 
-    private static XElement GenerateIndividElement(XNamespace ns, AGIIndivid ind)
+    private static XElement BuildAvsandare(XNamespace agd, AGIInput input) =>
+        new(agd + "Avsandare",
+            new XElement(agd + "Programnamn", "OpenHR"),
+            new XElement(agd + "Organisationsnummer", input.Organisationsnummer),
+            new XElement(agd + "TekniskKontaktperson",
+                new XElement(agd + "Namn", input.KontaktpersonNamn),
+                new XElement(agd + "Telefon", input.KontaktpersonTelefon),
+                new XElement(agd + "Epostadress", input.KontaktpersonEpost)),
+            new XElement(agd + "Skapad", DateTime.Now.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)));
+
+    private static XElement BuildBlankettgemensamt(XNamespace agd, AGIInput input) =>
+        new(agd + "Blankettgemensamt",
+            new XElement(agd + "Arbetsgivare",
+                new XElement(agd + "AgRegistreradId", input.Organisationsnummer),
+                new XElement(agd + "Kontaktperson",
+                    new XElement(agd + "Namn", input.KontaktpersonNamn),
+                    new XElement(agd + "Telefon", input.KontaktpersonTelefon),
+                    new XElement(agd + "Epostadress", input.KontaktpersonEpost))));
+
+    private static XElement BuildHuvuduppgift(XNamespace agd, AGIInput input, List<AGIIndivid> individer) =>
+        new(agd + "Blankett",
+            new XElement(agd + "Arendeinformation",
+                new XElement(agd + "Arendeagare", input.Organisationsnummer),
+                new XElement(agd + "Period", input.Period)),
+            new XElement(agd + "Blankettinnehall",
+                new XElement(agd + "HU",
+                    new XElement(agd + "ArbetsgivareHUGROUP",
+                        Falt(agd, "AgRegistreradId", "201", input.Organisationsnummer)),
+                    Falt(agd, "RedovisningsPeriod", "006", input.Period),
+                    Falt(agd, "SummaArbAvgSlf", "487", Belopp(individer.Sum(i => i.Arbetsgivaravgifter))),
+                    Falt(agd, "SummaSkatteavdr", "497", Belopp(individer.Sum(i => i.AvdragenSkatt))))));
+
+    private static XElement BuildIndividuppgift(XNamespace agd, AGIInput input, AGIIndivid ind, int globalIndex)
     {
-        var element = new XElement(ns + "IU",
-            new XElement(ns + "Personnummer", ind.Personnummer),
-            new XElement(ns + "Namn", ind.Namn),
-            // Fält 011: Kontant bruttolön
-            new XElement(ns + "Falt011", FormatDecimal(ind.KontantBruttolonMm)),
-            // Fält 012: Skatteavdrag
-            new XElement(ns + "Falt012", FormatDecimal(ind.AvdragenSkatt))
-        );
+        var iu = new XElement(agd + "IU",
+            new XElement(agd + "ArbetsgivareIUGROUP",
+                Falt(agd, "AgRegistreradId", "201", input.Organisationsnummer)),
+            new XElement(agd + "BetalningsmottagareIUGROUP",
+                new XElement(agd + "BetalningsmottagareIDChoice",
+                    Falt(agd, "BetalningsmottagarId", "215", ind.Personnummer))),
+            Falt(agd, "RedovisningsPeriod", "006", input.Period),
+            Falt(agd, "Specifikationsnummer", "570", SpecifikationsNummer(ind, globalIndex)));
 
-        // Fält 013: Förmåner (om > 0)
+        if (!string.IsNullOrWhiteSpace(ind.ArbetsplatsGatuadress))
+            iu.Add(Falt(agd, "ArbetsplatsensGatuadress", "245", ind.ArbetsplatsGatuadress!));
+        if (!string.IsNullOrWhiteSpace(ind.ArbetsplatsOrt))
+            iu.Add(Falt(agd, "ArbetsplatsensOrt", "246", ind.ArbetsplatsOrt!));
+
+        // Fält 011: Kontant ersättning som är underlag för arbetsgivaravgifter
+        iu.Add(Falt(agd, "KontantErsattningUlagAG", "011", Belopp(ind.KontantBruttolonMm)));
+
+        // Fält 012: Skattepliktiga förmåner (utom bil och drivmedel)
         if (ind.SkattepliktForman > 0)
-            element.Add(new XElement(ns + "Falt013", FormatDecimal(ind.SkattepliktForman)));
+            iu.Add(Falt(agd, "SkatteplFormanUlagAG", "012", Belopp(ind.SkattepliktForman)));
 
-        // Fält 018: Friskvårdsbidrag skattefritt (om > 0)
-        if (ind.SkattefriForman > 0)
-            element.Add(new XElement(ns + "Falt018", FormatDecimal(ind.SkattefriForman)));
+        // Fält 001: Avdragen preliminär skatt
+        iu.Add(Falt(agd, "AvdrPrelSkatt", "001", Belopp(ind.AvdragenSkatt)));
 
-        // Fält 050: Traktamente/resekostnader (om > 0)
-        if (ind.Traktamente > 0)
-            element.Add(new XElement(ns + "Falt050", FormatDecimal(ind.Traktamente)));
-
-        // Fält 051: Milersättning (om > 0)
+        // Fält 050: Bilersättning (skattefri milersättning)
         if (ind.Milersattning > 0)
-            element.Add(new XElement(ns + "Falt051", FormatDecimal(ind.Milersattning)));
+            iu.Add(Falt(agd, "Bilersattning", "050", Belopp(ind.Milersattning)));
 
-        // Arbetsgivaravgifter
-        element.Add(new XElement(ns + "Avgiftsunderlag", FormatDecimal(ind.Avgiftsunderlag)));
-        element.Add(new XElement(ns + "Arbetsgivaravgifter", FormatDecimal(ind.Arbetsgivaravgifter)));
+        // Fält 051: Traktamente
+        if (ind.Traktamente > 0)
+            iu.Add(Falt(agd, "Traktamente", "051", Belopp(ind.Traktamente)));
 
-        // Anställningsperiod
-        if (ind.AnstallningFrom.HasValue)
-            element.Add(new XElement(ns + "AnstallningFrom", ind.AnstallningFrom.Value.ToString("yyyy-MM-dd")));
-        if (ind.AnstallningTom.HasValue)
-            element.Add(new XElement(ns + "AnstallningTom", ind.AnstallningTom.Value.ToString("yyyy-MM-dd")));
-
-        return element;
+        return iu;
     }
 
-    private static string FormatDecimal(decimal value) => value.ToString("F0");
+    private static XElement Falt(XNamespace agd, string element, string faltkod, string value) =>
+        new(agd + element, new XAttribute("faltkod", faltkod), value);
+
+    private static string SpecifikationsNummer(AGIIndivid ind, int globalIndex) =>
+        !string.IsNullOrWhiteSpace(ind.Specifikationsnummer)
+            ? ind.Specifikationsnummer!
+            : (globalIndex + 1).ToString("D3", CultureInfo.InvariantCulture);
+
+    // Skatteverket redovisar belopp i hela kronor.
+    private static string Belopp(decimal value) =>
+        Math.Round(value, 0, MidpointRounding.AwayFromZero).ToString("F0", CultureInfo.InvariantCulture);
 }
 
-// Input/output models
+// Input/output-modeller.
 
 public sealed class AGIInput
 {
@@ -153,18 +182,21 @@ public sealed class AGIInput
 
 public sealed class AGIIndivid
 {
-    public string Personnummer { get; set; } = string.Empty;  // YYYYMMDDNNNN
-    public string Namn { get; set; } = string.Empty;
+    public string Personnummer { get; set; } = string.Empty;  // YYYYMMDDNNNN (12 siffror)
+    public string Namn { get; set; } = string.Empty;          // Behålls för spårbarhet (ej i AGI-schemat)
     public decimal KontantBruttolonMm { get; set; }           // Fält 011
-    public decimal AvdragenSkatt { get; set; }                 // Fält 012
-    public decimal SkattepliktForman { get; set; }             // Fält 013
-    public decimal SkattefriForman { get; set; }               // Fält 018
-    public decimal Traktamente { get; set; }                   // Fält 050
-    public decimal Milersattning { get; set; }                 // Fält 051
-    public decimal Avgiftsunderlag { get; set; }
-    public decimal Arbetsgivaravgifter { get; set; }
-    public DateOnly? AnstallningFrom { get; set; }
-    public DateOnly? AnstallningTom { get; set; }
+    public decimal AvdragenSkatt { get; set; }                 // Fält 001
+    public decimal SkattepliktForman { get; set; }             // Fält 012
+    public decimal SkattefriForman { get; set; }               // Behålls (redovisas ej i AGI)
+    public decimal Traktamente { get; set; }                   // Fält 051
+    public decimal Milersattning { get; set; }                 // Fält 050
+    public decimal Avgiftsunderlag { get; set; }               // Underlag för arbetsgivaravgifter
+    public decimal Arbetsgivaravgifter { get; set; }           // Summeras i HU (fält 487)
+    public string? Specifikationsnummer { get; set; }          // Fält 570 (auto om null)
+    public string? ArbetsplatsGatuadress { get; set; }         // Fält 245 (valfritt)
+    public string? ArbetsplatsOrt { get; set; }                // Fält 246 (valfritt)
+    public DateOnly? AnstallningFrom { get; set; }             // Behålls för spårbarhet
+    public DateOnly? AnstallningTom { get; set; }              // Behålls för spårbarhet
 }
 
 public sealed record AGIFile(string FileName, string XmlContent);

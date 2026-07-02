@@ -1,11 +1,12 @@
-using System.Text;
+using System.Globalization;
 using System.Xml.Linq;
-using RegionHR.SharedKernel.Domain;
 
 namespace RegionHR.IntegrationHub.Adapters.Nordea;
 
 /// <summary>
-/// Genererar ISO 20022 pain.001 betalningsfiler för löneutbetalningar via Nordea.
+/// Genererar ISO 20022 pain.001.001.03-betalningsfiler för löneutbetalningar via Nordea.
+/// Alla belopp och datum formateras med invariant kultur så att XML blir giltig
+/// oavsett serverns lokala inställningar (svensk kultur ger annars decimalkomma).
 /// </summary>
 public sealed class NordeaPaymentFileGenerator
 {
@@ -13,6 +14,8 @@ public sealed class NordeaPaymentFileGenerator
 
     public string Generate(PaymentBatch batch)
     {
+        ArgumentNullException.ThrowIfNull(batch);
+
         var ns = XNamespace.Get(PAIN_001_NS);
 
         var doc = new XDocument(
@@ -25,7 +28,7 @@ public sealed class NordeaPaymentFileGenerator
             )
         );
 
-        using var writer = new StringWriter();
+        using var writer = new Utf8StringWriter();
         doc.Save(writer);
         return writer.ToString();
     }
@@ -34,9 +37,9 @@ public sealed class NordeaPaymentFileGenerator
     {
         return new XElement(ns + "GrpHdr",
             new XElement(ns + "MsgId", batch.MessageId),
-            new XElement(ns + "CreDtTm", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss")),
-            new XElement(ns + "NbOfTxs", batch.Payments.Count),
-            new XElement(ns + "CtrlSum", batch.Payments.Sum(p => p.Amount).ToString("F2")),
+            new XElement(ns + "CreDtTm", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture)),
+            new XElement(ns + "NbOfTxs", batch.Payments.Count.ToString(CultureInfo.InvariantCulture)),
+            new XElement(ns + "CtrlSum", Amount(batch.Payments.Sum(p => p.Amount))),
             new XElement(ns + "InitgPty",
                 new XElement(ns + "Nm", batch.InitiatorName),
                 new XElement(ns + "Id",
@@ -55,8 +58,8 @@ public sealed class NordeaPaymentFileGenerator
         return new XElement(ns + "PmtInf",
             new XElement(ns + "PmtInfId", $"SALARY-{batch.Period}"),
             new XElement(ns + "PmtMtd", "TRF"),            // Transfer
-            new XElement(ns + "NbOfTxs", batch.Payments.Count),
-            new XElement(ns + "CtrlSum", batch.Payments.Sum(p => p.Amount).ToString("F2")),
+            new XElement(ns + "NbOfTxs", batch.Payments.Count.ToString(CultureInfo.InvariantCulture)),
+            new XElement(ns + "CtrlSum", Amount(batch.Payments.Sum(p => p.Amount))),
             new XElement(ns + "PmtTpInf",
                 new XElement(ns + "SvcLvl",
                     new XElement(ns + "Cd", "NURG")         // Non-urgent
@@ -65,7 +68,7 @@ public sealed class NordeaPaymentFileGenerator
                     new XElement(ns + "Cd", "SALA")         // Salary
                 )
             ),
-            new XElement(ns + "ReqdExctnDt", batch.ExecutionDate.ToString("yyyy-MM-dd")),
+            new XElement(ns + "ReqdExctnDt", batch.ExecutionDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
             new XElement(ns + "Dbtr",
                 new XElement(ns + "Nm", batch.DebtorName),
                 new XElement(ns + "PstlAdr",
@@ -83,6 +86,7 @@ public sealed class NordeaPaymentFileGenerator
                     new XElement(ns + "BIC", "NDEASESS")    // Nordea Sweden
                 )
             ),
+            new XElement(ns + "ChrgBr", "SLEV"),            // Following service level (obligatoriskt i bankprofil)
             batch.Payments.Select(p => GenerateTransaction(ns, p))
         );
     }
@@ -96,12 +100,15 @@ public sealed class NordeaPaymentFileGenerator
             new XElement(ns + "Amt",
                 new XElement(ns + "InstdAmt",
                     new XAttribute("Ccy", "SEK"),
-                    payment.Amount.ToString("F2")
+                    Amount(payment.Amount)
                 )
             ),
             new XElement(ns + "CdtrAgt",
                 new XElement(ns + "FinInstnId",
                     new XElement(ns + "ClrSysMmbId",
+                        new XElement(ns + "ClrSysId",
+                            new XElement(ns + "Cd", "SESBA")  // Svenskt clearingnummersystem
+                        ),
                         new XElement(ns + "MmbId", payment.ClearingNumber)
                     )
                 )
@@ -120,6 +127,16 @@ public sealed class NordeaPaymentFileGenerator
                 new XElement(ns + "Ustrd", $"Lön {payment.Period}")
             )
         );
+    }
+
+    private static string Amount(decimal value) =>
+        Math.Round(value, 2, MidpointRounding.AwayFromZero).ToString("F2", CultureInfo.InvariantCulture);
+
+    /// <summary>StringWriter som rapporterar UTF-8 så att XML-deklarationen blir korrekt.</summary>
+    private sealed class Utf8StringWriter : StringWriter
+    {
+        public Utf8StringWriter() : base(CultureInfo.InvariantCulture) { }
+        public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
     }
 }
 

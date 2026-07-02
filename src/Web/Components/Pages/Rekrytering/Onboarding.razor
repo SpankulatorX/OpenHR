@@ -1,130 +1,103 @@
 @page "/rekrytering/onboarding"
 @layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Web.Services
+@inject RekryteringService Service
 
 <PageTitle>OpenHR - Onboarding</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
     <MudText Typo="Typo.h4" Style="font-weight: 700;">Onboarding</MudText>
-    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" StartIcon="@Icons.Material.Filled.PersonAdd" Style="min-height: 48px;" OnClick="@(() => _showForm = true)">Ny onboarding</MudButton>
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PersonSearch" Href="/rekrytering/vakanser">Tillsätt vakans</MudButton>
 </div>
 
-@if (_showForm)
-{
-    <MudPaper Class="pa-6 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-primary);">
-        <div class="d-flex justify-space-between align-center mb-3">
-            <MudText Typo="Typo.h6" Style="font-weight: 600;">Skapa ny onboarding</MudText>
-            <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _showForm = false)" />
-        </div>
-        <MudTextField @bind-Value="_newAnstelld" Label="Anställd" Variant="Variant.Outlined" Class="mb-3" />
-        <MudTextField @bind-Value="_newStartdatum" Label="Startdatum" Variant="Variant.Outlined" Class="mb-3" />
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
-                   Style="min-height: 48px;" OnClick="SkapaOnboarding">Skapa</MudButton>
-    </MudPaper>
-}
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Onboarding skapas automatiskt när en kandidat tillsätts och blir anställd. Checklistan nedan är kopplad till den nya anställningen.
+</MudText>
 
-@if (_skapad)
+@if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
+else if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert> }
+else
 {
-    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _skapad = false)">Onboarding skapad!</MudAlert>
-}
+    @if (_flash is not null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _flash = null)">@_flash</MudAlert>
+    }
 
-<MudGrid Spacing="3" Class="mb-6">
-    <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-primary);"><MudText Typo="Typo.h3" Color="Color.Primary" Style="font-weight: 700;">@_arenden.Count</MudText><MudText Typo="Typo.body2">Aktiva</MudText></MudPaper></MudItem>
-    <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-warning);"><MudText Typo="Typo.h3" Color="Color.Warning" Style="font-weight: 700;">@_arenden.Count(a => a.Procent < 50)</MudText><MudText Typo="Typo.body2">Tidig fas</MudText></MudPaper></MudItem>
-    <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-info);"><MudText Typo="Typo.h3" Color="Color.Info" Style="font-weight: 700;">@_arenden.Count(a => a.Procent >= 50 && a.Procent < 100)</MudText><MudText Typo="Typo.body2">Pågående</MudText></MudPaper></MudItem>
-    <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-success);"><MudText Typo="Typo.h3" Color="Color.Success" Style="font-weight: 700;">7</MudText><MudText Typo="Typo.body2">Klara (YTD)</MudText></MudPaper></MudItem>
-</MudGrid>
+    <MudGrid Spacing="3" Class="mb-6">
+        <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-primary);"><MudText Typo="Typo.h3" Color="Color.Primary" Style="font-weight: 700;">@_arenden.Count</MudText><MudText Typo="Typo.body2">Aktiva</MudText></MudPaper></MudItem>
+        <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-warning);"><MudText Typo="Typo.h3" Color="Color.Warning" Style="font-weight: 700;">@_arenden.Count(a => a.ProcentKlar < 50)</MudText><MudText Typo="Typo.body2">Tidig fas</MudText></MudPaper></MudItem>
+        <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-info);"><MudText Typo="Typo.h3" Color="Color.Info" Style="font-weight: 700;">@_arenden.Count(a => a.ProcentKlar >= 50 && a.ProcentKlar < 100)</MudText><MudText Typo="Typo.body2">Pågående</MudText></MudPaper></MudItem>
+        <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-success);"><MudText Typo="Typo.h3" Color="Color.Success" Style="font-weight: 700;">@_arenden.Count(a => a.ProcentKlar == 100)</MudText><MudText Typo="Typo.body2">Klara</MudText></MudPaper></MudItem>
+    </MudGrid>
 
-<MudText Typo="Typo.h6" Class="mb-3">Aktiva onboardingärenden</MudText>
-@foreach (var a in _arenden)
-{
-    <MudPaper Class="pa-4 mb-4" Elevation="2">
-        <div class="d-flex justify-space-between align-center mb-2">
-            <div>
-                <MudText Typo="Typo.h6" Style="font-weight: 600;">@a.Namn</MudText>
-                <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">@a.Befattning — @a.Enhet | Startdatum: @a.Startdatum</MudText>
-            </div>
-            <MudChip T="string" Size="Size.Small" Color="@(a.Procent == 100 ? Color.Success : a.Procent >= 60 ? Color.Info : Color.Warning)">@a.Procent % klart</MudChip>
-        </div>
-        <MudProgressLinear Value="@a.Procent" Color="@(a.Procent == 100 ? Color.Success : a.Procent >= 60 ? Color.Info : Color.Warning)" Rounded="true" Size="Size.Large" Class="mb-3" />
-        <MudGrid Spacing="2">
-            @foreach (var steg in a.Checklista)
-            {
-                <MudItem xs="12" sm="6" md="4" lg="2">
-                    <MudPaper Class="pa-3 text-center" Elevation="1" Style="@($"border-left: 3px solid {(steg.Klar ? "var(--mud-palette-success)" : "var(--mud-palette-text-disabled)}")}")">
-                        <MudIcon Icon="@(steg.Klar ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.RadioButtonUnchecked)"
-                                 Color="@(steg.Klar ? Color.Success : Color.Default)" />
-                        <MudText Typo="Typo.body2" Style="font-weight: 500;">@steg.Namn</MudText>
-                        <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">@steg.Ansvarig</MudText>
-                    </MudPaper>
-                </MudItem>
-            }
-        </MudGrid>
-    </MudPaper>
+    @if (_arenden.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+            Inga onboardingärenden än. Tillsätt en vakans under <strong>Rekrytering → Vakanser</strong> så skapas en checklista automatiskt här.
+        </MudAlert>
+    }
+    else
+    {
+        <MudText Typo="Typo.h6" Class="mb-3">Aktiva onboardingärenden</MudText>
+        @foreach (var a in _arenden)
+        {
+            <MudPaper Class="pa-4 mb-4" Elevation="2">
+                <div class="d-flex justify-space-between align-center mb-2">
+                    <div>
+                        <MudText Typo="Typo.h6" Style="font-weight: 600;">@a.AnstalldNamn</MudText>
+                        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">@a.Befattning — @a.VakansTitel | Startdatum: @a.Startdatum.ToString("yyyy-MM-dd")</MudText>
+                    </div>
+                    <MudChip T="string" Size="Size.Small" Color="@(a.ProcentKlar == 100 ? Color.Success : a.ProcentKlar >= 60 ? Color.Info : Color.Warning)">@a.ProcentKlar % klart</MudChip>
+                </div>
+                <MudProgressLinear Value="@a.ProcentKlar" Color="@(a.ProcentKlar == 100 ? Color.Success : a.ProcentKlar >= 60 ? Color.Info : Color.Warning)" Rounded="true" Size="Size.Large" Class="mb-3" />
+                <MudGrid Spacing="2">
+                    @foreach (var steg in a.Steg)
+                    {
+                        <MudItem xs="12" sm="6" md="4">
+                            <MudPaper Class="pa-3 d-flex align-center justify-space-between" Elevation="1" Style="@($"border-left: 3px solid {(steg.Klar ? "var(--mud-palette-success)" : "var(--mud-palette-text-disabled)")}")">
+                                <div class="d-flex align-center" style="gap: 0.5rem;">
+                                    <MudIcon Icon="@(steg.Klar ? Icons.Material.Filled.CheckCircle : Icons.Material.Filled.RadioButtonUnchecked)" Color="@(steg.Klar ? Color.Success : Color.Default)" />
+                                    <MudText Typo="Typo.body2" Style="font-weight: 500;">@steg.Beskrivning</MudText>
+                                </div>
+                                @if (!steg.Klar)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" Disabled="@_sparar" OnClick="@(() => MarkeraKlar(a.ChecklistId, steg.Index))">Klar</MudButton>
+                                }
+                            </MudPaper>
+                        </MudItem>
+                    }
+                </MudGrid>
+            </MudPaper>
+        }
+    }
 }
 
 @code {
-    private bool _showForm;
-    private bool _skapad;
-    private string _newAnstelld = "";
-    private string _newStartdatum = "";
+    private List<OnboardingVy> _arenden = [];
+    private bool _loading = true;
+    private bool _sparar;
+    private string? _error;
+    private string? _flash;
 
-    private void SkapaOnboarding()
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
     {
-        _showForm = false;
-        _skapad = true;
-        _newAnstelld = "";
-        _newStartdatum = "";
+        _loading = true;
+        try { _arenden = await Service.HamtaOnboardingAsync(); _error = null; }
+        catch (Exception ex) { _error = $"Kunde inte hämta onboarding: {ex.Message}"; }
+        finally { _loading = false; }
     }
 
-    private List<OnboardingArende> _arenden =
-    [
-        new("Sara Johansson", "Sjuksköterska", "Kirurgi avd 3", "2026-04-01",
-        [
-            new("IT-konto", "IT-avdelningen", false),
-            new("Passerkort", "Säkerhet", false),
-            new("Brandskydd", "Utbildning", false),
-            new("Hygienutbildning", "Vårdhygien", false),
-            new("Introduktion", "Enhetschef", false),
-        ]),
-        new("Erik Bergström", "Systemutvecklare", "IT-avdelningen", "2026-03-15",
-        [
-            new("IT-konto", "IT-avdelningen", true),
-            new("Passerkort", "Säkerhet", true),
-            new("Brandskydd", "Utbildning", true),
-            new("Hygienutbildning", "Vårdhygien", false),
-            new("Introduktion", "Enhetschef", false),
-        ]),
-        new("Fatima Al-Hassan", "Undersköterska", "Geriatrik avd 1", "2026-03-20",
-        [
-            new("IT-konto", "IT-avdelningen", true),
-            new("Passerkort", "Säkerhet", true),
-            new("Brandskydd", "Utbildning", true),
-            new("Hygienutbildning", "Vårdhygien", true),
-            new("Introduktion", "Enhetschef", false),
-        ]),
-        new("Anders Nilsson", "Läkare", "Akutmottagningen", "2026-03-10",
-        [
-            new("IT-konto", "IT-avdelningen", true),
-            new("Passerkort", "Säkerhet", true),
-            new("Brandskydd", "Utbildning", true),
-            new("Hygienutbildning", "Vårdhygien", true),
-            new("Introduktion", "Enhetschef", true),
-        ]),
-    ];
-
-    private class OnboardingArende(string namn, string befattning, string enhet, string startdatum, List<ChecklisteSteg> checklista)
+    private async Task MarkeraKlar(Guid checklistId, int index)
     {
-        public string Namn { get; set; } = namn;
-        public string Befattning { get; set; } = befattning;
-        public string Enhet { get; set; } = enhet;
-        public string Startdatum { get; set; } = startdatum;
-        public List<ChecklisteSteg> Checklista { get; set; } = checklista;
-        public int Procent => Checklista.Count == 0 ? 0 : (int)(Checklista.Count(s => s.Klar) * 100.0 / Checklista.Count);
-    }
-
-    private class ChecklisteSteg(string namn, string ansvarig, bool klar)
-    {
-        public string Namn { get; set; } = namn;
-        public string Ansvarig { get; set; } = ansvarig;
-        public bool Klar { get; set; } = klar;
+        _sparar = true;
+        try
+        {
+            await Service.MarkeraOnboardingStegKlartAsync(checklistId, index);
+            await LaddaAsync();
+            _flash = "Steget markerat som klart.";
+        }
+        catch (Exception ex) { _error = $"Kunde inte uppdatera steg: {ex.Message}"; }
+        finally { _sparar = false; }
     }
 }

@@ -1,0 +1,111 @@
+@page "/admin/drift-status"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using Microsoft.Extensions.Diagnostics.HealthChecks
+@inject HealthCheckService HealthChecks
+
+<PageTitle>OpenHR - Driftstatus</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-1" Style="font-weight: 700;">Driftstatus</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="opacity:.7;">
+    Realtidshälsa för persistenslagret. Samma kontroll som exponeras på
+    <code>/health/ready</code> (readiness) och <code>/health</code> (liveness).
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_report is null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">Kunde inte hämta hälsostatus.</MudAlert>
+}
+else
+{
+    <MudAlert Severity="@ToSeverity(_report.Status)" Variant="Variant.Filled" Class="mb-4">
+        Samlad status: <strong>@ToSwedish(_report.Status)</strong>
+        &nbsp;(bedömd på @_report.TotalDuration.TotalMilliseconds.ToString("0") ms)
+    </MudAlert>
+
+    <MudSimpleTable Hover="true" Elevation="2" Class="mb-4">
+        <thead>
+            <tr><th>Kontroll</th><th>Status</th><th>Beskrivning</th><th>Detaljer</th></tr>
+        </thead>
+        <tbody>
+            @foreach (var entry in _report.Entries)
+            {
+                <tr>
+                    <td><strong>@entry.Key</strong></td>
+                    <td>
+                        <MudChip T="string" Color="@ToColor(entry.Value.Status)" Size="Size.Small">
+                            @ToSwedish(entry.Value.Status)
+                        </MudChip>
+                    </td>
+                    <td>@entry.Value.Description</td>
+                    <td>
+                        @foreach (var kv in entry.Value.Data)
+                        {
+                            <div><code>@kv.Key</code> = @kv.Value</div>
+                        }
+                        @if (entry.Value.Exception is not null)
+                        {
+                            <div style="opacity:.7;">@entry.Value.Exception.Message</div>
+                        }
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+
+    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Refresh" OnClick="LoadAsync">
+        Uppdatera
+    </MudButton>
+
+    <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mt-4">
+        Vid röd status: se <strong>docs/drift-reservloneplan.md</strong> för hur lön ändå
+        betalas ut under incident (senaste godkända pain.001 + manuell bankinlämning).
+    </MudAlert>
+}
+
+@code {
+    private HealthReport? _report;
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            _report = await HealthChecks.CheckHealthAsync();
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string ToSwedish(HealthStatus status) => status switch
+    {
+        HealthStatus.Healthy => "Frisk",
+        HealthStatus.Degraded => "Försämrad",
+        HealthStatus.Unhealthy => "Ohälsosam",
+        _ => status.ToString()
+    };
+
+    private static Severity ToSeverity(HealthStatus status) => status switch
+    {
+        HealthStatus.Healthy => Severity.Success,
+        HealthStatus.Degraded => Severity.Warning,
+        _ => Severity.Error
+    };
+
+    private static Color ToColor(HealthStatus status) => status switch
+    {
+        HealthStatus.Healthy => Color.Success,
+        HealthStatus.Degraded => Color.Warning,
+        _ => Color.Error
+    };
+}

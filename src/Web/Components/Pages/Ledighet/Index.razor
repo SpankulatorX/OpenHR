@@ -56,6 +56,7 @@
     private string? _error;
 
     [Inject] private RegionHR.Web.Services.AuthService Auth { get; set; } = default!;
+    [Inject] private RegionHR.Web.Services.LedighetService Ledighet { get; set; } = default!;
     private bool _canApprove => Auth.EmployeeId.HasValue;
 
     protected override async Task OnInitializedAsync()
@@ -106,14 +107,12 @@
 
     private async Task Godkann(LedighetRad row)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) { _error = L["ApprovalRequiresEmployee"]; return; }
+        _error = null;
         try
         {
-            var req = await db.LeaveRequests.FirstOrDefaultAsync(r => r.Id == row.Id);
-            if (req == null) return;
-            req.Godkann(Auth.EmployeeId.Value, null);
-            await db.SaveChangesAsync();
+            // Tjänsten drar semestersaldo, avbokar överlappande schemapass och notifierar den anställde.
+            await Ledighet.GodkannAsync(row.Id, Auth.EmployeeId.Value, null);
 
             var idx = _rader.IndexOf(row);
             if (idx >= 0)
@@ -131,14 +130,11 @@
 
     private async Task Neka(LedighetRad row)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) { _error = L["RejectionRequiresEmployee"]; return; }
+        _error = null;
         try
         {
-            var req = await db.LeaveRequests.FirstOrDefaultAsync(r => r.Id == row.Id);
-            if (req == null) return;
-            req.Avvisa(Auth.EmployeeId.Value, L["RejectedByManager"]);
-            await db.SaveChangesAsync();
+            await Ledighet.AvslaAsync(row.Id, Auth.EmployeeId.Value, L["RejectedByManager"].Value);
 
             var idx = _rader.IndexOf(row);
             if (idx >= 0)

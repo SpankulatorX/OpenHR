@@ -211,6 +211,11 @@ public static class SeedData
             employments.Add(employment);
         }
 
+        // Fiktiva men format-giltiga demo-bankuppgifter så betalfilen (pain.001) blir komplett — våg 3/export
+        var demoClearing = new[] { "3300", "5100", "6000", "8327", "9420" };
+        for (var bi = 0; bi < employees.Count; bi++)
+            employees[bi].UppdateraBankuppgifter(demoClearing[bi % demoClearing.Length], (1000000000L + bi * 7654321L).ToString());
+
         // === Skills (normaliserad katalog) ===
         var hlr = Skill.Skapa("HLR", SkillCategory.Klinisk, "Hjart-lungr\u00e4ddning");
         var triage = Skill.Skapa("Triage", SkillCategory.Klinisk, "Prioritering av patienter");
