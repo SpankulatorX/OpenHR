@@ -24,6 +24,8 @@ using RegionHR.Infrastructure.Events;
 using RegionHR.Infrastructure.Services;
 using RegionHR.Automation.Domain;
 using RegionHR.Migration.Adapters;
+using RegionHR.HalsoSAM.Services;
+using RegionHR.Infrastructure.HalsoSAM;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using OpenTelemetry.Metrics;
@@ -115,6 +117,18 @@ public static class DependencyInjection
 
         // Reporting
         services.AddScoped<ReportGenerator>();
+        services.AddScoped<ReportExecutionService>();
+
+        // HälsoSAM — rehabkedja + automatisk triggning (våg 1)
+        services.AddScoped<IRehabRepository, RehabRepository>();
+        services.AddScoped<RehabService>();
+        services.AddScoped<SickLeaveMonitor>();
+        services.AddScoped<SickLeaveNotificationDataProvider>();
+        services.AddScoped<ISickLeaveDataProvider, SickLeaveNotificationDataProvider>();
+
+        // Competence — gap-analys + utvecklingsplan (våg 1)
+        services.AddSingleton<RegionHR.Competence.Services.CompetenceGapAnalyzer>();
+        services.AddSingleton<RegionHR.Competence.Services.UtvecklingsplanGenerator>();
 
         // Document template engine & e-signing
         services.AddSingleton<DocumentTemplateEngine>();
@@ -168,6 +182,7 @@ public static class DependencyInjection
         services.AddHostedService<ScheduledReportService>();
         services.AddHostedService<CertificationReminderService>();
         services.AddHostedService<LASAlertService>();
+        services.AddHostedService<RehabAutoTriggerService>();
 
         // OpenTelemetry
         services.AddOpenTelemetry()

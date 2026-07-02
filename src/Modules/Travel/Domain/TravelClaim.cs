@@ -34,8 +34,8 @@ public sealed class TravelClaim : AggregateRoot<Guid>
     private TravelClaim() { }
 
     // Skatteverkets satser 2025
-    private const decimal TRAKTAMENTE_HELDAG_INRIKES = 260m;
-    private const decimal TRAKTAMENTE_HALVDAG_INRIKES = 130m;
+    private const decimal TRAKTAMENTE_HELDAG_INRIKES = 300m;   // Skatteverket, inkomstår 2026
+    private const decimal TRAKTAMENTE_HALVDAG_INRIKES = 150m;  // Skatteverket, inkomstår 2026
     private const decimal MILERSATTNING_SATS = 25m; // kr per mil
 
     public static TravelClaim Skapa(EmployeeId anstallId, string beskrivning, DateOnly datum)

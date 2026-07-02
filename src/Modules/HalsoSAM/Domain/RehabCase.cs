@@ -19,7 +19,14 @@ public sealed class RehabCase : AggregateRoot<Guid>
     public DateTime SkapadVid { get; private set; }
     public string? RehabPlan { get; private set; }
 
-    // Uppföljningsdagar enligt FK-regler
+    /// <summary>
+    /// Sjukfallets faktiska dag 1 (första sjukdagen / sjukanmälan / läkarintygets
+    /// startdatum). ALLA milstolpar (dag 14/90/180/365) räknas från detta datum,
+    /// inte från när ärendet skapades i systemet. Se <see cref="Rehabkedja"/>.
+    /// </summary>
+    public DateOnly? SjukfallDag1 { get; private set; }
+
+    // Uppföljningsdagar enligt rehabiliteringskedjan — beräknade från SjukfallDag1
     public DateTime? Uppfoljning14Dagar { get; private set; }
     public DateTime? Uppfoljning90Dagar { get; private set; }
     public DateTime? Uppfoljning180Dagar { get; private set; }
@@ -36,21 +43,46 @@ public sealed class RehabCase : AggregateRoot<Guid>
 
     private RehabCase() { }
 
+    /// <summary>
+    /// Skapar ett rehabärende utan känt sjukfallsstartdatum. Milstolparna ankras då
+    /// vid skapandeögonblicket (bakåtkompatibelt bekvämlighetsanrop). Använd hellre
+    /// överlagringen med explicit <paramref name="anstallId"/>+dag 1 så att kedjan
+    /// räknas från sjukfallets faktiska första dag.
+    /// </summary>
     public static RehabCase Skapa(EmployeeId anstallId, RehabTrigger trigger)
     {
         var now = DateTime.UtcNow;
-        return new RehabCase
+        var rehab = new RehabCase
         {
             Id = Guid.NewGuid(),
             AnstallId = anstallId,
             Trigger = trigger,
             Status = RehabStatus.Signal,
             SkapadVid = now,
-            Uppfoljning14Dagar = now.AddDays(14),
-            Uppfoljning90Dagar = now.AddDays(90),
-            Uppfoljning180Dagar = now.AddDays(180),
-            Uppfoljning365Dagar = now.AddDays(365)
+            SjukfallDag1 = DateOnly.FromDateTime(now)
         };
+        rehab.BeraknaMilstolpar(now);
+        return rehab;
+    }
+
+    /// <summary>
+    /// Skapar ett rehabärende förankrat i sjukfallets faktiska dag 1. Milstolparna
+    /// (dag 14/90/180/365 enligt <see cref="Rehabkedja"/>) beräknas från
+    /// <paramref name="sjukfallDag1"/> — detta är det korrekta produktionsanropet.
+    /// </summary>
+    public static RehabCase Skapa(EmployeeId anstallId, RehabTrigger trigger, DateOnly sjukfallDag1)
+    {
+        var rehab = new RehabCase
+        {
+            Id = Guid.NewGuid(),
+            AnstallId = anstallId,
+            Trigger = trigger,
+            Status = RehabStatus.Signal,
+            SkapadVid = DateTime.UtcNow,
+            SjukfallDag1 = sjukfallDag1
+        };
+        rehab.BeraknaMilstolpar(AnkareFor(sjukfallDag1));
+        return rehab;
     }
 
     /// <summary>
@@ -60,19 +92,44 @@ public sealed class RehabCase : AggregateRoot<Guid>
     /// </summary>
     internal static RehabCase SkapaForSeed(EmployeeId anstallId, RehabTrigger trigger, DateTime skapadVid)
     {
-        return new RehabCase
+        var rehab = new RehabCase
         {
             Id = Guid.NewGuid(),
             AnstallId = anstallId,
             Trigger = trigger,
             Status = RehabStatus.Signal,
             SkapadVid = skapadVid,
-            Uppfoljning14Dagar = skapadVid.AddDays(14),
-            Uppfoljning90Dagar = skapadVid.AddDays(90),
-            Uppfoljning180Dagar = skapadVid.AddDays(180),
-            Uppfoljning365Dagar = skapadVid.AddDays(365)
+            SjukfallDag1 = DateOnly.FromDateTime(skapadVid)
         };
+        rehab.BeraknaMilstolpar(skapadVid);
+        return rehab;
     }
+
+    /// <summary>
+    /// Korrigerar/sätter sjukfallets dag 1 och räknar om samtliga milstolpar därifrån.
+    /// Används när det verkliga sjukfallsstartdatumet blir känt efter att ärendet skapats.
+    /// </summary>
+    public void SattSjukfallDag1(DateOnly sjukfallDag1)
+    {
+        SjukfallDag1 = sjukfallDag1;
+        BeraknaMilstolpar(AnkareFor(sjukfallDag1));
+    }
+
+    /// <summary>Beräknar milstolpe-datumen (dag 14/90/180/365) från en ankarpunkt.</summary>
+    private void BeraknaMilstolpar(DateTime ankare)
+    {
+        Uppfoljning14Dagar = ankare.AddDays(14);
+        Uppfoljning90Dagar = ankare.AddDays(90);
+        Uppfoljning180Dagar = ankare.AddDays(180);
+        Uppfoljning365Dagar = ankare.AddDays(365);
+    }
+
+    /// <summary>Ankarpunkt = sjukfallets dag 1 vid 00:00 UTC.</summary>
+    private static DateTime AnkareFor(DateOnly sjukfallDag1) =>
+        DateTime.SpecifyKind(sjukfallDag1.ToDateTime(TimeOnly.MinValue), DateTimeKind.Utc);
+
+    /// <summary>Har uppföljning för given milstolpe (dag 14/90/180/365) redan registrerats?</summary>
+    public bool ArUppfoljningRegistrerad(int dagNr) => _uppfoljningar.Any(u => u.DagNr == dagNr);
 
     public void TilldelaArendeagare(EmployeeId hrPerson)
     {

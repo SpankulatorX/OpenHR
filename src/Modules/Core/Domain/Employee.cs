@@ -97,16 +97,58 @@ public sealed class Employee : AggregateRoot<EmployeeId>
         DateOnly startdatum,
         DateOnly? slutdatum = null,
         string? bestaKod = null,
-        string? aidKod = null)
+        string? aidKod = null,
+        string? befattningstitel = null,
+        CollectiveAgreementId? avtalsId = null)
     {
         var employment = Employment.Skapa(
             Id, enhet, anstallningsform, kollektivavtal,
             manadslon, sysselsattningsgrad, startdatum, slutdatum,
             bestaKod, aidKod);
 
+        if (!string.IsNullOrWhiteSpace(befattningstitel))
+            employment.SattBefattning(befattningstitel);
+        if (avtalsId is { } avtal)
+            employment.SattKollektivavtal(avtal);
+
         _anstallningar.Add(employment);
         RaiseDomainEvent(new EmploymentCreatedEvent(employment.Id, Id, anstallningsform));
         return employment;
+    }
+
+    private Employment HittaAnstallning(EmploymentId anstallningId) =>
+        _anstallningar.FirstOrDefault(a => a.Id == anstallningId)
+        ?? throw new InvalidOperationException($"Anställning {anstallningId} finns inte på denna anställd.");
+
+    /// <summary>Ändra månadslön för en av den anställdes anställningar (går via aggregatet).</summary>
+    public void AndraAnstallningsLon(EmploymentId anstallningId, Money nyLon, string andradAv)
+    {
+        var anstallning = HittaAnstallning(anstallningId);
+        var gammalLon = anstallning.Manadslon;
+        anstallning.AndraLon(nyLon, andradAv);
+        RaiseDomainEvent(new SalaryChangedEvent(anstallning.Id, gammalLon, nyLon));
+    }
+
+    /// <summary>Ändra sysselsättningsgrad för en av den anställdes anställningar.</summary>
+    public void AndraAnstallningsSysselsattningsgrad(EmploymentId anstallningId, Percentage nyGrad, string andradAv)
+    {
+        var anstallning = HittaAnstallning(anstallningId);
+        anstallning.AndraSysselsattningsgrad(nyGrad, andradAv);
+    }
+
+    /// <summary>Sätt befattning för en av den anställdes anställningar.</summary>
+    public void SattAnstallningsBefattning(EmploymentId anstallningId, string befattningstitel, string andradAv)
+    {
+        var anstallning = HittaAnstallning(anstallningId);
+        anstallning.SattBefattning(befattningstitel, andradAv);
+    }
+
+    /// <summary>Avsluta en av den anställdes anställningar per ett angivet slutdatum.</summary>
+    public void AvslutaAnstallning(EmploymentId anstallningId, DateOnly slutdatum, string andradAv)
+    {
+        var anstallning = HittaAnstallning(anstallningId);
+        anstallning.AvslutaAnstallning(slutdatum, andradAv);
+        RaiseDomainEvent(new EmploymentEndedEvent(anstallning.Id, Id, slutdatum));
     }
 
     public Employment? AktivAnstallning(DateOnly datum) =>

@@ -14,5 +14,6 @@
     <ProjectReference Include="..\..\src\SharedKernel\RegionHR.SharedKernel.csproj" />
     <ProjectReference Include="..\..\src\Modules\Core\RegionHR.Core.csproj" />
     <ProjectReference Include="..\..\src\Modules\Travel\RegionHR.Travel.csproj" />
+    <ProjectReference Include="..\..\src\Infrastructure\RegionHR.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

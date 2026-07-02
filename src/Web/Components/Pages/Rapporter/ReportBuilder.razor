@@ -1,9 +1,12 @@
 @page "/rapporter/bygg"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Reporting
 @using RegionHR.Reporting.Domain
+@using RegionHR.Reporting.Engine
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject ReportExecutionService Exec
 @inject ISnackbar Snackbar
 
 <PageTitle>OpenHR - Rapportbyggare</PageTitle>
@@ -91,6 +94,9 @@
             <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true" OnClick="SparaRapport" Disabled="@(!KanSpara)">
                 Spara rapport
             </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary" FullWidth="true" Class="mt-2" StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="Forhandsgranska" Disabled="@(string.IsNullOrWhiteSpace(_valdDatakalla) || _previewLoading)">
+                Förhandsgranska data
+            </MudButton>
             <MudButton Variant="Variant.Outlined" Color="Color.Default" FullWidth="true" Class="mt-2" OnClick="Aterstall">
                 Aterstall
             </MudButton>
@@ -106,15 +112,56 @@
             {
                 @foreach (var r in _sparadeRapporter)
                 {
-                    <MudPaper Class="pa-2 mb-2" Elevation="0" Style="background: var(--mud-palette-background-gray);">
-                        <MudText Typo="Typo.body2"><strong>@r.Namn</strong></MudText>
-                        <MudText Typo="Typo.caption">@r.Typ — @(r.VisualiseringsTyp ?? "Table")</MudText>
+                    <MudPaper Class="pa-2 mb-2 d-flex justify-space-between align-center" Elevation="0" Style="background: var(--mud-palette-background-gray);">
+                        <div>
+                            <MudText Typo="Typo.body2"><strong>@r.Namn</strong></MudText>
+                            <MudText Typo="Typo.caption">@(r.Datakalla ?? r.Typ.ToString()) — @(r.VisualiseringsTyp ?? "Table")</MudText>
+                        </div>
+                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PlayArrow" OnClick="@(() => KorSparad(r))">Kör</MudButton>
                     </MudPaper>
                 }
             }
         </MudPaper>
     </MudItem>
 </MudGrid>
+
+@if (_previewLoading)
+{
+    <div style="text-align:center; padding:2rem;">
+        <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+        <MudText Typo="Typo.body2" Class="mt-2">Kör rapport mot databasen...</MudText>
+    </div>
+}
+else if (_previewError != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mt-4">Kunde inte köra rapport: @_previewError</MudAlert>
+}
+else if (_previewResult != null)
+{
+    <MudPaper Class="pa-4 mt-4" Elevation="2" Style="border-left: 4px solid var(--mud-palette-primary);">
+        <MudText Typo="Typo.h6" Class="mb-2">Resultat @(_previewTitel is null ? "" : $"— {_previewTitel}")</MudText>
+        <MudAlert Severity="@(_previewResult.AntalRader > 0 ? Severity.Success : Severity.Info)" Dense="true" Class="mb-3">
+            @_previewResult.AntalRader rader@(_previewResult.ArGrupperad ? " (grupperad)" : "").
+            @(_previewResult.AntalRader == 0 ? " Ingen data matchade valda kolumner/filter." : "")
+        </MudAlert>
+        @if (_previewResult.AntalRader > 0)
+        {
+            <MudSimpleTable Hover="true" Dense="true" Elevation="0">
+                <thead><tr>@foreach (var h in _previewResult.Rubriker) { <th>@h</th> }</tr></thead>
+                <tbody>
+                    @foreach (var row in _previewResult.Rader.Take(20))
+                    {
+                        <tr>@foreach (var cell in row) { <td>@cell</td> }</tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+            @if (_previewResult.AntalRader > 20)
+            {
+                <MudText Typo="Typo.caption" Class="mt-2">Visar 20 av @_previewResult.AntalRader rader.</MudText>
+            }
+        }
+    </MudPaper>
+}
 
 @code {
     private string? _namn;
@@ -126,6 +173,11 @@
     private string? _gruppering;
     private string _visualiseringsTyp = "Table";
     private List<ReportDefinition> _sparadeRapporter = [];
+
+    private ReportResult? _previewResult;
+    private bool _previewLoading;
+    private string? _previewError;
+    private string? _previewTitel;
 
     private readonly List<string> _datakallor = ["Anstallda", "Lonekorngar", "Franvaro", "Schema", "Certifieringar", "LAS-ackumuleringar", "Rekrytering"];
 
@@ -171,7 +223,7 @@
         var def = ReportDefinition.Skapa(_namn!, _beskrivning ?? "", ReportType.AdHoc);
         var kolumnerJson = System.Text.Json.JsonSerializer.Serialize(_valdaKolumner);
         var filterJson = System.Text.Json.JsonSerializer.Serialize(new { Enhet = _filterEnhet, Status = _filterStatus });
-        def.SattRapportmall(kolumnerJson, filterJson, _gruppering, _visualiseringsTyp);
+        def.SattRapportmall(_valdDatakalla, kolumnerJson, filterJson, _gruppering, _visualiseringsTyp);
 
         await db.ReportDefinitions.AddAsync(def);
         await db.SaveChangesAsync();
@@ -179,6 +231,54 @@
         _sparadeRapporter.Insert(0, def);
         Snackbar.Add($"Rapport '{_namn}' sparad!", Severity.Success);
         Aterstall();
+    }
+
+    private async Task Forhandsgranska()
+    {
+        if (string.IsNullOrWhiteSpace(_valdDatakalla))
+        {
+            Snackbar.Add("Välj datakälla först.", Severity.Warning);
+            return;
+        }
+
+        _previewLoading = true;
+        _previewError = null;
+        _previewResult = null;
+        _previewTitel = _namn;
+        try
+        {
+            var kolumnerJson = System.Text.Json.JsonSerializer.Serialize(_valdaKolumner);
+            var filterJson = System.Text.Json.JsonSerializer.Serialize(new { Enhet = _filterEnhet, Status = _filterStatus });
+            _previewResult = await Exec.ExecuteAsync(_valdDatakalla, kolumnerJson, filterJson, _gruppering, _visualiseringsTyp);
+        }
+        catch (Exception ex)
+        {
+            _previewError = ex.Message;
+        }
+        finally
+        {
+            _previewLoading = false;
+        }
+    }
+
+    private async Task KorSparad(ReportDefinition def)
+    {
+        _previewLoading = true;
+        _previewError = null;
+        _previewResult = null;
+        _previewTitel = def.Namn;
+        try
+        {
+            _previewResult = await Exec.ExecuteAsync(def);
+        }
+        catch (Exception ex)
+        {
+            _previewError = ex.Message;
+        }
+        finally
+        {
+            _previewLoading = false;
+        }
     }
 
     private void Aterstall()

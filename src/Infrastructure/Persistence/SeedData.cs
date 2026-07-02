@@ -55,10 +55,11 @@ public static class SeedData
 
         // 1. AB — Allmanna bestammelser (kommun/region)
         var ab = CollectiveAgreement.Skapa("AB 2025", "SKR och Kommunal", giltigFran, IndustrySector.KommunRegion);
-        ab.LaggTillOBSats(OBCategory.VardagKvall, 126.50m, giltigFran);
-        ab.LaggTillOBSats(OBCategory.VardagNatt, 152.00m, giltigFran);
-        ab.LaggTillOBSats(OBCategory.Helg, 89.00m, giltigFran);
-        ab.LaggTillOBSats(OBCategory.Storhelg, 195.00m, giltigFran);
+        // AB §21 O-tillägg, kanoniska satser fr.o.m. 2025-04-01 (SKR Allmänna bestämmelser).
+        ab.LaggTillOBSats(OBCategory.VardagKvall, 25.60m, giltigFran);
+        ab.LaggTillOBSats(OBCategory.VardagNatt, 56.70m, giltigFran);
+        ab.LaggTillOBSats(OBCategory.Helg, 66.10m, giltigFran);
+        ab.LaggTillOBSats(OBCategory.Storhelg, 126.90m, giltigFran);
         ab.LaggTillOvertidsRegel(1.0m, 1.8m, 200m);
         ab.LaggTillSemesterRegel(25, 31, 32);
         ab.LaggTillPensionsRegel(PensionType.AKAPKR, 6.0m, 31.5m, 599500m, "{\"IBB\":599500,\"TakMultipel\":7.5}");
@@ -72,11 +73,12 @@ public static class SeedData
 
         // 2. HOK — Huvudoverenskommelse
         var hok = CollectiveAgreement.Skapa("HOK 2025", "SKR och OFR/S,P,O", giltigFran, IndustrySector.KommunRegion);
-        hok.LaggTillOBSats(OBCategory.VardagKvall, 120.00m, giltigFran);
-        hok.LaggTillOBSats(OBCategory.VardagNatt, 145.00m, giltigFran);
-        hok.LaggTillOBSats(OBCategory.Helg, 85.00m, giltigFran);
-        hok.LaggTillOBSats(OBCategory.Storhelg, 185.00m, giltigFran);
-        hok.LaggTillOvertidsRegel(1.0m, 1.7m, 200m);
+        // HÖK följer AB §21 O-tillägg → samma belopp.
+        hok.LaggTillOBSats(OBCategory.VardagKvall, 25.60m, giltigFran);
+        hok.LaggTillOBSats(OBCategory.VardagNatt, 56.70m, giltigFran);
+        hok.LaggTillOBSats(OBCategory.Helg, 66.10m, giltigFran);
+        hok.LaggTillOBSats(OBCategory.Storhelg, 126.90m, giltigFran);
+        hok.LaggTillOvertidsRegel(1.0m, 1.8m, 200m);
         hok.LaggTillSemesterRegel(25, 31, 32);
         hok.LaggTillPensionsRegel(PensionType.AKAPKR, 6.0m, 31.5m, 599500m, "{\"IBB\":599500,\"TakMultipel\":7.5}");
         hok.LaggTillViloRegel(11m, 36m, 0.5m);
@@ -193,9 +195,11 @@ public static class SeedData
         {
             var employee = Employee.Skapa(Personnummer.CreateValidated(pnr), fornamn, efternamn);
             employee.UppdateraKontaktuppgifter(
-                $"{fornamn.ToLower()}.{efternamn.ToLower()}@regionvg.se",
+                $"{fornamn.ToLower()}.{efternamn.ToLower()}@regionorebrolan.se",
                 $"070-{Random.Shared.Next(100, 999)} {Random.Shared.Next(10, 99)} {Random.Shared.Next(10, 99)}",
                 null);
+            // Skatteuppgifter (våg 1/skatt): Örebro → Skatteverkets tabell 34, kolumn 1.
+            employee.UppdateraSkatteuppgifter(34, 1, "Örebro", 33.65m, harKyrkoavgift: false, kyrkoavgiftssats: null);
             var startdatum = DateOnly.FromDateTime(DateTime.Today.AddYears(-Random.Shared.Next(1, 15)));
             var employment = employee.LaggTillAnstallning(
                 enhetId, EmploymentType.Tillsvidare, CollectiveAgreementType.AB,
@@ -2102,6 +2106,77 @@ Lön betalas ut den **25:e varje månad**. Om den 25:e infaller på helg sker ut
         grievance1.Bekrafta();
         grievance1.StartaUtredning("Karl Berg");
         db.Grievances.Add(grievance1);
+
+        // === Skatteverkets skattetabell 34, kolumn 1, 2026 (Örebro 33,65 %) — våg 1/skatt ===
+        // Utan denna seed blir preliminärskatten 0 i drift.
+        var skattetabell34 = new RegionHR.Payroll.Domain.TaxTable { Ar = 2026, Tabellnummer = 34, Kolumn = 1 };
+        var t34rader = new (decimal Fran, decimal Till, decimal Skatt)[]
+        {
+            (0, 2000, 0), (2001, 4999, 150), (5001, 9999, 422), (10001, 11999, 1251),
+            (12001, 13999, 1676), (14001, 14999, 2099), (15001, 17999, 2304), (18001, 19999, 3015),
+            (20001, 21999, 3541), (22001, 23999, 4042), (24001, 25999, 4553), (26001, 27999, 5070),
+            (28001, 29999, 5588), (30001, 31999, 6105), (32001, 33999, 6623), (34001, 35999, 7140),
+            (36001, 37999, 7658), (38001, 39999, 8175), (40001, 41999, 8720), (42001, 43999, 9400),
+            (44001, 45999, 10080), (46001, 47999, 10760), (48001, 49999, 11440), (50001, 51999, 12120),
+            (52001, 54999, 12800), (55001, 57999, 13854), (58001, 59999, 15474), (60001, 64999, 16554),
+            (65001, 69999, 19254), (70001, 77999, 21954), (78001, 999999, 26166),
+        };
+        foreach (var (fran, till, skatt) in t34rader)
+            skattetabell34.LaggTillRad(new RegionHR.Payroll.Domain.TaxTableRow { InkomstFran = fran, InkomstTill = till, Skattebelopp = skatt });
+        db.TaxTables.Add(skattetabell34);
+
+        // === Rapportdefinitioner (self-service builder + schemalagd) — våg 1/rapporter ===
+        if (!await db.ReportDefinitions.AnyAsync())
+        {
+            var rapAnstallda = RegionHR.Reporting.Domain.ReportDefinition.Skapa(
+                "Aktiva anställda per enhet", "Antal aktiva anställda grupperat på enhet",
+                RegionHR.Reporting.Domain.ReportType.AdHoc);
+            rapAnstallda.SattRapportmall(
+                "Anstallda",
+                "[\"Fornamn\",\"Efternamn\",\"Enhet\",\"Befattning\",\"Sysselsattningsgrad\"]",
+                "{\"Enhet\":\"Alla\",\"Status\":\"Aktiv\"}",
+                "Enhet", "Bar");
+            db.ReportDefinitions.Add(rapAnstallda);
+
+            var rapLon = RegionHR.Reporting.Domain.ReportDefinition.Skapa(
+                "Lönekörningar per period", "Brutto/skatt/netto ur persisterad lönedata",
+                RegionHR.Reporting.Domain.ReportType.AdHoc);
+            rapLon.SattRapportmall(
+                "Lonekorngar",
+                "[\"Period\",\"Brutto\",\"Skatt\",\"Netto\",\"Arbetsgivaravgift\"]",
+                "{}", null, "Table");
+            db.ReportDefinitions.Add(rapLon);
+
+            var rapSchema = RegionHR.Reporting.Domain.ReportDefinition.Skapa(
+                "Månatligt löneregister", "Automatiskt löneregister till HR",
+                RegionHR.Reporting.Domain.ReportType.Loneregister);
+            rapSchema.SattRapportmall(
+                "Lonekorngar",
+                "[\"Period\",\"Brutto\",\"Skatt\",\"Netto\",\"Arbetsgivaravgift\"]",
+                "{}", null, "Table");
+            rapSchema.SattSchemalagd("0 6 1 * *", "hr@regionorebrolan.se");
+            db.ReportDefinitions.Add(rapSchema);
+
+            db.ScheduledReports.Add(RegionHR.Reporting.Domain.ScheduledReport.Skapa(
+                rapSchema.Id, "Monthly", "hr@regionorebrolan.se", "Excel"));
+        }
+
+        // === Demo: pågående långtidssjukfrånvaro som rehab-auto-triggern fångar upp — våg 1/rehab ===
+        var demoSjukfall = RegionHR.Leave.Domain.SickLeaveNotification.Skapa(
+            employees[0].Id.Value, DateOnly.FromDateTime(DateTime.Today.AddDays(-20)));
+        demoSjukfall.UppdateraDag(21);
+        db.SickLeaveNotifications.Add(demoSjukfall);
+
+        // === Utvecklingsplan ur Annas medarbetarsamtal (samtal → kompetensgap → plan) — våg 1/kompetens ===
+        var utvPlanAnna = RegionHR.Competence.Domain.DevelopmentPlan.Skapa(
+            employees[0].Id.Value, "Sjukskoterska Avd 32",
+            DateOnly.FromDateTime(DateTime.Today));
+        utvPlanAnna.KopplaTillSamtal(reviewAnna.Id);
+        utvPlanAnna.LaggTillMilstolpe(
+            "Hoj \"Lakemedelshantering\" fran niva 3 till 4", "Skill",
+            DateOnly.FromDateTime(DateTime.Today.AddMonths(3)), lakemedel.Id, 3, 4);
+        utvPlanAnna.Aktivera();
+        db.DevelopmentPlans.Add(utvPlanAnna);
 
         await db.SaveChangesAsync();
     }

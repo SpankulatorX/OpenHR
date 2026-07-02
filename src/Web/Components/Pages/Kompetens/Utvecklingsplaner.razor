@@ -1,0 +1,236 @@
+@page "/kompetens/utvecklingsplaner"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Competence.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject ISnackbar Snackbar
+
+<PageTitle>OpenHR — Utvecklingsplaner</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Utvecklingsplaner</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Utvecklingsprocessen i steg — milstolpar genererade ur medarbetarsamtalens kompetensgap.
+    Följ och uppdatera varje steg tills målnivån är nådd.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error">@_error</MudAlert>
+}
+else if (_planer.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">
+        Inga utvecklingsplaner ännu. Skapa en genom att driva ett medarbetarsamtal och generera plan från kompetensgapet.
+    </MudAlert>
+}
+else
+{
+    <MudGrid Spacing="3" Class="mb-4">
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h3" Style="font-weight:700;">@_planer.Count</MudText>
+                <MudText Typo="Typo.body2">Planer</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-secondary);">
+                <MudText Typo="Typo.h3" Color="Color.Secondary" Style="font-weight:700;">@_planer.Count(p => p.KopplatSamtalId != null)</MudText>
+                <MudText Typo="Typo.body2">Från samtal</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="pa-4 text-center" Elevation="2">
+                <MudText Typo="Typo.h3" Style="font-weight:700;">@_planer.Sum(p => p.Milstolpar.Count)</MudText>
+                <MudText Typo="Typo.body2">Milstolpar totalt</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="3">
+            <MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-success);">
+                <MudText Typo="Typo.h3" Color="Color.Success" Style="font-weight:700;">@_planer.Sum(p => p.Milstolpar.Count(m => m.Status == MilestoneStatus.Completed))</MudText>
+                <MudText Typo="Typo.body2">Avklarade steg</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @foreach (var p in _planer)
+    {
+        var klara = p.Milstolpar.Count(m => m.Status == MilestoneStatus.Completed);
+        var totalt = p.Milstolpar.Count;
+        var procent = totalt == 0 ? 0 : (int)Math.Round((double)klara / totalt * 100);
+
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <div class="d-flex justify-space-between align-center mb-1">
+                <div>
+                    <MudText Typo="Typo.h6" Style="font-weight:600;">@NamnFor(p.AnstallId) — mål: @p.MalRoll</MudText>
+                    <MudText Typo="Typo.caption" Style="color:var(--mud-palette-text-secondary);">
+                        Start @p.StartDatum.ToString("yyyy-MM-dd")@(p.MalDatum != null ? $" • mål {p.MalDatum:yyyy-MM-dd}" : "")
+                    </MudText>
+                </div>
+                <div class="d-flex align-center" style="gap:8px;">
+                    @if (p.KopplatSamtalId != null)
+                    {
+                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary"
+                                   StartIcon="@Icons.Material.Filled.Link" Href="@($"/medarbetarsamtal/{p.KopplatSamtalId}")">Från samtal</MudButton>
+                    }
+                    <MudChip T="string" Size="Size.Small" Color="@PlanFarg(p.Status)">@PlanText(p.Status)</MudChip>
+                </div>
+            </div>
+
+            <div class="d-flex align-center mb-3" style="gap:12px;">
+                <MudProgressLinear Value="@procent" Color="@(procent == 100 ? Color.Success : Color.Primary)" Style="flex:1;" />
+                <MudText Typo="Typo.body2" Style="min-width:90px;">@klara/@totalt steg (@procent%)</MudText>
+                @if (p.Status == DevelopmentPlanStatus.Draft)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => Aktivera(p.Id))" Disabled="@_busy">Aktivera</MudButton>
+                }
+                else if (p.Status == DevelopmentPlanStatus.Active && klara == totalt && totalt > 0)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => Slutfor(p.Id))" Disabled="@_busy">Slutför plan</MudButton>
+                }
+            </div>
+
+            @* Milstolpar som steg *@
+            @foreach (var m in p.Milstolpar.OrderBy(x => x.MalDatum))
+            {
+                <div class="d-flex align-center mb-2" style="gap:12px;">
+                    <MudIcon Icon="@MilstolpeIkon(m.Status)" Color="@MilstolpeFarg(m.Status)" />
+                    <div style="flex:1;">
+                        <MudText Typo="Typo.body2" Style="font-weight:600;">@m.Beskrivning</MudText>
+                        <MudText Typo="Typo.caption" Style="color:var(--mud-palette-text-secondary);">
+                            @m.Typ@(m.MalDatum != null ? $" • senast {m.MalDatum:yyyy-MM-dd}" : "")
+                        </MudText>
+                        @if (m.SkillId != null && m.MalNiva != null)
+                        {
+                            <div style="display:flex; gap:4px; margin-top:4px; max-width:220px;">
+                                @for (int n = 1; n <= 5; n++)
+                                {
+                                    var fyll = n <= (m.FranNiva ?? 0);
+                                    var mal = n <= m.MalNiva;
+                                    var farg = fyll ? "var(--mud-palette-warning)" : "var(--mud-palette-lines-default)";
+                                    var kant = mal && !fyll ? "2px dashed var(--mud-palette-secondary)" : "1px solid transparent";
+                                    <div style="flex:1; height:12px; border-radius:3px; background:@farg; border:@kant;"></div>
+                                }
+                            </div>
+                        }
+                    </div>
+                    <div class="d-flex" style="gap:4px;">
+                        @if (m.Status == MilestoneStatus.Pending)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => Paborja(p.Id, m.Id))" Disabled="@_busy">Påbörja</MudButton>
+                        }
+                        @if (m.Status != MilestoneStatus.Completed)
+                        {
+                            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Success" OnClick="@(() => Klarmarkera(p.Id, m.Id))" Disabled="@_busy">Klar</MudButton>
+                        }
+                    </div>
+                </div>
+            }
+        </MudPaper>
+    }
+}
+
+@code {
+    private List<DevelopmentPlan> _planer = [];
+    private Dictionary<Guid, string> _namn = new();
+    private bool _loading = true, _busy;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync() => await Ladda();
+
+    private async Task Ladda()
+    {
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _planer = await db.DevelopmentPlans
+                .Include(p => p.Milstolpar)
+                .OrderByDescending(p => p.StartDatum)
+                .Take(100)
+                .ToListAsync();
+
+            var emps = await db.Employees.ToListAsync();
+            _namn = emps.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta utvecklingsplaner: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private string NamnFor(Guid id) => _namn.TryGetValue(id, out var n) ? n : id.ToString()[..8] + "…";
+
+    private async Task Aktivera(DevelopmentPlanId planId) => await MutateraPlan(planId, p => p.Aktivera(), "Plan aktiverad");
+    private async Task Slutfor(DevelopmentPlanId planId) => await MutateraPlan(planId, p => p.Slutfor(), "Plan slutförd");
+
+    private async Task MutateraPlan(DevelopmentPlanId planId, Action<DevelopmentPlan> action, string ok)
+    {
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var p = await db.DevelopmentPlans.Include(x => x.Milstolpar).FirstAsync(x => x.Id == planId);
+            action(p);
+            await db.SaveChangesAsync();
+            Snackbar.Add(ok, Severity.Success);
+            await Ladda();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _busy = false; }
+    }
+
+    private async Task Paborja(DevelopmentPlanId planId, Guid milId) =>
+        await MutateraMilstolpe(planId, milId, m => m.MarkeraPaborjad(), "Milstolpe påbörjad");
+
+    private async Task Klarmarkera(DevelopmentPlanId planId, Guid milId) =>
+        await MutateraMilstolpe(planId, milId, m => m.MarkeraKlar(), "Milstolpe klar");
+
+    private async Task MutateraMilstolpe(DevelopmentPlanId planId, Guid milId, Action<DevelopmentMilestone> action, string ok)
+    {
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var p = await db.DevelopmentPlans.Include(x => x.Milstolpar).FirstAsync(x => x.Id == planId);
+            var m = p.Milstolpar.First(x => x.Id == milId);
+            action(m);
+            await db.SaveChangesAsync();
+            Snackbar.Add(ok, Severity.Success);
+            await Ladda();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _busy = false; }
+    }
+
+    private static string MilstolpeIkon(MilestoneStatus s) => s switch
+    {
+        MilestoneStatus.Completed => Icons.Material.Filled.CheckCircle,
+        MilestoneStatus.InProgress => Icons.Material.Filled.Autorenew,
+        _ => Icons.Material.Filled.RadioButtonUnchecked
+    };
+
+    private static Color MilstolpeFarg(MilestoneStatus s) => s switch
+    {
+        MilestoneStatus.Completed => Color.Success,
+        MilestoneStatus.InProgress => Color.Primary,
+        _ => Color.Default
+    };
+
+    private static Color PlanFarg(DevelopmentPlanStatus s) => s switch
+    {
+        DevelopmentPlanStatus.Active => Color.Primary,
+        DevelopmentPlanStatus.Completed => Color.Success,
+        _ => Color.Default
+    };
+
+    private static string PlanText(DevelopmentPlanStatus s) => s switch
+    {
+        DevelopmentPlanStatus.Draft => "Utkast",
+        DevelopmentPlanStatus.Active => "Aktiv",
+        DevelopmentPlanStatus.Completed => "Slutförd",
+        _ => s.ToString()
+    };
+}

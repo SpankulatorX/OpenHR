@@ -25,6 +25,7 @@ public class ReportDefinition
     public string? MottagareEpost { get; private set; }
 
     // Report template / self-service builder extensions (Phase B1)
+    public string? Datakalla { get; private set; } // Logiskt datakällenamn (Anstallda/Lonekorngar/...)
     public string? Kolumner { get; private set; } // JSON: column definitions
     public string? Filter { get; private set; } // JSON: filter definitions
     public string? Gruppering { get; private set; }
@@ -51,8 +52,9 @@ public class ReportDefinition
         ArSchemalagd = true;
     }
 
-    public void SattRapportmall(string? kolumner, string? filter, string? gruppering, string? visualiseringsTyp)
+    public void SattRapportmall(string? datakalla, string? kolumner, string? filter, string? gruppering, string? visualiseringsTyp)
     {
+        Datakalla = datakalla;
         Kolumner = kolumner;
         Filter = filter;
         Gruppering = gruppering;

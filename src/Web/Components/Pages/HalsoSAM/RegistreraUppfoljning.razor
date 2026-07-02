@@ -1,0 +1,275 @@
+@page "/halsosam/{Id:guid}/uppfoljning"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.HalsoSAM.Domain
+@using RegionHR.Infrastructure.Persistence
+@using Microsoft.EntityFrameworkCore
+@using SK = RegionHR.SharedKernel.Domain
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>OpenHR — Registrera uppföljning</PageTitle>
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary" Href="/halsosam" Style="margin-bottom: 1rem;">Tillbaka till översikt</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Registrera genomförd uppföljning</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else if (_case == null)
+{
+    <MudAlert Severity="Severity.Warning">Rehabärendet hittades inte.</MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-5 mb-4" Elevation="2">
+        <MudText Typo="Typo.subtitle1" Style="font-weight: 600;" Class="mb-1">@_empNamn</MudText>
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+            Trigger: @TriggerText(_case.Trigger) · Status: @_case.Status
+        </MudText>
+
+        @if (_case.SjukfallDag1.HasValue)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mt-3">
+                Sjukfallets dag 1: <strong>@_case.SjukfallDag1.Value.ToString("yyyy-MM-dd")</strong>.
+                Milstolparna nedan är beräknade från detta datum.
+            </MudAlert>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Text" Dense="true" Class="mt-3">
+                Sjukfallets dag 1 saknas — milstolparna kan vara felaktiga. Ange dag 1 nedan.
+            </MudAlert>
+        }
+    </MudPaper>
+
+    @* Milstolpe-status beräknat från dag 1 *@
+    <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Milstolpar (rehabiliteringskedjan)</MudText>
+    <MudTimeline TimelineAlign="TimelineAlign.Start" Class="mb-5">
+        @foreach (var m in Milstolpar())
+        {
+            <MudTimelineItem Color="@m.Farg" Size="Size.Small"
+                             Variant="@(m.Registrerad ? Variant.Filled : Variant.Outlined)">
+                <MudText Typo="Typo.body2">
+                    <strong>Dag @m.DagNr</strong> — @m.Datum.ToString("yyyy-MM-dd")
+                    @if (m.Registrerad)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Success">Genomförd</MudChip>
+                    }
+                    else if (m.Overdue)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error">Försenad</MudChip>
+                    }
+                    else if (m.Snart)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">Snart</MudChip>
+                    }
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">@m.Beskrivning</MudText>
+            </MudTimelineItem>
+        }
+    </MudTimeline>
+
+    @if (_saved)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4">Uppföljningen registrerades.</MudAlert>
+    }
+
+    @* Registrera uppföljning *@
+    @if (_ejRegistrerade.Count == 0)
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Text">Alla milstolpar är uppföljda.</MudAlert>
+    }
+    else
+    {
+        <MudPaper Class="pa-5 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Ny uppföljning</MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="int" @bind-Value="_valdDagNr" Label="Milstolpe" Variant="Variant.Outlined">
+                        @foreach (var dag in _ejRegistrerade)
+                        {
+                            <MudSelectItem T="int" Value="@dag">Dag @dag</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="8">
+                    <MudSelect T="Guid?" @bind-Value="_utfordAvId" Label="Utförd av (HR/chef)" Variant="Variant.Outlined" Required="true">
+                        @foreach (var e in _employees)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Fornamn @e.Efternamn</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="_kommentar" Label="Kommentar / anteckning från uppföljningen"
+                                  Variant="Variant.Outlined" Lines="3" Required="true" />
+                </MudItem>
+            </MudGrid>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-4" Style="min-height: 48px;"
+                       OnClick="Registrera"
+                       Disabled="@(_utfordAvId == null || string.IsNullOrWhiteSpace(_kommentar) || _saving)">
+                Registrera uppföljning
+            </MudButton>
+        </MudPaper>
+    }
+
+    @* Korrigera dag 1 *@
+    <MudPaper Class="pa-5" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-1" Style="font-weight: 600;">Korrigera sjukfallets dag 1</MudText>
+        <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+            Om det verkliga första sjukdagen är en annan än den registrerade räknas samtliga milstolpar om.
+        </MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="6">
+                <MudDatePicker @bind-Date="_nyDag1" Label="Sjukfallets första dag" Variant="Variant.Outlined" MaxDate="DateTime.Today" />
+            </MudItem>
+            <MudItem xs="12" sm="6" Class="d-flex align-center">
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="KorrigeraDag1"
+                           Disabled="@(_nyDag1 == null || _saving)" StartIcon="@Icons.Material.Filled.Update">
+                    Räkna om milstolpar
+                </MudButton>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private RehabCase? _case;
+    private List<RegionHR.Core.Domain.Employee> _employees = [];
+    private string _empNamn = "Okänd";
+    private bool _loading = true, _saving, _saved;
+    private string? _error;
+
+    private int _valdDagNr;
+    private Guid? _utfordAvId;
+    private string _kommentar = "";
+    private DateTime? _nyDag1;
+    private List<int> _ejRegistrerade = [];
+
+    protected override async Task OnInitializedAsync() => await Ladda();
+
+    private async Task Ladda()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _case = await db.RehabCases
+                .Include(c => c.Uppfoljningar)
+                .FirstOrDefaultAsync(c => c.Id == Id);
+
+            _employees = await db.Employees.OrderBy(e => e.Efternamn).ToListAsync();
+
+            if (_case != null)
+            {
+                var emp = _employees.FirstOrDefault(e => e.Id == _case.AnstallId);
+                _empNamn = emp != null ? $"{emp.Fornamn} {emp.Efternamn}" : "Okänd";
+                _utfordAvId ??= _case.ArendeagareHR?.Value;
+                _nyDag1 ??= _case.SjukfallDag1?.ToDateTime(TimeOnly.MinValue);
+                BeraknaEjRegistrerade();
+            }
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta data: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private void BeraknaEjRegistrerade()
+    {
+        _ejRegistrerade = Rehabkedja.Milstolpar
+            .Select(m => m.DagNr)
+            .Where(dag => _case is not null && !_case.ArUppfoljningRegistrerad(dag))
+            .ToList();
+        if (_ejRegistrerade.Count > 0 && !_ejRegistrerade.Contains(_valdDagNr))
+            _valdDagNr = _ejRegistrerade[0];
+    }
+
+    private async Task Registrera()
+    {
+        if (_case == null || _utfordAvId == null || string.IsNullOrWhiteSpace(_kommentar)) return;
+        _saving = true; _error = null; _saved = false;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var arende = await db.RehabCases
+                .Include(c => c.Uppfoljningar)
+                .FirstOrDefaultAsync(c => c.Id == Id);
+            if (arende == null) { _error = "Ärendet hittades inte."; return; }
+
+            arende.RegistreraUppfoljning(_valdDagNr, _kommentar, SK.EmployeeId.From(_utfordAvId.Value));
+            await db.SaveChangesAsync();
+
+            _kommentar = "";
+            _saved = true;
+            await Ladda();
+        }
+        catch (Exception ex) { _error = $"Kunde inte registrera: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task KorrigeraDag1()
+    {
+        if (_case == null || _nyDag1 == null) return;
+        _saving = true; _error = null; _saved = false;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var arende = await db.RehabCases
+                .Include(c => c.Uppfoljningar)
+                .FirstOrDefaultAsync(c => c.Id == Id);
+            if (arende == null) { _error = "Ärendet hittades inte."; return; }
+
+            arende.SattSjukfallDag1(DateOnly.FromDateTime(_nyDag1.Value));
+            await db.SaveChangesAsync();
+            await Ladda();
+        }
+        catch (Exception ex) { _error = $"Kunde inte spara dag 1: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private record MilstolpeVy(int DagNr, DateTime Datum, string Beskrivning, bool Registrerad, bool Overdue, bool Snart, Color Farg);
+
+    private List<MilstolpeVy> Milstolpar()
+    {
+        var result = new List<MilstolpeVy>();
+        if (_case == null) return result;
+        var now = DateTime.UtcNow;
+
+        foreach (var m in Rehabkedja.Milstolpar)
+        {
+            var datum = m.DagNr switch
+            {
+                14 => _case.Uppfoljning14Dagar,
+                90 => _case.Uppfoljning90Dagar,
+                180 => _case.Uppfoljning180Dagar,
+                365 => _case.Uppfoljning365Dagar,
+                _ => null
+            };
+            if (datum == null) continue;
+
+            var registrerad = _case.ArUppfoljningRegistrerad(m.DagNr);
+            var overdue = !registrerad && datum.Value < now;
+            var snart = !registrerad && !overdue && datum.Value <= now.AddDays(14);
+            var farg = registrerad ? Color.Success : overdue ? Color.Error : snart ? Color.Warning : Color.Default;
+
+            result.Add(new MilstolpeVy(m.DagNr, datum.Value.ToLocalTime(), m.Beskrivning, registrerad, overdue, snart, farg));
+        }
+        return result;
+    }
+
+    private static string TriggerText(RehabTrigger t) => t switch
+    {
+        RehabTrigger.SexTillfallenTolvManader => "6+ sjuktillfällen/12 mån",
+        RehabTrigger.FjortonSammanhangandeDagar => "14+ sammanhängande dagar",
+        RehabTrigger.MonsterDetekterat => "Mönster detekterat",
+        RehabTrigger.ChefInitierat => "Chef initierat",
+        RehabTrigger.MedarbetareInitierat => "Medarbetare initierat",
+        _ => t.ToString()
+    };
+}

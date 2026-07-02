@@ -22,11 +22,23 @@ else if (_created)
             <tbody>
                 <tr><td><strong>Namn</strong></td><td>@_schema!.Namn</td></tr>
                 <tr><td><strong>Enhet</strong></td><td>@_enhetNamn</td></tr>
-                <tr><td><strong>Period</strong></td><td>@_formFran?.ToString("yyyy-MM-dd") – @_formTill?.ToString("yyyy-MM-dd")</td></tr>
+                <tr><td><strong>Typ</strong></td><td>@(_schema!.Typ == ScheduleType.Grundschema ? "Grundschema (mall)" : "Periodschema")</td></tr>
+                @if (_schema!.Typ == ScheduleType.Grundschema)
+                {
+                    <tr><td><strong>Start</strong></td><td>@_formFran?.ToString("yyyy-MM-dd")</td></tr>
+                    <tr><td><strong>Cykellängd</strong></td><td>@_schema!.CykelLangdVeckor veckor (rullande)</td></tr>
+                }
+                else
+                {
+                    <tr><td><strong>Period</strong></td><td>@_formFran?.ToString("yyyy-MM-dd") – @_formTill?.ToString("yyyy-MM-dd")</td></tr>
+                }
                 <tr><td><strong>Status</strong></td><td><MudChip T="string" Size="Size.Small" Color="Color.Info">Utkast</MudChip></td></tr>
             </tbody>
         </MudSimpleTable>
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" Href="/schema">Till schemaöversikt</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mr-2"
+                   StartIcon="@Icons.Material.Filled.GridView"
+                   Href="@($"/schema/redigera/{_schema!.Id.Value}")">Lägg in pass</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Href="/schema">Till schemaöversikt</MudButton>
     </MudPaper>
 }
 else
@@ -34,16 +46,44 @@ else
     <MudPaper Class="pa-5" Elevation="2">
         <MudGrid Spacing="3">
             <MudItem xs="12" sm="6">
+                <MudSelect T="ScheduleType" @bind-Value="_typ" Label="Schematyp" Variant="Variant.Outlined">
+                    <MudSelectItem T="ScheduleType" Value="ScheduleType.Periodschema">Periodschema (start–slut)</MudSelectItem>
+                    <MudSelectItem T="ScheduleType" Value="ScheduleType.Grundschema">Grundschema (rullande mall)</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
                 <MudSelect T="Guid?" @bind-Value="_formEnhetId" Label="Enhet" Variant="Variant.Outlined" Required="true">
                     @foreach (var e in _enheter) { <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Namn</MudSelectItem> }
                 </MudSelect>
             </MudItem>
             <MudItem xs="12" sm="6"><MudTextField @bind-Value="_formNamn" Label="Schemanamn" Variant="Variant.Outlined" Required="true" /></MudItem>
             <MudItem xs="12" sm="6"><MudDatePicker @bind-Date="_formFran" Label="Startdatum" Variant="Variant.Outlined" Required="true" /></MudItem>
-            <MudItem xs="12" sm="6"><MudDatePicker @bind-Date="_formTill" Label="Slutdatum" Variant="Variant.Outlined" Required="true" /></MudItem>
+            @if (_typ == ScheduleType.Grundschema)
+            {
+                <MudItem xs="12" sm="6">
+                    <MudNumericField T="int" @bind-Value="_formCykelVeckor" Label="Cykellängd (veckor)" Variant="Variant.Outlined"
+                                     Min="1" Max="26" HelperText="T.ex. 4-veckors rullande schema" />
+                </MudItem>
+            }
+            else
+            {
+                <MudItem xs="12" sm="6"><MudDatePicker @bind-Date="_formTill" Label="Slutdatum" Variant="Variant.Outlined" Required="true" /></MudItem>
+            }
         </MudGrid>
+
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mt-3">
+            @if (_typ == ScheduleType.Grundschema)
+            {
+                <text>Ett grundschema är en rullande mall (utan slutdatum) som upprepas i en cykel om angivet antal veckor.</text>
+            }
+            else
+            {
+                <text>Ett periodschema gäller för en specifik period med start- och slutdatum.</text>
+            }
+        </MudAlert>
+
         <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-4" Style="min-height: 48px;"
-                   OnClick="SkapaSchema" Disabled="@(_formEnhetId == null || string.IsNullOrWhiteSpace(_formNamn) || _formFran == null || _formTill == null || _saving)">
+                   OnClick="SkapaSchema" Disabled="@(!KanSkapa || _saving)">
             @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
             Skapa schema
         </MudButton>
@@ -55,9 +95,17 @@ else
     private Schedule? _schema;
     private string _enhetNamn = "", _formNamn = "";
     private Guid? _formEnhetId;
-    private DateTime? _formFran, _formTill;
+    private DateTime? _formFran = DateTime.Today, _formTill;
+    private ScheduleType _typ = ScheduleType.Periodschema;
+    private int _formCykelVeckor = 4;
     private bool _loading = true, _saving, _created;
     private string? _error;
+
+    private bool KanSkapa =>
+        _formEnhetId != null &&
+        !string.IsNullOrWhiteSpace(_formNamn) &&
+        _formFran != null &&
+        (_typ == ScheduleType.Grundschema ? _formCykelVeckor >= 1 : _formTill != null);
 
     protected override async Task OnInitializedAsync()
     {
@@ -69,17 +117,26 @@ else
 
     private async Task SkapaSchema()
     {
+        if (!KanSkapa) return;
         await using var db = await DbFactory.CreateDbContextAsync();
-        if (_formEnhetId == null || _formFran == null || _formTill == null || string.IsNullOrWhiteSpace(_formNamn)) return;
         _saving = true; _error = null;
         try
         {
-            var enhet = _enheter.FirstOrDefault(e => e.Id.Value == _formEnhetId.Value);
+            var enhet = _enheter.FirstOrDefault(e => e.Id.Value == _formEnhetId!.Value);
             _enhetNamn = enhet?.Namn ?? "Okänd";
 
-            _schema = Schedule.SkapaPeriodschema(
-                new OrganizationId(_formEnhetId.Value), _formNamn,
-                DateOnly.FromDateTime(_formFran.Value), DateOnly.FromDateTime(_formTill.Value));
+            if (_typ == ScheduleType.Grundschema)
+            {
+                _schema = Schedule.SkapaGrundschema(
+                    new OrganizationId(_formEnhetId!.Value), _formNamn,
+                    DateOnly.FromDateTime(_formFran!.Value), _formCykelVeckor);
+            }
+            else
+            {
+                _schema = Schedule.SkapaPeriodschema(
+                    new OrganizationId(_formEnhetId!.Value), _formNamn,
+                    DateOnly.FromDateTime(_formFran!.Value), DateOnly.FromDateTime(_formTill!.Value));
+            }
 
             db.Schedules.Add(_schema);
             await db.SaveChangesAsync();
@@ -89,4 +146,3 @@ else
         finally { _saving = false; }
     }
 }
-

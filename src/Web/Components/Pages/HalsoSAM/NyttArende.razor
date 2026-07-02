@@ -39,9 +39,26 @@ else
                     <MudSelectItem Value="@("Arbetsrelaterad ohälsa")">Arbetsrelaterad ohälsa</MudSelectItem>
                 </MudSelect>
             </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudDatePicker @bind-Date="_sjukfallDag1" Label="Sjukfallets första dag (dag 1)"
+                               Variant="Variant.Outlined" Required="true" MaxDate="DateTime.Today"
+                               HelperText="Sjukanmälningsdag / läkarintygets startdatum — milstolparna räknas härifrån." />
+            </MudItem>
         </MudGrid>
+
+        @if (_sjukfallDag1.HasValue)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mt-2">
+                Milstolpar räknas från @_sjukfallDag1.Value.ToString("yyyy-MM-dd"):
+                dag 14 = @_sjukfallDag1.Value.AddDays(14).ToString("yyyy-MM-dd"),
+                dag 90 = @_sjukfallDag1.Value.AddDays(90).ToString("yyyy-MM-dd"),
+                dag 180 = @_sjukfallDag1.Value.AddDays(180).ToString("yyyy-MM-dd"),
+                dag 365 = @_sjukfallDag1.Value.AddDays(365).ToString("yyyy-MM-dd").
+            </MudAlert>
+        }
+
         <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-4" Style="min-height: 48px;"
-                   OnClick="Skapa" Disabled="@(_formAnstallId == null || string.IsNullOrWhiteSpace(_valdOrsak) || _saving)">
+                   OnClick="Skapa" Disabled="@(_formAnstallId == null || string.IsNullOrWhiteSpace(_valdOrsak) || _sjukfallDag1 == null || _saving)">
             Skapa rehabärende
         </MudButton>
     </MudPaper>
@@ -50,6 +67,7 @@ else
 @code {
     private List<RegionHR.Core.Domain.Employee> _employees = [];
     private Guid? _formAnstallId;
+    private DateTime? _sjukfallDag1 = DateTime.Today;
     private string _valdOrsak = "", _valdAnstallNamn = "";
     private bool _loading = true, _saving, _created;
     private string? _error;
@@ -65,7 +83,7 @@ else
     private async Task Skapa()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        if (_formAnstallId == null || string.IsNullOrWhiteSpace(_valdOrsak)) return;
+        if (_formAnstallId == null || string.IsNullOrWhiteSpace(_valdOrsak) || _sjukfallDag1 == null) return;
         _saving = true; _error = null;
         try
         {
@@ -78,7 +96,9 @@ else
                 "Sjukfrånvaro >6 tillfällen/12 mån" => RehabTrigger.SexTillfallenTolvManader,
                 _ => RehabTrigger.ChefInitierat
             };
-            var rehab = RehabCase.Skapa(new RegionHR.SharedKernel.Domain.EmployeeId(_formAnstallId.Value), trigger);
+            // Milstolparna förankras i sjukfallets faktiska dag 1, inte i skapandedatumet.
+            var dag1 = DateOnly.FromDateTime(_sjukfallDag1.Value);
+            var rehab = RehabCase.Skapa(new RegionHR.SharedKernel.Domain.EmployeeId(_formAnstallId.Value), trigger, dag1);
             db.RehabCases.Add(rehab);
             await db.SaveChangesAsync();
             _created = true;

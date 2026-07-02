@@ -28,6 +28,13 @@ public class DevelopmentPlan
     public DateOnly StartDatum { get; private set; }
     public DateOnly? MalDatum { get; private set; }
 
+    /// <summary>
+    /// Om planen genererades ur ett medarbetarsamtal pekar detta på
+    /// PerformanceReview.Id — spårbar länk samtal → kompetensgap → utvecklingsplan.
+    /// Null för planer som skapats fristående (t.ex. karriärplanering).
+    /// </summary>
+    public Guid? KopplatSamtalId { get; private set; }
+
     private readonly List<DevelopmentMilestone> _milstolpar = [];
     public IReadOnlyList<DevelopmentMilestone> Milstolpar => _milstolpar.AsReadOnly();
 
@@ -60,9 +67,22 @@ public class DevelopmentPlan
         Status = DevelopmentPlanStatus.Completed;
     }
 
-    public DevelopmentMilestone LaggTillMilstolpe(string beskrivning, string typ, DateOnly? malDatum = null)
+    /// <summary>
+    /// Kopplar planen till ett medarbetarsamtal (PerformanceReview.Id).
+    /// Idempotent — sätter länken oavsett tidigare värde.
+    /// </summary>
+    public void KopplaTillSamtal(Guid samtalId)
     {
-        var milstolpe = DevelopmentMilestone.Skapa(Id, beskrivning, typ, malDatum);
+        if (samtalId == Guid.Empty)
+            throw new ArgumentException("SamtalId får inte vara tomt", nameof(samtalId));
+        KopplatSamtalId = samtalId;
+    }
+
+    public DevelopmentMilestone LaggTillMilstolpe(
+        string beskrivning, string typ, DateOnly? malDatum = null,
+        Guid? skillId = null, int? franNiva = null, int? malNiva = null)
+    {
+        var milstolpe = DevelopmentMilestone.Skapa(Id, beskrivning, typ, malDatum, skillId, franNiva, malNiva);
         _milstolpar.Add(milstolpe);
         return milstolpe;
     }
@@ -83,9 +103,20 @@ public class DevelopmentMilestone
     public DateOnly? MalDatum { get; private set; }
     public MilestoneStatus Status { get; private set; }
 
+    /// <summary>Om milstolpen härrör ur en kompetensgap: skill som ska höjas.</summary>
+    public Guid? SkillId { get; private set; }
+
+    /// <summary>Nuvarande nivå (0 = saknas) vid milstolpens skapande.</summary>
+    public int? FranNiva { get; private set; }
+
+    /// <summary>Målnivå som milstolpen ska ta skillen till.</summary>
+    public int? MalNiva { get; private set; }
+
     private DevelopmentMilestone() { }
 
-    internal static DevelopmentMilestone Skapa(DevelopmentPlanId planId, string beskrivning, string typ, DateOnly? malDatum)
+    internal static DevelopmentMilestone Skapa(
+        DevelopmentPlanId planId, string beskrivning, string typ, DateOnly? malDatum,
+        Guid? skillId = null, int? franNiva = null, int? malNiva = null)
     {
         return new DevelopmentMilestone
         {
@@ -94,7 +125,10 @@ public class DevelopmentMilestone
             Beskrivning = beskrivning,
             Typ = typ,
             MalDatum = malDatum,
-            Status = MilestoneStatus.Pending
+            Status = MilestoneStatus.Pending,
+            SkillId = skillId,
+            FranNiva = franNiva,
+            MalNiva = malNiva
         };
     }
 

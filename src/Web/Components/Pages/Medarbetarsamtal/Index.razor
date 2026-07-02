@@ -36,7 +36,10 @@
                 <td>@(r.OverallRating.HasValue ? $"{r.OverallRating}/5" : "—")</td>
                 <td>@(r.GenomfordVid?.ToString("yyyy-MM-dd") ?? r.SkapadVid.ToString("yyyy-MM-dd"))</td>
                 <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(r.Status)">@StatusText(r.Status)</MudChip></td>
-                <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => ValjSamtal(r))">Öppna</MudButton></td>
+                <td>
+                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Href="@($"/medarbetarsamtal/{r.Id}")">Driv samtal</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Default" OnClick="@(() => ValjSamtal(r))">Snabbvy</MudButton>
+                </td>
             </tr>
             @if (_valdSamtal == r)
             {

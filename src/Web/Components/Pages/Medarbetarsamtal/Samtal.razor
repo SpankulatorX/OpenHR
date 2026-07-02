@@ -1,0 +1,392 @@
+@page "/medarbetarsamtal/{Id:guid}"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Performance.Domain
+@using RegionHR.Competence.Domain
+@using RegionHR.Competence.Services
+@using Microsoft.EntityFrameworkCore
+@using RegionHR.Positions.Domain
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject CompetenceGapAnalyzer Analyzer
+@inject UtvecklingsplanGenerator PlanGenerator
+@inject ISnackbar Snackbar
+
+<PageTitle>OpenHR — Medarbetarsamtal</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/medarbetarsamtal" Class="mb-3">Tillbaka till översikt</MudButton>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error">@_error</MudAlert>
+}
+else if (_review == null)
+{
+    <MudAlert Severity="Severity.Warning">Medarbetarsamtalet hittades inte.</MudAlert>
+}
+else
+{
+    <div class="d-flex justify-space-between align-center mb-1">
+        <MudText Typo="Typo.h4" Style="font-weight: 700;">Medarbetarsamtal @_review.Ar</MudText>
+        <MudChip T="string" Color="@StatusFarg(_review.Status)">@StatusText(_review.Status)</MudChip>
+    </div>
+    <MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+        <strong>Medarbetare:</strong> @_anstallNamn &nbsp;•&nbsp; <strong>Chef:</strong> @_chefNamn
+    </MudText>
+
+    @* === Processöversikt: samtal → kompetensgap → utvecklingsplan → genomförd === *@
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudGrid Spacing="2">
+            @foreach (var steg in _steg)
+            {
+                <MudItem xs="6" sm="3">
+                    <div class="d-flex align-center" style="gap: 8px;">
+                        <MudIcon Icon="@(steg.Klar ? Icons.Material.Filled.CheckCircle : steg.Aktiv ? Icons.Material.Filled.RadioButtonChecked : Icons.Material.Filled.RadioButtonUnchecked)"
+                                 Color="@(steg.Klar ? Color.Success : steg.Aktiv ? Color.Primary : Color.Default)" />
+                        <div>
+                            <MudText Typo="Typo.body2" Style="@(steg.Klar || steg.Aktiv ? "font-weight:600;" : "color:var(--mud-palette-text-secondary);")">@steg.Titel</MudText>
+                            <MudText Typo="Typo.caption" Style="color:var(--mud-palette-text-secondary);">@steg.Beskrivning</MudText>
+                        </div>
+                    </div>
+                </MudItem>
+            }
+        </MudGrid>
+    </MudPaper>
+
+    <MudGrid Spacing="3">
+        @* ---------- Steg 1: Självbedömning ---------- *@
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="2" Style="height: 100%;">
+                <MudText Typo="Typo.h6" Class="mb-2" Style="font-weight:600;">1. Självbedömning</MudText>
+                @if ((int)_review.Status >= (int)ReviewStatus.SjalvbedomningKlar)
+                {
+                    <MudAlert Severity="Severity.Success" Dense="true" Class="mb-2">Inlämnad</MudAlert>
+                    <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@_review.SjalvBedomning</MudText>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Class="mb-2" Style="color:var(--mud-palette-text-secondary);">
+                        Medarbetaren beskriver sin egen utveckling och sina mål.
+                    </MudText>
+                    <MudTextField @bind-Value="_sjalvText" Label="Din självbedömning" Lines="4"
+                                  Variant="Variant.Outlined" Class="mb-2" />
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SparaSjalvbedomning"
+                               Disabled="@(_busy || string.IsNullOrWhiteSpace(_sjalvText))">Lämna självbedömning</MudButton>
+                }
+            </MudPaper>
+        </MudItem>
+
+        @* ---------- Steg 2: Chefsbedömning ---------- *@
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="2" Style="height: 100%;">
+                <MudText Typo="Typo.h6" Class="mb-2" Style="font-weight:600;">2. Chefsbedömning</MudText>
+                @if ((int)_review.Status >= (int)ReviewStatus.ChefsbedomningKlar)
+                {
+                    <MudAlert Severity="Severity.Success" Dense="true" Class="mb-2">Inlämnad — betyg @(_review.OverallRating)/5</MudAlert>
+                    <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@_review.ChefsBedomning</MudText>
+                }
+                else if (_review.Status == ReviewStatus.SjalvbedomningKlar)
+                {
+                    <MudTextField @bind-Value="_chefText" Label="Chefens bedömning" Lines="4"
+                                  Variant="Variant.Outlined" Class="mb-2" />
+                    <MudText Typo="Typo.body2">Övergripande betyg</MudText>
+                    <MudRating @bind-SelectedValue="_chefRating" MaxValue="5" />
+                    <div class="mt-2">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SparaChefsbedomning"
+                                   Disabled="@(_busy || string.IsNullOrWhiteSpace(_chefText) || _chefRating < 1)">Lämna chefsbedömning</MudButton>
+                    </div>
+                }
+                else
+                {
+                    <MudText Typo="Typo.body2" Style="color:var(--mud-palette-text-secondary);">
+                        Väntar på att självbedömningen ska lämnas in först.
+                    </MudText>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* ---------- Steg 3: Kompetensgap + utvecklingsplan ---------- *@
+    <MudPaper Class="pa-4 mt-3" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-1" Style="font-weight:600;">3. Kompetensgap → utvecklingsplan</MudText>
+        @{ var gap = _gap; var linkad = _linkadPlan; }
+        @if (gap == null || gap.PositionId == null)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true">
+                Medarbetaren saknar en aktiv position med kravprofil — ingen gap-analys kan göras.
+                Koppla en position (med PositionSkillRequirement) för att driva utvecklingsplanen.
+            </MudAlert>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color:var(--mud-palette-text-secondary);">
+                Kravprofil: <strong>@gap.PositionTitel</strong> —
+                @gap.AntalUppfyllda/@gap.AntalKrav krav uppfyllda (@gap.TackningsgradProcent%),
+                @gap.AntalGap gap.
+            </MudText>
+
+            @* Gap-stapel per skill *@
+            @foreach (var s in gap.Skills)
+            {
+                <div class="mb-3">
+                    <div class="d-flex justify-space-between align-center mb-1">
+                        <MudText Typo="Typo.body2" Style="font-weight:600;">@s.SkillNamn</MudText>
+                        <MudText Typo="Typo.caption" Style="color:var(--mud-palette-text-secondary);">
+                            nivå @s.NuvarandeNiva / krav @s.KravdNiva
+                            @if (s.ArUppfylld) { <span>• uppfyllt</span> } else { <span>• gap @s.GapPoang</span> }
+                        </MudText>
+                    </div>
+                    <div style="display:flex; gap:4px;">
+                        @for (int n = 1; n <= 5; n++)
+                        {
+                            var fyll = n <= s.NuvarandeNiva;
+                            var krav = n <= s.KravdNiva;
+                            var farg = fyll
+                                ? (s.ArUppfylld ? "var(--mud-palette-success)" : "var(--mud-palette-warning)")
+                                : "var(--mud-palette-lines-default)";
+                            var kant = krav && !fyll ? "2px dashed var(--mud-palette-error)" : "1px solid transparent";
+                            <div style="flex:1; height:18px; border-radius:4px; background:@farg; border:@kant;"></div>
+                        }
+                    </div>
+                </div>
+            }
+
+            @if (linkad != null)
+            {
+                <MudAlert Severity="Severity.Success" Class="mt-3">
+                    Utvecklingsplan genererad (@linkad.Milstolpar.Count steg, mål: @linkad.MalRoll).
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/kompetens/utvecklingsplaner">Öppna utvecklingsplaner</MudButton>
+                </MudAlert>
+            }
+            else if (gap.HarGap)
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Secondary" Class="mt-2"
+                           StartIcon="@Icons.Material.Filled.AutoGraph" OnClick="GenereraPlan"
+                           Disabled="@_busy">
+                    Generera utvecklingsplan från kompetensgap (@gap.AntalGap steg)
+                </MudButton>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Success" Class="mt-2" Dense="true">Alla krav uppfyllda — ingen utvecklingsplan behövs.</MudAlert>
+            }
+        }
+    </MudPaper>
+
+    @* ---------- Steg 4: Genomför ---------- *@
+    <MudPaper Class="pa-4 mt-3 mb-6" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-2" Style="font-weight:600;">4. Genomför samtalet</MudText>
+        @if (_review.Status == ReviewStatus.Genomford || _review.Status == ReviewStatus.Avslutat)
+        {
+            <MudAlert Severity="Severity.Success" Dense="true">
+                Genomfört @(_review.GenomfordVid?.ToString("yyyy-MM-dd"))
+            </MudAlert>
+            @if (!string.IsNullOrWhiteSpace(_review.Malsattning))
+            {
+                <MudText Typo="Typo.body2" Class="mt-2"><strong>Överenskommen målsättning:</strong></MudText>
+                <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@_review.Malsattning</MudText>
+            }
+        }
+        else if (_review.Status == ReviewStatus.ChefsbedomningKlar)
+        {
+            <MudText Typo="Typo.body2" Class="mb-2" Style="color:var(--mud-palette-text-secondary);">
+                Bekräfta att samtalet är genomfört. Både självbedömning och chefsbedömning är klara.
+            </MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="Genomfor"
+                       StartIcon="@Icons.Material.Filled.Done" Disabled="@_busy">Markera som genomfört</MudButton>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Style="color:var(--mud-palette-text-secondary);">
+                Kan genomföras när både själv- och chefsbedömning är inlämnade.
+            </MudText>
+        }
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private PerformanceReview? _review;
+    private GapAnalys? _gap;
+    private DevelopmentPlan? _linkadPlan;
+    private string _anstallNamn = "", _chefNamn = "";
+    private string _sjalvText = "", _chefText = "";
+    private int _chefRating;
+    private bool _loading = true, _busy;
+    private string? _error;
+
+    private List<Steg> _steg = [];
+
+    protected override async Task OnInitializedAsync() => await Ladda();
+
+    private async Task Ladda()
+    {
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var review = await db.PerformanceReviews.FirstOrDefaultAsync(r => r.Id == Id);
+            _review = review;
+            if (review == null) { _loading = false; return; }
+
+            var employees = await db.Employees.ToListAsync();
+            _anstallNamn = NamnFor(employees, review.AnstallId);
+            _chefNamn = NamnFor(employees, review.ChefId);
+
+            // Resolve position + gap for the reviewed employee
+            var pos = await db.Positions_Table
+                .Where(p => p.InnehavareAnstallId == review.AnstallId && p.Status == PositionStatus.Aktiv)
+                .FirstOrDefaultAsync();
+
+            var skills = await db.Skills.ToListAsync();
+            var skillNamn = skills.ToDictionary(s => s.Id, s => s.Namn);
+            var empSkills = await db.EmployeeSkills.Where(es => es.AnstallId == review.AnstallId).ToListAsync();
+
+            if (pos != null)
+            {
+                var krav = await db.PositionSkillRequirements.Where(r => r.PositionId == pos.Id).ToListAsync();
+                _gap = Analyzer.Analysera(review.AnstallId, pos.Id, pos.Titel, krav, empSkills, skillNamn);
+            }
+            else
+            {
+                _gap = Analyzer.Analysera(review.AnstallId, null, null,
+                    Array.Empty<PositionSkillRequirement>(), empSkills, skillNamn);
+            }
+
+            _linkadPlan = await db.DevelopmentPlans
+                .Include(p => p.Milstolpar)
+                .FirstOrDefaultAsync(p => p.KopplatSamtalId == Id);
+
+            BeraknaSteg();
+        }
+        catch (Exception ex) { _error = $"Kunde inte ladda samtalet: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private void BeraknaSteg()
+    {
+        if (_review is not { } review) return;
+        var s = (int)review.Status;
+        _steg =
+        [
+            new Steg("Självbedömning", "Medarbetaren",
+                s >= (int)ReviewStatus.SjalvbedomningKlar, review.Status is ReviewStatus.Planerad or ReviewStatus.Paborjad),
+            new Steg("Chefsbedömning", "Chefen",
+                s >= (int)ReviewStatus.ChefsbedomningKlar, review.Status == ReviewStatus.SjalvbedomningKlar),
+            new Steg("Utvecklingsplan", "Kompetensgap",
+                _linkadPlan != null, _linkadPlan == null && (_gap?.HarGap ?? false)),
+            new Steg("Genomfört", "Avslut",
+                s >= (int)ReviewStatus.Genomford, review.Status == ReviewStatus.ChefsbedomningKlar)
+        ];
+    }
+
+    private async Task SparaSjalvbedomning()
+    {
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var r = await db.PerformanceReviews.FirstAsync(x => x.Id == Id);
+            r.SattSjalvbedomning(_sjalvText.Trim());
+            await db.SaveChangesAsync();
+            Snackbar.Add("Självbedömning inlämnad", Severity.Success);
+            _sjalvText = "";
+            await Ladda();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _busy = false; }
+    }
+
+    private async Task SparaChefsbedomning()
+    {
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var r = await db.PerformanceReviews.FirstAsync(x => x.Id == Id);
+            r.SattChefsbedomning(_chefText.Trim(), _chefRating);
+            await db.SaveChangesAsync();
+            Snackbar.Add("Chefsbedömning inlämnad", Severity.Success);
+            _chefText = "";
+            _chefRating = 0;
+            await Ladda();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _busy = false; }
+    }
+
+    private async Task GenereraPlan()
+    {
+        if (_gap is not { } gap) return;
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var plan = PlanGenerator.GenereraFranGap(gap, Id, DateOnly.FromDateTime(DateTime.Today));
+            if (plan == null)
+            {
+                Snackbar.Add("Inga kompetensgap att åtgärda", Severity.Info);
+                return;
+            }
+            db.DevelopmentPlans.Add(plan);
+
+            // Spegla målsättningen i samtalet så plan och samtal berättar samma sak.
+            var r = await db.PerformanceReviews.FirstAsync(x => x.Id == Id);
+            r.SattMalsattning(PlanGenerator.SammanfattaMalsattning(gap));
+
+            await db.SaveChangesAsync();
+            Snackbar.Add($"Utvecklingsplan skapad med {plan.Milstolpar.Count} steg", Severity.Success);
+            await Ladda();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _busy = false; }
+    }
+
+    private async Task Genomfor()
+    {
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var r = await db.PerformanceReviews.FirstAsync(x => x.Id == Id);
+            r.Genomfor();
+            await db.SaveChangesAsync();
+            Snackbar.Add("Samtalet är genomfört", Severity.Success);
+            await Ladda();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _busy = false; }
+    }
+
+    private static string NamnFor(List<RegionHR.Core.Domain.Employee> emps, Guid id)
+    {
+        var e = emps.FirstOrDefault(x => x.Id.Value == id);
+        return e != null ? $"{e.Fornamn} {e.Efternamn}" : "Okänd";
+    }
+
+    private static Color StatusFarg(ReviewStatus s) => s switch
+    {
+        ReviewStatus.Planerad => Color.Info,
+        ReviewStatus.Paborjad or ReviewStatus.SjalvbedomningKlar or ReviewStatus.ChefsbedomningKlar => Color.Warning,
+        ReviewStatus.Genomford => Color.Success,
+        _ => Color.Default
+    };
+
+    private static string StatusText(ReviewStatus s) => s switch
+    {
+        ReviewStatus.Planerad => "Planerat",
+        ReviewStatus.Paborjad => "Pågår",
+        ReviewStatus.SjalvbedomningKlar => "Självbedömning klar",
+        ReviewStatus.ChefsbedomningKlar => "Chefsbedömning klar",
+        ReviewStatus.Genomford => "Genomfört",
+        ReviewStatus.Avslutat => "Avslutat",
+        _ => s.ToString()
+    };
+
+    private sealed record Steg(string Titel, string Beskrivning, bool Klar, bool Aktiv);
+}

@@ -16,8 +16,8 @@
 </div>
 
 <MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
-    Rehabärenden hämtas från databasen. Milstolpar (dag 14/90/180/365) är planerade uppföljningsdatum
-    beräknade från ärendets skapandedatum — inte verifierade mot faktisk sjukfallsstart.
+    Rehabärenden hämtas från databasen. Milstolpar (dag 14/90/180/365) beräknas från sjukfallets
+    faktiska dag 1 (sjukanmälan/läkarintygsdatum) enligt rehabiliteringskedjan.
 </MudText>
 
 @if (_loading)
@@ -61,8 +61,8 @@ else
     @* Rehabkedjan — statisk referens *@
     <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Rehabkedjan — lagstadgade milstolpar (referens)</MudText>
     <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-4" Dense="true">
-        Dessa milstolpar är lagstadgade steg i den svenska rehabkedjan. I v1.5 beräknas planerade datum
-        från ärendets skapandedatum, inte från verifierat sjukfallsstartdatum.
+        Dessa milstolpar är lagstadgade steg i den svenska rehabkedjan (Socialförsäkringsbalken 27 kap.).
+        Uppföljningsdatumen per ärende räknas från sjukfallets dag 1.
     </MudAlert>
     <MudTimeline TimelineAlign="TimelineAlign.Start" Class="mb-6">
         <MudTimelineItem Color="Color.Success" Size="Size.Small"><MudText Typo="Typo.body2"><strong>Dag 1:</strong> Sjukanmälan, karensavdrag</MudText></MudTimelineItem>
@@ -137,22 +137,37 @@ else
                                             <MudText Typo="Typo.caption">Rehabplan</MudText>
                                             <MudText Style="font-weight: 600;">@(c.RehabPlan ?? "Ej upprättad")</MudText>
                                         </MudItem>
+                                        <MudItem xs="6" sm="3">
+                                            <MudText Typo="Typo.caption">Sjukfall dag 1</MudText>
+                                            <MudText Style="font-weight: 600;">@(c.SjukfallDag1?.ToString("yyyy-MM-dd") ?? "Ej angiven")</MudText>
+                                        </MudItem>
                                     </MudGrid>
 
-                                    <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight: 600;">Milstolpar (planerade uppföljningsdatum)</MudText>
+                                    <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight: 600;">
+                                        Milstolpar @(c.SjukfallDag1.HasValue ? $"(räknade från dag 1: {c.SjukfallDag1.Value:yyyy-MM-dd})" : "")
+                                    </MudText>
                                     <MudTimeline TimelineAlign="TimelineAlign.Start" Class="mb-3">
                                         @foreach (var ms in GetMilstolpar(c))
                                         {
+                                            var registrerad = c.ArUppfoljningRegistrerad(ms.DagNr);
                                             var passerad = ms.Datum < DateTime.UtcNow;
-                                            <MudTimelineItem Color="@(passerad ? Color.Success : Color.Default)" Size="Size.Small"
-                                                             Variant="@(passerad ? Variant.Filled : Variant.Outlined)">
+                                            var farg = registrerad ? Color.Success : passerad ? Color.Error : Color.Default;
+                                            <MudTimelineItem Color="@farg" Size="Size.Small"
+                                                             Variant="@(registrerad || passerad ? Variant.Filled : Variant.Outlined)">
                                                 <MudText Typo="Typo.body2">
                                                     <strong>Dag @ms.DagNr</strong> — @ms.Datum.ToLocalTime().ToString("yyyy-MM-dd")
-                                                    @if (passerad) { <MudChip T="string" Size="Size.Small" Color="Color.Success">Passerad</MudChip> }
+                                                    @if (registrerad) { <MudChip T="string" Size="Size.Small" Color="Color.Success">Genomförd</MudChip> }
+                                                    else if (passerad) { <MudChip T="string" Size="Size.Small" Color="Color.Error">Försenad</MudChip> }
                                                 </MudText>
                                             </MudTimelineItem>
                                         }
                                     </MudTimeline>
+
+                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                               Href="@($"/halsosam/{c.Id}/uppfoljning")"
+                                               StartIcon="@Icons.Material.Filled.EventAvailable">
+                                        Registrera uppföljning
+                                    </MudButton>
                                 </MudPaper>
                             </td>
                         </tr>
@@ -175,7 +190,7 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            _cases = await db.RehabCases.ToListAsync();
+            _cases = await db.RehabCases.Include(c => c.Uppfoljningar).ToListAsync();
             var employees = await db.Employees.ToListAsync();
             _empNames = employees.ToDictionary(
                 e => e.Id,

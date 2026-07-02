@@ -1,0 +1,445 @@
+@page "/schema/redigera"
+@page "/schema/redigera/{SchemaId:guid}"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Scheduling.Domain
+@using RegionHR.SharedKernel.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
+@inject ISnackbar Snackbar
+
+<PageTitle>OpenHR - Redigera schema</PageTitle>
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary" Href="/schema" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else if (SchemaId is null || _schema is null)
+{
+    @* Ingen schema vald — visa väljare *@
+    <MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Redigera schema</MudText>
+    @if (_alla.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">Det finns inga scheman ännu. <MudLink Href="/schema/ny">Skapa ett schema</MudLink> först.</MudAlert>
+    }
+    else
+    {
+        <MudPaper Class="pa-5" Elevation="2">
+            <MudText Typo="Typo.body1" Class="mb-3">Välj vilket schema du vill lägga in pass i:</MudText>
+            <MudSelect T="Guid?" @bind-Value="_valtSchema" Label="Schema" Variant="Variant.Outlined">
+                @foreach (var s in _alla)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)s.Id.Value)">@s.Namn (@(s.Typ == ScheduleType.Grundschema ? "grundschema" : "periodschema"))</MudSelectItem>
+                }
+            </MudSelect>
+            <MudButton Class="mt-3" Variant="Variant.Filled" Color="Color.Primary" Disabled="@(_valtSchema is null)"
+                       OnClick="@(() => Nav.NavigateTo($"/schema/redigera/{_valtSchema}"))">Öppna</MudButton>
+        </MudPaper>
+    }
+}
+else
+{
+    <div class="d-flex justify-space-between align-center mb-2">
+        <div>
+            <MudText Typo="Typo.h4" Style="font-weight: 700;">@_schema!.Namn</MudText>
+            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+                @_enhetNamn • @(_schema!.Typ == ScheduleType.Grundschema ? $"Grundschema, {_schema!.CykelLangdVeckor}-veckors cykel" : $"Periodschema {_schema!.Period.Start:yyyy-MM-dd} – {_schema!.Period.End:yyyy-MM-dd}")
+            </MudText>
+        </div>
+        <MudSwitch T="bool" @bind-Value="_arSjukvard" Color="Color.Primary" Label="Vårdenhet (9h dygnsvila)" @bind-Value:after="OnSjukvardChanged" />
+    </div>
+
+    @* ATL-status för hela schemat — systemet är experten *@
+    @if (_schemaBrott.Count == 0)
+    {
+        <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">Inga ATL-brott i schemat.</MudAlert>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+            <MudText Typo="Typo.body2" Style="font-weight: 600;">@_schemaBrott.Count ATL-brott i schemat:</MudText>
+            <ul style="margin: 4px 0 0 18px;">
+                @foreach (var b in _schemaBrott.Take(8))
+                {
+                    <li><strong>@b.Regel:</strong> @b.Beskrivning</li>
+                }
+                @if (_schemaBrott.Count > 8)
+                {
+                    <li>… och @(_schemaBrott.Count - 8) till.</li>
+                }
+            </ul>
+        </MudAlert>
+    }
+
+    @* Veckonavigering *@
+    <div class="d-flex align-center gap-2 mb-3">
+        <MudIconButton Icon="@Icons.Material.Filled.ChevronLeft" Color="Color.Primary" Disabled="@(!KanBackat)" OnClick="ForegaendeVecka" />
+        <MudText Typo="Typo.h6" Style="min-width: 180px; text-align: center;">Vecka @(System.Globalization.ISOWeek.GetWeekOfYear(_veckoStart.ToDateTime(TimeOnly.MinValue))) • @_veckoStart.ToString("d MMM", _sv) – @_veckoStart.AddDays(6).ToString("d MMM", _sv)</MudText>
+        <MudIconButton Icon="@Icons.Material.Filled.ChevronRight" Color="Color.Primary" Disabled="@(!KanFramat)" OnClick="NastaVecka" />
+    </div>
+
+    @if (_employees.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">Inga aktiva anställda på enheten @_enhetNamn. Lägg till anställningar på enheten för att kunna schemalägga.</MudAlert>
+    }
+    else
+    {
+        <div style="overflow-x: auto;">
+            <MudSimpleTable Hover="true" Elevation="2" Style="min-width: 900px;">
+                <thead>
+                    <tr>
+                        <th style="min-width: 160px;">Anställd</th>
+                        @foreach (var dag in _veckoDagar)
+                        {
+                            <th style="@HeaderStyle(dag)">@dag.ToString("ddd d/M", _sv)</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var emp in _employees)
+                    {
+                        <tr>
+                            <td><strong>@emp.Namn</strong></td>
+                            @foreach (var dag in _veckoDagar)
+                            {
+                                var pass = _allaPass.Where(p => p.AnstallId.Value == emp.Id && p.Datum == dag).ToList();
+                                <td style="@CellStyle(dag)">
+                                    @foreach (var p in pass)
+                                    {
+                                        <div class="d-flex align-center justify-center mb-1" style="gap: 2px;">
+                                            <MudChip T="string" Size="Size.Small" Color="@PassColor(p.PassTyp)">
+                                                @p.PlaneradStart.ToString("HH:mm")–@p.PlaneradSlut.ToString("HH:mm")
+                                            </MudChip>
+                                            <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" Color="Color.Error"
+                                                           title="Ta bort pass" OnClick="@(() => TaBortPass(p.Id))" />
+                                        </div>
+                                    }
+                                    <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small" Color="Color.Primary"
+                                                   title="Lägg till pass" OnClick="@(() => OppnaLaggTill(emp, dag))" />
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </div>
+    }
+
+    @* Lägg-till-panel *@
+    @if (_addOpen)
+    {
+        <MudPaper Class="pa-5 mt-4" Elevation="4" Style="border-left: 4px solid var(--mud-palette-primary);">
+            <MudText Typo="Typo.h6" Class="mb-3">Lägg till pass — @_addNamn, @_addDatum.ToString("dddd d MMMM", _sv)</MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="3">
+                    <MudSelect T="ShiftType" @bind-Value="_addPassTyp" Label="Passtyp" Variant="Variant.Outlined" @bind-Value:after="OnPassTypChanged">
+                        <MudSelectItem T="ShiftType" Value="ShiftType.Dag">Dag</MudSelectItem>
+                        <MudSelectItem T="ShiftType" Value="ShiftType.Kvall">Kväll</MudSelectItem>
+                        <MudSelectItem T="ShiftType" Value="ShiftType.Natt">Natt</MudSelectItem>
+                        <MudSelectItem T="ShiftType" Value="ShiftType.Jour">Jour</MudSelectItem>
+                        <MudSelectItem T="ShiftType" Value="ShiftType.Beredskap">Beredskap</MudSelectItem>
+                        <MudSelectItem T="ShiftType" Value="ShiftType.Delat">Delat</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudTimePicker Label="Start" @bind-Time="_addStart" Variant="Variant.Outlined" @bind-Time:after="Revalidera" />
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudTimePicker Label="Slut" @bind-Time="_addSlut" Variant="Variant.Outlined" @bind-Time:after="Revalidera" />
+                </MudItem>
+                <MudItem xs="6" sm="3">
+                    <MudNumericField T="int" @bind-Value="_addRast" Label="Rast (min)" Variant="Variant.Outlined" Min="0" Max="180" @bind-Value:after="Revalidera" />
+                </MudItem>
+            </MudGrid>
+
+            @if (_addStart is not null && _addSlut is not null)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2" Style="color: var(--mud-palette-text-secondary);">
+                    Arbetstid netto: @PreviewTimmar().ToString("0.##") h
+                </MudText>
+            }
+
+            @if (_addViolations.Count > 0)
+            {
+                <MudAlert Severity="Severity.Error" Class="mt-3">
+                    <MudText Typo="Typo.body2" Style="font-weight: 600;">Passet bryter mot Arbetstidslagen:</MudText>
+                    <ul style="margin: 4px 0 0 18px;">
+                        @foreach (var v in _addViolations)
+                        {
+                            <li><strong>@v.Regel:</strong> @v.Beskrivning</li>
+                        }
+                    </ul>
+                </MudAlert>
+                <MudCheckBox T="bool" @bind-Value="_addForcerad" Color="Color.Error" Class="mt-2"
+                             Label="Jag är medveten om brottet och lägger till passet ändå (kräver kompensationsledighet enligt ATL)." />
+            }
+            else if (_addStart is not null && _addSlut is not null)
+            {
+                <MudAlert Severity="Severity.Success" Dense="true" Class="mt-3">Passet uppfyller ATL (dygnsvila, veckovila, veckoarbetstid, nattarbetstid).</MudAlert>
+            }
+
+            <div class="d-flex gap-2 mt-4">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Disabled="@(!KanLaggaTill)" OnClick="BekraftaLaggTill">Lägg till pass</MudButton>
+                <MudButton Variant="Variant.Text" OnClick="@(() => _addOpen = false)">Avbryt</MudButton>
+            </div>
+        </MudPaper>
+    }
+}
+
+@code {
+    [Parameter] public Guid? SchemaId { get; set; }
+
+    private static readonly System.Globalization.CultureInfo _sv = System.Globalization.CultureInfo.GetCultureInfo("sv-SE");
+
+    private Schedule? _schema;
+    private string _enhetNamn = "";
+    private List<Schedule> _alla = [];
+    private Guid? _valtSchema;
+    private List<EmpRow> _employees = [];
+    private List<ScheduledShift> _allaPass = [];
+    private List<DateOnly> _veckoDagar = [];
+    private DateOnly _veckoStart;
+    private bool _arSjukvard;
+    private ArbetstidslagenValidator _validator = new(arSjukvard: false);
+    private List<ValidationViolation> _schemaBrott = [];
+    private bool _loading = true;
+    private string? _error;
+
+    // Lägg-till-formulär
+    private bool _addOpen;
+    private Guid _addAnstallId;
+    private string _addNamn = "";
+    private DateOnly _addDatum;
+    private ShiftType _addPassTyp = ShiftType.Dag;
+    private TimeSpan? _addStart = new TimeSpan(7, 0, 0);
+    private TimeSpan? _addSlut = new TimeSpan(16, 0, 0);
+    private int _addRast = 60;
+    private List<ValidationViolation> _addViolations = [];
+    private bool _addForcerad;
+
+    private bool KanBackat => _veckoStart > MandagFor(_schema!.Period.Start);
+    private bool KanFramat => _schema!.Period.End is null || _veckoStart.AddDays(7) <= _schema!.Period.End!.Value;
+    private bool KanLaggaTill => _addStart is not null && _addSlut is not null &&
+        (_addViolations.Count == 0 || _addForcerad);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            if (SchemaId is null)
+            {
+                _alla = await db.Schedules.OrderByDescending(s => s.CreatedAt).ToListAsync();
+                _schema = null;
+                return;
+            }
+
+            var sid = ScheduleId.From(SchemaId.Value);
+            _schema = await db.Schedules.FirstOrDefaultAsync(s => s.Id == sid);
+            if (_schema is null)
+            {
+                _error = "Schemat hittades inte.";
+                return;
+            }
+
+            _validator = new ArbetstidslagenValidator(_arSjukvard);
+
+            var enheter = await db.OrganizationUnits.ToListAsync();
+            _enhetNamn = enheter.FirstOrDefault(e => e.Id == _schema.EnhetId)?.Namn ?? "Okänd enhet";
+
+            // Aktiva anställda på enheten
+            var idag = DateOnly.FromDateTime(DateTime.Today);
+            var employees = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
+            _employees = employees
+                .Where(e => e.Anstallningar.Any(a => a.EnhetId == _schema!.EnhetId && a.Giltighetsperiod.IsActiveOn(idag)))
+                .Select(e => new EmpRow(e.Id.Value, $"{e.Fornamn} {e.Efternamn}"))
+                .OrderBy(e => e.Namn)
+                .ToList();
+
+            await LaddaPass(db, sid);
+
+            // Startvecka: måndagen för schemats start, men inte i det förflutna om perioden pågår
+            var startVecka = MandagFor(_schema.Period.Start);
+            var idagVecka = MandagFor(idag);
+            _veckoStart = _schema.Period.Contains(idag) && idagVecka >= startVecka ? idagVecka : startVecka;
+            SattVeckodagar();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte ladda schemat: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LaddaPass(RegionHRDbContext db, ScheduleId sid)
+    {
+        _allaPass = await db.ScheduledShifts
+            .Where(s => s.SchemaId == sid && s.Status != ShiftStatus.Avbokad)
+            .ToListAsync();
+        BeraknaSchemaBrott();
+    }
+
+    private void BeraknaSchemaBrott()
+    {
+        if (_allaPass.Count == 0) { _schemaBrott = []; return; }
+        var assignments = _allaPass.Select(ArbetstidslagenValidator.TillShiftAssignment).ToList();
+        var res = _validator.ValidateSchedule(assignments, _schema!.Period);
+        _schemaBrott = res.Overtraldelser.ToList();
+    }
+
+    private void SattVeckodagar() =>
+        _veckoDagar = Enumerable.Range(0, 7).Select(i => _veckoStart.AddDays(i)).ToList();
+
+    private static DateOnly MandagFor(DateOnly d) =>
+        d.AddDays(-((int)d.DayOfWeek + 6) % 7);
+
+    private static bool ArHelg(DateOnly d) => d.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday;
+
+    private const string HelgBakgrund = "background: var(--mud-palette-background-grey);";
+    private static string HeaderStyle(DateOnly d) => "text-align: center;" + (ArHelg(d) ? HelgBakgrund : "");
+    private static string CellStyle(DateOnly d) => "vertical-align: top; text-align: center;" + (ArHelg(d) ? HelgBakgrund : "");
+
+    private void ForegaendeVecka() { _veckoStart = _veckoStart.AddDays(-7); SattVeckodagar(); }
+    private void NastaVecka() { _veckoStart = _veckoStart.AddDays(7); SattVeckodagar(); }
+
+    private async Task OnSjukvardChanged()
+    {
+        _validator = new ArbetstidslagenValidator(_arSjukvard);
+        BeraknaSchemaBrott();
+        if (_addOpen) Revalidera();
+        await Task.CompletedTask;
+    }
+
+    private void OppnaLaggTill(EmpRow emp, DateOnly dag)
+    {
+        _addAnstallId = emp.Id;
+        _addNamn = emp.Namn;
+        _addDatum = dag;
+        _addPassTyp = ShiftType.Dag;
+        _addForcerad = false;
+        OnPassTypChanged();
+        _addOpen = true;
+    }
+
+    private void OnPassTypChanged()
+    {
+        (_addStart, _addSlut, _addRast) = _addPassTyp switch
+        {
+            ShiftType.Dag => (new TimeSpan(7, 0, 0), new TimeSpan(16, 0, 0), 60),
+            ShiftType.Kvall => (new TimeSpan(15, 0, 0), new TimeSpan(22, 0, 0), 30),
+            ShiftType.Natt => (new TimeSpan(21, 0, 0), new TimeSpan(7, 0, 0), 45),
+            ShiftType.Jour => (new TimeSpan(8, 0, 0), new TimeSpan(20, 0, 0), 60),
+            ShiftType.Beredskap => (new TimeSpan(16, 0, 0), new TimeSpan(23, 0, 0), 0),
+            _ => (new TimeSpan(8, 0, 0), new TimeSpan(17, 0, 0), 60)
+        };
+        Revalidera();
+    }
+
+    private void Revalidera()
+    {
+        _addForcerad = false;
+        if (_addStart is null || _addSlut is null) { _addViolations = []; return; }
+
+        var preview = new ScheduledShift
+        {
+            Id = Guid.NewGuid(),
+            SchemaId = _schema!.Id,
+            AnstallId = EmployeeId.From(_addAnstallId),
+            Datum = _addDatum,
+            PassTyp = _addPassTyp,
+            PlaneradStart = TimeOnly.FromTimeSpan(_addStart.Value),
+            PlaneradSlut = TimeOnly.FromTimeSpan(_addSlut.Value),
+            Rast = TimeSpan.FromMinutes(_addRast),
+            Status = ShiftStatus.Planerad
+        };
+
+        var res = _validator.ValidateNyttPass(preview, _allaPass);
+        _addViolations = res.Overtraldelser.ToList();
+    }
+
+    private decimal PreviewTimmar()
+    {
+        if (_addStart is null || _addSlut is null) return 0m;
+        var total = _addSlut.Value - _addStart.Value;
+        if (total < TimeSpan.Zero) total += TimeSpan.FromHours(24);
+        return (decimal)(total - TimeSpan.FromMinutes(_addRast)).TotalHours;
+    }
+
+    private async Task BekraftaLaggTill()
+    {
+        if (!KanLaggaTill || _schema is null) return;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var sid = _schema.Id;
+            var tracked = await db.Schedules.Include(s => s.Pass).FirstOrDefaultAsync(s => s.Id == sid);
+            if (tracked is null) { Snackbar.Add("Schemat hittades inte.", Severity.Error); return; }
+
+            tracked.LaggTillPass(
+                EmployeeId.From(_addAnstallId),
+                _addDatum,
+                _addPassTyp,
+                TimeOnly.FromTimeSpan(_addStart!.Value),
+                TimeOnly.FromTimeSpan(_addSlut!.Value),
+                TimeSpan.FromMinutes(_addRast));
+
+            await db.SaveChangesAsync();
+            await LaddaPass(db, sid);
+
+            _addOpen = false;
+            Snackbar.Add(_addViolations.Count > 0
+                ? "Pass tillagt trots ATL-brott — kom ihåg kompensationsledighet."
+                : "Pass tillagt.", _addViolations.Count > 0 ? Severity.Warning : Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte lägga till pass: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task TaBortPass(Guid passId)
+    {
+        if (_schema is null) return;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var shift = await db.ScheduledShifts.FirstOrDefaultAsync(s => s.Id == passId);
+            if (shift is not null)
+            {
+                db.ScheduledShifts.Remove(shift);
+                await db.SaveChangesAsync();
+            }
+            await LaddaPass(db, _schema.Id);
+            Snackbar.Add("Pass borttaget.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte ta bort pass: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private static Color PassColor(ShiftType typ) => typ switch
+    {
+        ShiftType.Dag => Color.Success,
+        ShiftType.Kvall => Color.Warning,
+        ShiftType.Natt => Color.Info,
+        ShiftType.Jour => Color.Secondary,
+        ShiftType.Beredskap => Color.Tertiary,
+        _ => Color.Default
+    };
+
+    private record EmpRow(Guid Id, string Namn);
+}

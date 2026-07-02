@@ -1,44 +1,228 @@
 @page "/anstallda/{Id:guid}/anstallning"
 @layout RegionHR.Web.Components.Layout.AdminLayout
-@using RegionHR.Web.Components.Shared
+@using RegionHR.Core.Domain
+@using RegionHR.SharedKernel.Domain
+@inject RegionHR.Web.Services.AnstallningService Service
+@inject RegionHR.Web.Services.AuthService Auth
 @inject NavigationManager Nav
 
 <PageTitle>OpenHR - Ändra anställning</PageTitle>
 <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary" Href="@($"/anstallda/{Id}")" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
 
-<OhrConversationFlow Steps="@_steps" CurrentStep="@_step" OnBack="@(() => { if (_step > 0) _step--; })">
-    @switch (_step)
+@if (_laddar)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_emp is null)
+{
+    <MudAlert Severity="Severity.Error">Anställd hittades inte.</MudAlert>
+}
+else if (_emp.Anstallningar.Count == 0)
+{
+    <MudAlert Severity="Severity.Warning">
+        @_emp.Fornamn @_emp.Efternamn har ingen registrerad anställning att ändra.
+        <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/anstallda/ny" Class="ml-2">Skapa anställning</MudButton>
+    </MudAlert>
+}
+else
+{
+    <MudText Typo="Typo.h4" Class="mb-1" Style="font-weight: 700;">Ändra anställning</MudText>
+    <MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">@_emp.Fornamn @_emp.Efternamn</MudText>
+
+    @if (_meddelande is not null)
     {
-        case 0:
-            <MudText Typo="Typo.h5" Class="mb-4" Style="font-weight: 600;">Vad vill du ändra?</MudText>
-            <MudStack Spacing="3">
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Large" FullWidth="true" Style="min-height: 56px;" OnClick="@(() => { _andringstyp = "Intern förflyttning"; _step = 1; })">Intern förflyttning (ny enhet)</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Large" FullWidth="true" Style="min-height: 56px;" OnClick="@(() => { _andringstyp = "Löneändring"; _step = 1; })">Löneändring</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Large" FullWidth="true" Style="min-height: 56px;" OnClick="@(() => { _andringstyp = "Ändra sysselsättningsgrad"; _step = 1; })">Ändra sysselsättningsgrad</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Large" FullWidth="true" Style="min-height: 56px;" OnClick="@(() => { _andringstyp = "Befattningsändring"; _step = 1; })">Befattningsändring</MudButton>
-            </MudStack>
-            break;
-        case 1:
-            <MudText Typo="Typo.h5" Class="mb-4" Style="font-weight: 600;">@_andringstyp</MudText>
-            <MudDatePicker Label="Gäller från" @bind-Date="_giltigFran" Variant="Variant.Outlined" Class="mb-3" />
-            <MudTextField @bind-Value="_nyttVarde" Label="Nytt värde" Variant="Variant.Outlined" Class="mb-3" Placeholder="@(_andringstyp == "Löneändring" ? "T.ex. 32000" : "T.ex. Avdelning 33")" />
-            <MudTextField @bind-Value="_motivering" Label="Motivering" Variant="Variant.Outlined" Class="mb-3" Lines="3" />
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" FullWidth="true" Style="min-height: 56px;" OnClick="@(() => _step = 2)">Skicka till godkännande</MudButton>
-            break;
-        case 2:
-            <div style="text-align: center; padding: 2rem 0;">
-                <MudText Typo="Typo.h4" Color="Color.Success" Style="font-weight: 700;" Class="mb-4">Ändring skickad</MudText>
-                <MudText Typo="Typo.body1">@_andringstyp skickad till godkännande.</MudText>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-6" Href="@($"/anstallda/{Id}")">Tillbaka</MudButton>
-            </div>
-            break;
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _meddelande = null)">@_meddelande</MudAlert>
     }
-</OhrConversationFlow>
+    @if (_fel is not null)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-4">@_fel</MudAlert>
+    }
+
+    <MudGrid Spacing="4">
+        <MudItem xs="12" md="5">
+            <MudPaper Class="pa-4" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">Välj anställning</MudText>
+                <MudSelect T="Guid" @bind-Value="_valdAnstallningId" Variant="Variant.Outlined" Label="Anställning">
+                    @foreach (var a in _emp.Anstallningar.OrderByDescending(x => x.Giltighetsperiod.Start))
+                    {
+                        <MudSelectItem T="Guid" Value="@a.Id.Value">
+                            @(a.Befattningstitel ?? a.Anstallningsform.ToString()) — @a.Giltighetsperiod.Start.ToString("yyyy-MM-dd")
+                            @(a.Giltighetsperiod.End is null ? " (tillsvidare)" : $" – {a.Giltighetsperiod.End:yyyy-MM-dd}")
+                        </MudSelectItem>
+                    }
+                </MudSelect>
+
+                @if (Vald is { } v)
+                {
+                    <MudSimpleTable Dense="true" Class="mt-3">
+                        <tbody>
+                            <tr><td><strong>Form</strong></td><td>@v.Anstallningsform</td></tr>
+                            <tr><td><strong>Befattning</strong></td><td>@(v.Befattningstitel ?? "—")</td></tr>
+                            <tr><td><strong>Månadslön</strong></td><td>@v.Manadslon.Amount.ToString("N0") kr</td></tr>
+                            <tr><td><strong>Sysselsättningsgrad</strong></td><td>@v.Sysselsattningsgrad.Value.ToString("0.##") %</td></tr>
+                            <tr><td><strong>Daglön (ca)</strong></td><td>@v.BeraknaDaglon().Amount.ToString("N0") kr</td></tr>
+                            <tr><td><strong>Timlön (ca)</strong></td><td>@v.BeraknaTimlon().Amount.ToString("N2") kr</td></tr>
+                            <tr><td><strong>Period</strong></td><td>@v.Giltighetsperiod.Start.ToString("yyyy-MM-dd") – @(v.Giltighetsperiod.End?.ToString("yyyy-MM-dd") ?? "tillsvidare")</td></tr>
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="7">
+            <MudPaper Class="pa-4" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">Åtgärd</MudText>
+                <MudSelect T="AndringsTyp" @bind-Value="_typ" Variant="Variant.Outlined" Label="Vad vill du ändra?" Class="mb-4">
+                    <MudSelectItem T="AndringsTyp" Value="AndringsTyp.Lon">Löneändring</MudSelectItem>
+                    <MudSelectItem T="AndringsTyp" Value="AndringsTyp.Grad">Ändra sysselsättningsgrad</MudSelectItem>
+                    <MudSelectItem T="AndringsTyp" Value="AndringsTyp.Befattning">Befattningsändring</MudSelectItem>
+                    <MudSelectItem T="AndringsTyp" Value="AndringsTyp.Avsluta">Avsluta anställning</MudSelectItem>
+                </MudSelect>
+
+                @switch (_typ)
+                {
+                    case AndringsTyp.Lon:
+                        <MudNumericField @bind-Value="_nyLon" Label="Ny månadslön (kr)" Variant="Variant.Outlined" Min="1m" Step="500m" Class="mb-3" />
+                        @if (Vald is { } vl && _nyLon > 0)
+                        {
+                            var diff = _nyLon - vl.Manadslon.Amount;
+                            var pct = vl.Manadslon.Amount > 0 ? diff / vl.Manadslon.Amount * 100m : 0m;
+                            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                                Förändring: @(diff >= 0 ? "+" : "")@diff.ToString("N0") kr (@pct.ToString("0.#") %)
+                            </MudText>
+                        }
+                        break;
+                    case AndringsTyp.Grad:
+                        <MudNumericField @bind-Value="_nyGrad" Label="Ny sysselsättningsgrad (%)" Variant="Variant.Outlined" Min="1m" Max="100m" Step="5m" Class="mb-3" />
+                        break;
+                    case AndringsTyp.Befattning:
+                        <MudTextField @bind-Value="_nyBefattning" Label="Ny befattning" Variant="Variant.Outlined" Class="mb-3" />
+                        break;
+                    case AndringsTyp.Avsluta:
+                        <MudDatePicker @bind-Date="_slutdatum" Label="Sista anställningsdag" Variant="Variant.Outlined" Class="mb-1" />
+                        <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                            Anställningen avslutas per detta datum. Uppsägningstid regleras av LAS 11 § och kollektivavtalet.
+                        </MudText>
+                        break;
+                }
+
+                <MudButton Variant="Variant.Filled" Color="@(_typ == AndringsTyp.Avsluta ? Color.Error : Color.Primary)"
+                           Size="Size.Large" Style="min-height: 48px;" OnClick="Utfor" Disabled="@_sparar">
+                    @(_sparar ? "Sparar..." : _typ == AndringsTyp.Avsluta ? "Avsluta anställning" : "Spara ändring")
+                </MudButton>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
 
 @code {
     [Parameter] public Guid Id { get; set; }
-    private readonly List<string> _steps = ["Typ", "Detaljer", "Klart!"];
-    private int _step;
-    private string _andringstyp = "", _nyttVarde = "", _motivering = "";
-    private DateTime? _giltigFran = DateTime.Today;
+
+    private enum AndringsTyp { Lon, Grad, Befattning, Avsluta }
+
+    private Employee? _emp;
+    private bool _laddar = true;
+    private bool _sparar;
+    private string? _meddelande;
+    private string? _fel;
+
+    private Guid _valdAnstallningId;
+    private AndringsTyp _typ = AndringsTyp.Lon;
+
+    private decimal _nyLon;
+    private decimal _nyGrad = 100m;
+    private string _nyBefattning = "";
+    private DateTime? _slutdatum = DateTime.Today;
+
+    private Employment? Vald => _emp?.Anstallningar.FirstOrDefault(a => a.Id.Value == _valdAnstallningId);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Auth.InitializeAsync();
+        await LaddaAsync();
+    }
+
+    private async Task LaddaAsync()
+    {
+        _laddar = true;
+        try
+        {
+            _emp = await Service.HamtaAsync(EmployeeId.From(Id));
+            var aktiv = _emp?.AktivAnstallning(DateOnly.FromDateTime(DateTime.Today))
+                       ?? _emp?.Anstallningar.OrderByDescending(a => a.Giltighetsperiod.Start).FirstOrDefault();
+            if (aktiv is not null)
+            {
+                _valdAnstallningId = aktiv.Id.Value;
+                _nyLon = aktiv.Manadslon.Amount;
+                _nyGrad = aktiv.Sysselsattningsgrad.Value;
+                _nyBefattning = aktiv.Befattningstitel ?? "";
+            }
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte ladda anställd: {ex.Message}";
+        }
+        _laddar = false;
+    }
+
+    private async Task Utfor()
+    {
+        _fel = null;
+        _meddelande = null;
+        if (Vald is null)
+        {
+            _fel = "Välj en anställning först.";
+            return;
+        }
+
+        _sparar = true;
+        var empId = EmployeeId.From(Id);
+        var anstId = EmploymentId.From(_valdAnstallningId);
+        var andradAv = Auth.UserName ?? "HR";
+        try
+        {
+            switch (_typ)
+            {
+                case AndringsTyp.Lon:
+                    await Service.AndraLonAsync(empId, anstId, _nyLon, andradAv);
+                    _meddelande = $"Månadslönen är ändrad till {_nyLon:N0} kr.";
+                    break;
+                case AndringsTyp.Grad:
+                    await Service.AndraSysselsattningsgradAsync(empId, anstId, _nyGrad, andradAv);
+                    _meddelande = $"Sysselsättningsgraden är ändrad till {_nyGrad:0.##} %.";
+                    break;
+                case AndringsTyp.Befattning:
+                    if (string.IsNullOrWhiteSpace(_nyBefattning))
+                    {
+                        _fel = "Ange en befattning.";
+                        return;
+                    }
+                    await Service.SattBefattningAsync(empId, anstId, _nyBefattning, andradAv);
+                    _meddelande = $"Befattningen är ändrad till {_nyBefattning}.";
+                    break;
+                case AndringsTyp.Avsluta:
+                    if (_slutdatum is null)
+                    {
+                        _fel = "Ange sista anställningsdag.";
+                        return;
+                    }
+                    await Service.AvslutaAnstallningAsync(empId, anstId, DateOnly.FromDateTime(_slutdatum.Value), andradAv);
+                    _meddelande = $"Anställningen avslutas {_slutdatum.Value:yyyy-MM-dd}.";
+                    break;
+            }
+            await LaddaAsync();
+        }
+        catch (ArgumentException ex)
+        {
+            _fel = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte spara ändringen: {ex.Message}";
+        }
+        finally
+        {
+            _sparar = false;
+        }
+    }
 }

@@ -32,13 +32,13 @@ public class TravelClaimTests
     {
         var claim = SkapaTestResekrav();
 
-        // 2 hela dagar (260 kr/dag) + 1 halv dag (130 kr/dag) = 650 kr
+        // 2 hela dagar (300 kr/dag) + 1 halv dag (150 kr/dag) = 750 kr (Skatteverket 2026)
         claim.SattTraktamente(2, 1);
 
         Assert.Equal(2, claim.HelaDagar);
         Assert.Equal(1, claim.HalvaDagar);
-        Assert.Equal(Money.SEK(650m), claim.Traktamente);
-        Assert.Equal(Money.SEK(650m), claim.TotalBelopp);
+        Assert.Equal(Money.SEK(750m), claim.Traktamente);
+        Assert.Equal(Money.SEK(750m), claim.TotalBelopp);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class TravelClaimTests
     {
         var claim = SkapaTestResekrav();
 
-        // Traktamente: 1 hel (260) + 0 halva = 260
+        // Traktamente: 1 hel (300) + 0 halva = 300 (Skatteverket 2026)
         claim.SattTraktamente(1, 0);
 
         // Milersättning: 10 mil * 25 = 250
@@ -83,8 +83,8 @@ public class TravelClaimTests
         claim.LaggTillUtlagg("Lunch", Money.SEK(500m));
         claim.LaggTillUtlagg("Taxi", Money.SEK(350m));
 
-        // Total: 260 + 250 + 850 = 1360
-        Assert.Equal(Money.SEK(1_360m), claim.TotalBelopp);
+        // Total: 300 + 250 + 850 = 1400
+        Assert.Equal(Money.SEK(1_400m), claim.TotalBelopp);
     }
 
     [Fact]

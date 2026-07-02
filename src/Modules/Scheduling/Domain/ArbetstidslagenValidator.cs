@@ -112,6 +112,40 @@ public sealed class ArbetstidslagenValidator
     }
 
     /// <summary>
+    /// Mappa ett persisterat <see cref="ScheduledShift"/> till en <see cref="ShiftAssignment"/>
+    /// som ATL-validatorn arbetar med. Använder planerad tid (inte faktisk instämplad).
+    /// </summary>
+    public static ShiftAssignment TillShiftAssignment(ScheduledShift pass) => new()
+    {
+        AnstallId = pass.AnstallId,
+        Datum = pass.Datum,
+        PassTyp = pass.PassTyp,
+        Start = pass.PlaneradStart,
+        Slut = pass.PlaneradSlut,
+        Rast = pass.Rast
+    };
+
+    /// <summary>
+    /// Validera ett nytt manuellt inlagt pass mot den anställdes redan planerade pass.
+    /// Bekvämlighetsmetod som UI:t använder när ett pass läggs till i schemagriden:
+    /// mappar <see cref="ScheduledShift"/> → <see cref="ShiftAssignment"/> och kör
+    /// <see cref="ValidateShift"/> (dygnsvila §13, veckovila §14, veckoarbetstid §5,
+    /// nattarbetstid §13a). Passet med samma Id filtreras bort så att ett pass inte
+    /// jämförs mot sig självt.
+    /// </summary>
+    public ValidationResult ValidateNyttPass(
+        ScheduledShift nyttPass,
+        IEnumerable<ScheduledShift> befintligaPass)
+    {
+        var existing = befintligaPass
+            .Where(p => p.AnstallId == nyttPass.AnstallId && p.Id != nyttPass.Id)
+            .Select(TillShiftAssignment)
+            .ToList();
+
+        return ValidateShift(nyttPass.AnstallId, TillShiftAssignment(nyttPass), existing);
+    }
+
+    /// <summary>
     /// Validera hela schemat för en period. Kontrollerar alla anställda.
     /// </summary>
     public ValidationResult ValidateSchedule(

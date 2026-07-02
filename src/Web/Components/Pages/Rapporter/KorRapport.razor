@@ -17,9 +17,15 @@
         <MudText Typo="Typo.h6" Class="mt-4">Genererar rapport...</MudText>
     </div>
 }
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
 else if (_result != null)
 {
-    <MudAlert Severity="Severity.Success" Class="mb-4">Rapport genererad med @_result.Count rader.</MudAlert>
+    <MudAlert Severity="@(_result.Count > 0 ? Severity.Success : Severity.Info)" Class="mb-4">
+        @(_result.Count > 0 ? $"Rapport genererad med {_result.Count} rader." : "Ingen data för denna rapport ännu.")
+    </MudAlert>
 
     <MudSimpleTable Hover="true" Elevation="2" Class="mb-4">
         <thead><tr>@foreach (var h in _headers) { <th>@h</th> }</tr></thead>
@@ -84,7 +90,7 @@ else if (_result != null)
                 _headers = ["Namn", "Personnummer", "Enhet", "Befattning", "Anställd sedan"];
                 try
                 {
-                    var emps = await db.Employees.Include(e => e.Anstallningar).Take(100).ToListAsync();
+                    var emps = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
                     _result = emps.Select(e => new List<string>
                     {
                         $"{e.Fornamn} {e.Efternamn}",
@@ -98,22 +104,32 @@ else if (_result != null)
                 break;
 
             case "Löneregister":
-                _headers = ["Namn", "Personnummer", "Befattning", "Brutto", "Skatt", "Netto", "AG-avgift"];
+                // Läser PERSISTERAD lönedata (PayrollResults) — ingen fabricerad skatt/brutto.
+                _headers = ["Period", "Namn", "Personnummer", "Befattning", "Brutto", "Skatt", "Netto", "AG-avgift"];
                 try
                 {
-                    var loneEmps = await db.Employees.Include(e => e.Anstallningar).Take(100).ToListAsync();
-                    _result = loneEmps.Select(e =>
+                    var payroll = await db.PayrollResults
+                        .OrderByDescending(r => r.Year).ThenByDescending(r => r.Month)
+                        .ToListAsync();
+                    var loneEmpIds = payroll.Select(r => r.AnstallId).Distinct().ToList();
+                    var loneEmps = await db.Employees.Include(e => e.Anstallningar)
+                        .Where(e => loneEmpIds.Contains(e.Id)).ToListAsync();
+                    var loneEmpById = loneEmps.ToDictionary(e => e.Id);
+
+                    _result = payroll.Select(r =>
                     {
-                        var anst = e.Anstallningar.FirstOrDefault();
-                        var brutto = anst?.Manadslon.Amount ?? 30000m;
-                        var skatt = Math.Round(brutto * 0.32m, 0);
-                        var netto = brutto - skatt;
-                        var avgift = Math.Round(brutto * 0.3142m, 0);
+                        loneEmpById.TryGetValue(r.AnstallId, out var e);
+                        var anst = e?.Anstallningar.FirstOrDefault();
                         return new List<string>
                         {
-                            $"{e.Fornamn} {e.Efternamn}", e.Personnummer.ToMaskedString(),
+                            $"{r.Year}-{r.Month:D2}",
+                            e != null ? $"{e.Fornamn} {e.Efternamn}" : "—",
+                            e?.Personnummer.ToMaskedString() ?? "—",
                             anst?.Befattningstitel ?? "—",
-                            $"{brutto:N0} kr", $"-{skatt:N0} kr", $"{netto:N0} kr", $"{avgift:N0} kr"
+                            $"{r.Brutto.Amount:N0} kr",
+                            $"-{r.Skatt.Amount:N0} kr",
+                            $"{r.Netto.Amount:N0} kr",
+                            $"{r.Arbetsgivaravgifter.Amount:N0} kr"
                         };
                     }).ToList();
                 }

@@ -334,8 +334,8 @@ public class PayrollCalculationEngineTests
         var semesterlon = result.Rader.First(r => r.LoneartKod == "2700");
         Assert.Equal(semesterAvdrag, semesterlon.Belopp.Amount);
 
-        // Semestertillägg = 35000 * 100/100 * 0.43% * 5 (AB 25)
-        var expectedTillagg = 35000m * 100m / 100m * 0.0043m * 5;
+        // Semestertillägg = 35000 * 100/100 * 0.605% * 5 (AB §27 mom 15)
+        var expectedTillagg = 35000m * 100m / 100m * 0.00605m * 5;
         Assert.Equal(expectedTillagg, result.Semestertillagg.Amount);
         Assert.Equal(5, result.SemesterdagarUttagna);
     }
@@ -345,10 +345,14 @@ public class PayrollCalculationEngineTests
     #region Arbetsgivaravgifter
 
     [Theory]
-    [InlineData("20030101-****", 2025, 0.2081)]  // Ung (22 under 2025, 19-22 → reducerad)
-    [InlineData("19570101-****", 2025, 0.1021)]  // Äldre (68 under 2025, born 1957 → reducerad)
-    [InlineData("19850515-****", 2025, 0.3142)]  // Standard (40 år)
-    [InlineData("20020101-****", 2025, 0.3142)]  // Born 2002: 23 under 2025, utanför 19-22 → standard
+    // CalculateAsync anropas med månad 1 → ungdomsfönstret (apr–dec 2026) är EJ öppet.
+    [InlineData("20030101-****", 2025, 0.3142)]  // Ingen ungdomsnedsättning fanns 2025 → full avgift
+    [InlineData("20030101-****", 2026, 0.3142)]  // Januari 2026 → före ungdomsfönstret → full avgift
+    [InlineData("19570101-****", 2025, 0.1021)]  // Äldre: född 1957 ≤ 1958 → endast ålderspensionsavgift
+    [InlineData("19580101-****", 2026, 0.1021)]  // Äldre: fyllt 67 vid ingången av 2026
+    [InlineData("19590101-****", 2026, 0.3142)]  // Fyller 67 under 2026 → full avgift
+    [InlineData("19850515-****", 2025, 0.3142)]  // Standard (medelålders)
+    [InlineData("20020101-****", 2025, 0.3142)]  // Utanför ungdomsintervallet → standard
     public async Task CalculateAsync_Arbetsgivaravgifter_CorrectSatsBasedOnAge(
         string personnummer, int year, decimal expectedSats)
     {
@@ -367,79 +371,47 @@ public class PayrollCalculationEngineTests
     }
 
     [Fact]
-    public void BeraknaArbetsgivaravgiftSats_UngFodd2003_Reducerad2025()
+    public async Task CalculateAsync_Ungdom_April2026_ReduceradSatsUppTillTak()
     {
-        // Born 2003 → 22 under 2025 → within 19-22 range → reduced
-        var sats = PayrollCalculationEngine.BeraknaArbetsgivaravgiftSatsFranFodelseAr(2003, 2025);
-        Assert.Equal(0.2081m, sats);
+        // Född 2005 (19 vid årets ingång) + löneperiod april 2026 → ungdomsnedsättning aktiv.
+        SetupStandardEmployee(manadslon: 35000m, personnummerMaskerat: "20050101-****");
+        var input = new PayrollInput { ArbetadeDagar = 21, ArbetsdagarIManadens = 21 };
+
+        var result = await _engine.CalculateAsync(
+            _runId, _employeeId, _employmentId, 2026, 4, input);
+
+        Assert.Equal(0.2081m, result.ArbetsgivaravgiftSats);
+        // Belopp: 25 000 * 20,81 % + (brutto - 25 000) * 31,42 %, avrundat till kronor
+        var brutto = result.Brutto.Amount;
+        var forvantat = Math.Round(25000m * 0.2081m + (brutto - 25000m) * 0.3142m, 0, MidpointRounding.ToEven);
+        Assert.Equal(forvantat, result.Arbetsgivaravgifter.Amount);
     }
 
     [Fact]
-    public void BeraknaArbetsgivaravgiftSats_AldreFodd1957_Reducerad2025()
+    public async Task CalculateAsync_Fodd1937_IngenArbetsgivaravgift()
     {
-        // 2025: Born 1957 → 68 under 2025 → reducerad (68+ threshold)
-        var sats = PayrollCalculationEngine.BeraknaArbetsgivaravgiftSatsFranFodelseAr(1957, 2025);
-        Assert.Equal(0.1021m, sats);
+        SetupStandardEmployee(manadslon: 35000m, personnummerMaskerat: "19370101-****");
+        var input = new PayrollInput { ArbetadeDagar = 21, ArbetsdagarIManadens = 21 };
+
+        var result = await _engine.CalculateAsync(
+            _runId, _employeeId, _employmentId, 2026, 1, input);
+
+        Assert.Equal(0m, result.ArbetsgivaravgiftSats);
+        Assert.Equal(0m, result.Arbetsgivaravgifter.Amount);
     }
 
     [Fact]
-    public void BeraknaArbetsgivaravgiftSats_AldreFodd1959_Standard2025()
+    public async Task CalculateAsync_UtanSkattetabell_SkattFallerTillbakaPaKommunTabell()
     {
-        // 2025: Born 1959 → 66 under 2025 → NOT 68+ → standard rate
-        var sats = PayrollCalculationEngine.BeraknaArbetsgivaravgiftSatsFranFodelseAr(1959, 2025);
-        Assert.Equal(0.3142m, sats);
-    }
+        // Anställd saknar explicit skattetabell men har kommunalskattesats → skatten ska EJ bli 0.
+        SetupStandardEmployee(manadslon: 35000m, skattetabell: null, skattekolumn: null);
+        var input = new PayrollInput { ArbetadeDagar = 21, ArbetsdagarIManadens = 21 };
 
-    [Fact]
-    public void BeraknaArbetsgivaravgiftSats_AldreFodd1959_Reducerad2026()
-    {
-        // 2026: Born 1959 → 67 under 2026 → 67+ threshold lowered → reducerad
-        var sats = PayrollCalculationEngine.BeraknaArbetsgivaravgiftSatsFranFodelseAr(1959, 2026);
-        Assert.Equal(0.1021m, sats);
-    }
+        var result = await _engine.CalculateAsync(
+            _runId, _employeeId, _employmentId, 2026, 1, input);
 
-    [Fact]
-    public void BeraknaArbetsgivaravgiftSats_AldreFodd1960_Standard2026()
-    {
-        // 2026: Born 1960 → 66 under 2026 → NOT 67+ → standard
-        var sats = PayrollCalculationEngine.BeraknaArbetsgivaravgiftSatsFranFodelseAr(1960, 2026);
-        Assert.Equal(0.3142m, sats);
-    }
-
-    [Fact]
-    public void BeraknaArbetsgivaravgiftSats_UngFodd2004_Reducerad2026()
-    {
-        // 2026: Born 2004 → 22 under 2026 → within 19-22 → reduced
-        var sats = PayrollCalculationEngine.BeraknaArbetsgivaravgiftSatsFranFodelseAr(2004, 2026);
-        Assert.Equal(0.2081m, sats);
-    }
-
-    [Fact]
-    public void BeraknaArbetsgivaravgiftSats_StandardFodd1985_FullAvgift()
-    {
-        var sats = PayrollCalculationEngine.BeraknaArbetsgivaravgiftSatsFranFodelseAr(1985, 2025);
-        Assert.Equal(0.3142m, sats); // 40 år
-    }
-
-    [Fact]
-    public void BeraknaArbetsgivaravgiftBelopp_UngSplitRate_CorrectBelopp()
-    {
-        // Born 2003, year 2025: youth rate on first 25000, standard on rest
-        var brutto = Money.SEK(35000m);
-        var belopp = PayrollCalculationEngine.BeraknaArbetsgivaravgiftBeloppFranFodelseAr(brutto, 2003, 2025);
-        // 25000 * 0.2081 + 10000 * 0.3142
-        var expected = 25000m * 0.2081m + 10000m * 0.3142m;
-        Assert.Equal(expected, belopp.Amount);
-    }
-
-    [Fact]
-    public void BeraknaArbetsgivaravgiftBelopp_UngUnderTak_OnlyReducedRate()
-    {
-        // Born 2003, year 2025: salary below 25000 → all at reduced rate
-        var brutto = Money.SEK(20000m);
-        var belopp = PayrollCalculationEngine.BeraknaArbetsgivaravgiftBeloppFranFodelseAr(brutto, 2003, 2025);
-        var expected = 20000m * 0.2081m;
-        Assert.Equal(expected, belopp.Amount);
+        Assert.True(result.Skatt.Amount > 0m,
+            "Preliminärskatt ska beräknas via kommunens tabell även utan explicit skattetabell");
     }
 
     #endregion
@@ -587,8 +559,8 @@ public class PayrollCalculationEngineTests
         // Övertid = 5 * timlön * 0.8 (AB 25 supplement)
         var timlon = 35000m / (38.25m * 52m / 12m);
         var overtid = 5 * timlon * 0.8m;
-        // Semestertillägg = 35000 * 100/100 * 0.0043 * 3 (AB 25)
-        var semestertillagg = 35000m * 100m / 100m * 0.0043m * 3;
+        // Semestertillägg = 35000 * 100/100 * 0.00605 * 3 (AB §27 mom 15)
+        var semestertillagg = 35000m * 100m / 100m * 0.00605m * 3;
 
         var expectedBrutto = 35000m + 1265m + overtid + semestertillagg;
         Assert.Equal(expectedBrutto, result.Brutto.Amount);
@@ -627,20 +599,20 @@ public class PayrollCalculationEngineTests
         // OB: 10 * 126.50 = 1265.00
         Assert.Equal(1265.00m, result.OBTillagg.Amount);
 
-        // Semestertillägg: 35000 * 1.0 * 0.0043 * 3 = 451.50 (AB 25: 0.43%)
-        Assert.Equal(451.50m, result.Semestertillagg.Amount);
+        // Semestertillägg: 35000 * 1.0 * 0.00605 * 3 = 635.25 (AB §27 mom 15: 0.605%)
+        Assert.Equal(635.25m, result.Semestertillagg.Amount);
 
-        // Brutto: 35000 + 1265 + 451.50 = 36716.50
-        Assert.Equal(36716.50m, result.Brutto.Amount);
+        // Brutto: 35000 + 1265 + 635.25 = 36900.25
+        Assert.Equal(36900.25m, result.Brutto.Amount);
 
         // Skatt: 8000 (mock tabell)
         Assert.Equal(8000m, result.Skatt.Amount);
 
-        // Netto: 36716.50 - 8000 = 28716.50
-        Assert.Equal(28716.50m, result.Netto.Amount);
+        // Netto: 36900.25 - 8000 = 28900.25
+        Assert.Equal(28900.25m, result.Netto.Amount);
 
-        // Arbetsgivaravgifter: 36716.50 * 0.3142 = ~11536.24, avrundad till kronor
-        var expectedAG = Math.Round(36716.50m * 0.3142m, 0, MidpointRounding.ToEven);
+        // Arbetsgivaravgifter: 36900.25 * 0.3142, avrundad till kronor
+        var expectedAG = Math.Round(36900.25m * 0.3142m, 0, MidpointRounding.ToEven);
         Assert.Equal(expectedAG, result.Arbetsgivaravgifter.Amount);
 
         // Pension: alla pensionsgrundande rader * 6%

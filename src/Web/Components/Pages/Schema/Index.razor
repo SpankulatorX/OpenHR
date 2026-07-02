@@ -11,8 +11,12 @@
 
 <div class="d-flex justify-space-between align-center mb-4">
     <MudText Typo="Typo.h4" Style="font-weight: 700;">@L["ScheduleOverview"]</MudText>
-    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
-               StartIcon="@Icons.Material.Filled.Add" Href="/schema/ny" Style="min-height: 48px;">@L["CreateSchedule"]</MudButton>
+    <div class="d-flex gap-2">
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.GridView" Href="/schema/redigera" Style="min-height: 48px;">Redigera pass</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.Add" Href="/schema/ny" Style="min-height: 48px;">@L["CreateSchedule"]</MudButton>
+    </div>
 </div>
 
 @if (_loading)

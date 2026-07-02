@@ -32,45 +32,39 @@ public interface ICollectiveAgreementRulesEngine
 /// </summary>
 public sealed class CollectiveAgreementRulesEngine : ICollectiveAgreementRulesEngine
 {
-    // OB-tillagg per AB (2025 satser) — legacy hardcoded rates
-    private static readonly Dictionary<(CollectiveAgreementType, OBCategory), decimal> OBRates = new()
-    {
-        // AB - Allmanna bestammelser
-        { (CollectiveAgreementType.AB, OBCategory.VardagKvall), 126.50m },
-        { (CollectiveAgreementType.AB, OBCategory.VardagNatt), 152.00m },
-        { (CollectiveAgreementType.AB, OBCategory.Helg), 89.00m },
-        { (CollectiveAgreementType.AB, OBCategory.Storhelg), 195.00m },
-
-        // HOK
-        { (CollectiveAgreementType.HOK, OBCategory.VardagKvall), 120.00m },
-        { (CollectiveAgreementType.HOK, OBCategory.VardagNatt), 145.00m },
-        { (CollectiveAgreementType.HOK, OBCategory.Helg), 85.00m },
-        { (CollectiveAgreementType.HOK, OBCategory.Storhelg), 185.00m },
-    };
-
     // === Legacy enum-based methods (backward compatible) ===
 
+    /// <summary>
+    /// O-tillägg (kr/tim) enligt AB § 21 mom. 1. Satserna är årsversionerade och hämtas
+    /// från den kanoniska tabellen <see cref="ABOTillaggSatser"/> — inga magiska konstanter.
+    /// AB och HÖK följer samma satser (HÖK inkorporerar AB § 21). Övriga avtal saknar
+    /// AB-tabell och ger 0.
+    /// </summary>
     public Task<decimal> GetOBRateAsync(CollectiveAgreementType agreement, OBCategory category, DateOnly date, CancellationToken ct = default)
     {
         if (category == OBCategory.Ingen)
             return Task.FromResult(0m);
 
-        var rate = OBRates.GetValueOrDefault((agreement, category), 0m);
+        var rate = agreement is CollectiveAgreementType.AB or CollectiveAgreementType.HOK
+            ? ABOTillaggSatser.Grundsats(category, date)
+            : 0m;
         return Task.FromResult(rate);
     }
 
     public Task<OvertimeRules> GetOvertimeRulesAsync(CollectiveAgreementType agreement, DateOnly date, CancellationToken ct = default)
     {
-        // AB 25: Enkel overtid = 180% total, tillagg = 0.8x timlon
-        // Kvalificerad overtid = 240% total, tillagg = 1.4x timlon
+        // AB § 20 mom. 3: Enkel övertid = 180% total (tillägg 0.8x timlön),
+        // Kvalificerad övertid = 240% total (tillägg 1.4x timlön). Timlön = månadslön / 165.
+        // Satserna hämtas från den kanoniska ABOvertidSatser.
         return Task.FromResult(new OvertimeRules
         {
-            EnkelOvertidFaktor = agreement == CollectiveAgreementType.AB ? 0.8m : 0.8m,
-            KvalificeradOvertidFaktor = agreement == CollectiveAgreementType.AB ? 1.4m : 1.4m,
-            MaxOvertidPerVecka = 48m,
+            EnkelOvertidFaktor = ABOvertidSatser.EnkelOvertidTillaggFaktor,
+            KvalificeradOvertidFaktor = ABOvertidSatser.KvalificeradOvertidTillaggFaktor,
+            Overtidsdelare = ABOvertidSatser.Overtidsdelare,
+            MaxOvertidPerVecka = ABOvertidSatser.MaxOvertidPerVecka,
             MaxOvertidPerManad = 50m,
-            MaxOvertidPerAr = 200m,
-            KomptidFaktor = 1.5m
+            MaxOvertidPerAr = ABOvertidSatser.MaxAllmanOvertidPerAr,
+            KomptidFaktor = ABOvertidSatser.EnkelOvertidLedighetFaktor
         });
     }
 
@@ -81,32 +75,41 @@ public sealed class CollectiveAgreementRulesEngine : ICollectiveAgreementRulesEn
 
     public Task<VacationRules> GetVacationRulesAsync(CollectiveAgreementType agreement, DateOnly date, int? fodelseAr, CancellationToken ct = default)
     {
-        // AB 25: Semesterdagar baserat pa alder under semesteraret
-        var dagarPerAr = 25;
-        if (agreement == CollectiveAgreementType.AB && fodelseAr.HasValue)
-        {
-            var alder = date.Year - fodelseAr.Value;
-            dagarPerAr = alder switch
-            {
-                >= 50 => 32,
-                >= 40 => 31,
-                _ => 25
-            };
-        }
+        // AB § 27 mom. 5: semesterrätt trappas med den ålder man UPPNÅR under
+        // intjänandeåret (= kalenderåret). Övriga avtal: 25 dagar (semesterlagens golv).
+        var arAB = agreement is CollectiveAgreementType.AB or CollectiveAgreementType.HOK;
+        var dagarPerAr = arAB && fodelseAr.HasValue
+            ? ABSemesterRegler.ArligSemesterrattForFodelsear(fodelseAr.Value, date.Year)
+            : ABSemesterRegler.BasDagar;
 
-        // AB 25: Semestertillagg 0.43% per dag av manadslon
-        // AB 25: 12% av total variabel lon under intjanandearet
-        return Task.FromResult(new VacationRules
+        return Task.FromResult(BuildVacationRules(dagarPerAr, date, arAB));
+    }
+
+    /// <summary>
+    /// Bygger semesterregler enligt AB § 27. Intjänandeåret sammanfaller med
+    /// semesteråret och är löpande KALENDERÅR (mom. 2) — inte 1 april–31 mars.
+    /// Semesterdagstillägg 0,605% (mom. 15) och rörlig-lön-procent 12/14,88/15,36
+    /// beroende på semesterrätt (mom. 16).
+    /// </summary>
+    private static VacationRules BuildVacationRules(int dagarPerAr, DateOnly date, bool arAB)
+    {
+        // AB har kalenderår som intjänande-/semesterår; annat avtal följer semesterlagens
+        // default (1 april–31 mars).
+        var (start, slut) = arAB
+            ? (new DateOnly(date.Year, 1, 1), new DateOnly(date.Year, 12, 31))
+            : (new DateOnly(date.Year - 1, 4, 1), new DateOnly(date.Year, 3, 31));
+
+        return new VacationRules
         {
             DagarPerAr = dagarPerAr,
             SammaloneregelProcent = 0.80m,
-            SemestertillaggProcent = 0.43m,
-            VariabelLonSemesterProcent = 12.0m,
-            MaxSparadeDagar = 5,
+            SemestertillaggProcent = ABSemesterRegler.SemesterdagstillaggProcent,
+            VariabelLonSemesterProcent = ABSemesterRegler.RorligLonProcent(dagarPerAr),
+            MaxSparadeDagar = ABSemesterRegler.MaxSparbaraDagar(dagarPerAr),
             TotalMaxSparade = 40,
-            IntjanandeArStart = new DateOnly(date.Year - 1, 4, 1),
-            IntjanandeArSlut = new DateOnly(date.Year, 3, 31)
-        });
+            IntjanandeArStart = start,
+            IntjanandeArSlut = slut
+        };
     }
 
     public Task<SickPayRules> GetSickPayRulesAsync(CollectiveAgreementType agreement, DateOnly date, CancellationToken ct = default)
@@ -202,23 +205,25 @@ public sealed class CollectiveAgreementRulesEngine : ICollectiveAgreementRulesEn
         {
             return new OvertimeRules
             {
-                EnkelOvertidFaktor = 0.8m,
-                KvalificeradOvertidFaktor = 1.4m,
-                MaxOvertidPerVecka = 48m,
+                EnkelOvertidFaktor = ABOvertidSatser.EnkelOvertidTillaggFaktor,
+                KvalificeradOvertidFaktor = ABOvertidSatser.KvalificeradOvertidTillaggFaktor,
+                Overtidsdelare = ABOvertidSatser.Overtidsdelare,
+                MaxOvertidPerVecka = ABOvertidSatser.MaxOvertidPerVecka,
                 MaxOvertidPerManad = 50m,
-                MaxOvertidPerAr = 200m,
-                KomptidFaktor = 1.5m
+                MaxOvertidPerAr = ABOvertidSatser.MaxAllmanOvertidPerAr,
+                KomptidFaktor = ABOvertidSatser.EnkelOvertidLedighetFaktor
             };
         }
 
         return new OvertimeRules
         {
             EnkelOvertidFaktor = regel.Multiplikator - 1.0m, // Convert total multiplier to addon
-            KvalificeradOvertidFaktor = 1.4m,
-            MaxOvertidPerVecka = 48m,
+            KvalificeradOvertidFaktor = ABOvertidSatser.KvalificeradOvertidTillaggFaktor,
+            Overtidsdelare = ABOvertidSatser.Overtidsdelare,
+            MaxOvertidPerVecka = ABOvertidSatser.MaxOvertidPerVecka,
             MaxOvertidPerManad = 50m,
             MaxOvertidPerAr = regel.MaxPerAr,
-            KomptidFaktor = 1.5m
+            KomptidFaktor = ABOvertidSatser.EnkelOvertidLedighetFaktor
         };
     }
 
@@ -226,10 +231,11 @@ public sealed class CollectiveAgreementRulesEngine : ICollectiveAgreementRulesEn
     public VacationRules GetVacationRules(CollectiveAgreement avtal, DateOnly date, int? fodelseAr = null)
     {
         var regel = avtal.SemesterRegler.FirstOrDefault();
-        var dagarPerAr = regel?.BasDagar ?? 25;
+        var dagarPerAr = regel?.BasDagar ?? ABSemesterRegler.BasDagar;
 
         if (regel is not null && fodelseAr.HasValue)
         {
+            // AB § 27 mom. 5: ålder som uppnås under intjänandeåret (= kalenderåret).
             var alder = date.Year - fodelseAr.Value;
             dagarPerAr = alder switch
             {
@@ -239,17 +245,8 @@ public sealed class CollectiveAgreementRulesEngine : ICollectiveAgreementRulesEn
             };
         }
 
-        return new VacationRules
-        {
-            DagarPerAr = dagarPerAr,
-            SammaloneregelProcent = 0.80m,
-            SemestertillaggProcent = 0.43m,
-            VariabelLonSemesterProcent = 12.0m,
-            MaxSparadeDagar = 5,
-            TotalMaxSparade = 40,
-            IntjanandeArStart = new DateOnly(date.Year - 1, 4, 1),
-            IntjanandeArSlut = new DateOnly(date.Year, 3, 31)
-        };
+        // DB-avtal antas vara AB/HÖK-baserade (kalenderår som intjänandeår).
+        return BuildVacationRules(dagarPerAr, date, arAB: true);
     }
 }
 
@@ -257,6 +254,8 @@ public sealed class OvertimeRules
 {
     public decimal EnkelOvertidFaktor { get; set; }
     public decimal KvalificeradOvertidFaktor { get; set; }
+    /// <summary>Delare för övertidsgrundande timlön enligt AB § 20 mom. 3 (månadslön / 165).</summary>
+    public decimal Overtidsdelare { get; set; } = 165m;
     public decimal MaxOvertidPerVecka { get; set; }
     public decimal MaxOvertidPerManad { get; set; }
     public decimal MaxOvertidPerAr { get; set; }
@@ -267,9 +266,9 @@ public sealed class VacationRules
 {
     public int DagarPerAr { get; set; }
     public decimal SammaloneregelProcent { get; set; }
-    /// <summary>Semestertillagg i procent per semesterdag av manadslon (AB 25: 0.43%)</summary>
+    /// <summary>Semesterdagstillägg i procent per uttagen betald semesterdag av månadslön (AB § 27 mom. 15: 0,605%)</summary>
     public decimal SemestertillaggProcent { get; set; }
-    /// <summary>Procentsats for semesterlon pa variabel lon (AB 25: 12%)</summary>
+    /// <summary>Procentregel för semesterlön på rörlig lön (AB § 27 mom. 16: 12% / 14,88% / 15,36% beroende på semesterrätt)</summary>
     public decimal VariabelLonSemesterProcent { get; set; }
     public int MaxSparadeDagar { get; set; }
     public int TotalMaxSparade { get; set; }

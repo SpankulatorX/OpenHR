@@ -1,5 +1,7 @@
 @page "/anstallda/ny"
 @layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Web.Services
 @inject RegionHR.Web.Services.AnstallningService Service
 @inject NavigationManager Nav
 
@@ -29,7 +31,7 @@
         </MudAlert>
     }
 
-    <MudPaper Class="pa-6" Elevation="2">
+    <MudPaper Class="pa-6 mb-4" Elevation="2">
         <MudText Typo="Typo.h6" Class="mb-4" Style="font-weight: 600;">Personuppgifter</MudText>
         <MudGrid Spacing="3">
             <MudItem xs="12" sm="6">
@@ -45,17 +47,83 @@
                               Error="@_efternamnFel" ErrorText="Efternamn är obligatoriskt" />
             </MudItem>
             <MudItem xs="12" sm="6">
-                <MudTextField @bind-Value="_epost" Label="E-post" Placeholder="fornamn.efternamn@region.se" Variant="Variant.Outlined" InputType="InputType.Email" Required="true"
+                <MudTextField @bind-Value="_epost" Label="E-post" Placeholder="fornamn.efternamn@region.se" Variant="Variant.Outlined" InputType="InputType.Email"
                               Error="@_epostFel" ErrorText="@("Ange en giltig e-postadress (måste innehålla @)")" />
             </MudItem>
             <MudItem xs="12" sm="6">
                 <MudTextField @bind-Value="_telefon" Label="Telefon" Variant="Variant.Outlined" InputType="InputType.Telephone" />
             </MudItem>
         </MudGrid>
+    </MudPaper>
+
+    <MudPaper Class="pa-6" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-1" Style="font-weight: 600;">Anställning</MudText>
+        <MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+            Systemet kontrollerar automatiskt att kombinationen av anställningsform och period följer LAS.
+        </MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="6">
+                <MudSelect T="Guid?" @bind-Value="_enhetId" Label="Enhet" Variant="Variant.Outlined" Required="true"
+                           Error="@_enhetFel" ErrorText="Välj en enhet">
+                    @foreach (var e in _enheter)
+                    {
+                        <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Namn (@e.Kostnadsstalle)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="EmploymentType" @bind-Value="_anstallningsform" Label="Anställningsform" Variant="Variant.Outlined">
+                    @foreach (var f in Enum.GetValues<EmploymentType>())
+                    {
+                        <MudSelectItem T="EmploymentType" Value="@f">@FormNamn(f)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="CollectiveAgreementType" @bind-Value="_kollektivavtal" Label="Kollektivavtal" Variant="Variant.Outlined">
+                    @foreach (var k in Enum.GetValues<CollectiveAgreementType>())
+                    {
+                        <MudSelectItem T="CollectiveAgreementType" Value="@k">@k</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="Guid?" @bind-Value="_avtalsId" Label="Avtal (specifikt, valfritt)" Variant="Variant.Outlined" Clearable="true">
+                    @foreach (var a in _avtal)
+                    {
+                        <MudSelectItem T="Guid?" Value="@((Guid?)a.Id.Value)">@a.Namn</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudNumericField @bind-Value="_manadslon" Label="Månadslön (kr, heltid)" Variant="Variant.Outlined" Min="0m" Step="500m"
+                                 Error="@_lonFel" ErrorText="Månadslön måste anges" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudNumericField @bind-Value="_sysselsattningsgrad" Label="Sysselsättningsgrad (%)" Variant="Variant.Outlined" Min="1m" Max="100m" Step="5m"
+                                 Error="@_gradFel" ErrorText="Ange 1–100 %" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudDatePicker @bind-Date="_startdatum" Label="Startdatum" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudDatePicker @bind-Date="_slutdatum" Label="@SlutdatumLabel" Variant="Variant.Outlined" Clearable="true"
+                               HelperText="@SlutdatumHjalp" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_befattning" Label="Befattning" Placeholder="T.ex. Sjuksköterska" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" sm="3">
+                <MudTextField @bind-Value="_bestaKod" Label="BESTA-kod" Variant="Variant.Outlined" HelperText="Statistik (SKR)" />
+            </MudItem>
+            <MudItem xs="12" sm="3">
+                <MudTextField @bind-Value="_aidKod" Label="AID-kod" Variant="Variant.Outlined" HelperText="Statistik (SKR)" />
+            </MudItem>
+        </MudGrid>
 
         <div style="margin-top: 1.5rem; display: flex; gap: 0.5rem;">
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Style="min-height: 48px;" OnClick="Spara" Disabled="@_sparar">
-                @(_sparar ? "Sparar..." : "Skapa anställd")
+                @(_sparar ? "Sparar..." : "Anställ")
             </MudButton>
             <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Large" Style="min-height: 48px;" Href="/anstallda">Avbryt</MudButton>
         </div>
@@ -66,42 +134,31 @@ else
     <div style="padding: 1rem 0;">
         <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Large" Class="mb-4" Style="display: block; margin: 0 auto;" />
         <MudText Typo="Typo.h4" Color="Color.Success" Style="font-weight: 700; text-align: center;" Class="mb-4">
-            Anställd skapad! Personalakten har öppnats.
+            @_fornamn @_efternamn är anställd. Personalakten har skapats.
         </MudText>
 
         <MudPaper Class="pa-6 mb-4" Elevation="2" Style="border-left: 4px solid var(--mud-palette-success);">
-            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Personaluppgifter</MudText>
+            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Anställningen</MudText>
             <MudSimpleTable Dense="true">
                 <tbody>
-                    <tr><td><strong>Personal-ID</strong></td><td>@_genereratPersonalId</td></tr>
-                    <tr><td><strong>Personnummer</strong></td><td>@_genereratPersonnummer</td></tr>
-                    <tr><td><strong>Förnamn</strong></td><td>@_fornamn</td></tr>
-                    <tr><td><strong>Efternamn</strong></td><td>@_efternamn</td></tr>
-                    <tr><td><strong>E-post</strong></td><td>@(string.IsNullOrWhiteSpace(_epost) ? "—" : _epost)</td></tr>
-                    <tr><td><strong>Telefon</strong></td><td>@(string.IsNullOrWhiteSpace(_telefon) ? "—" : _telefon)</td></tr>
-                </tbody>
-            </MudSimpleTable>
-        </MudPaper>
-
-        <MudPaper Class="pa-6 mb-4" Elevation="2">
-            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Nästa steg</MudText>
-            <MudSimpleTable Dense="true">
-                <tbody>
-                    <tr><td>Anställningsavtal</td><td><MudChip T="string" Size="Size.Small" Color="Color.Warning">Väntar</MudChip></td></tr>
-                    <tr><td>Skatteuppgifter</td><td><MudChip T="string" Size="Size.Small" Color="Color.Warning">Väntar</MudChip></td></tr>
-                    <tr><td>Enhetstillhörighet</td><td><MudChip T="string" Size="Size.Small" Color="Color.Warning">Väntar</MudChip></td></tr>
-                    <tr><td>Behörigheter (AD/VPN)</td><td><MudChip T="string" Size="Size.Small" Color="Color.Info">Automatiskt</MudChip></td></tr>
-                    <tr><td>Notifiering till chef</td><td><MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" Size="Size.Small" /> Skickad</td></tr>
+                    <tr><td><strong>Personnummer</strong></td><td>@_personnummer</td></tr>
+                    <tr><td><strong>Enhet</strong></td><td>@_enhetNamnSparad</td></tr>
+                    <tr><td><strong>Anställningsform</strong></td><td>@FormNamn(_anstallningsform)</td></tr>
+                    <tr><td><strong>Befattning</strong></td><td>@(string.IsNullOrWhiteSpace(_befattning) ? "—" : _befattning)</td></tr>
+                    <tr><td><strong>Månadslön</strong></td><td>@_manadslon.ToString("N0") kr</td></tr>
+                    <tr><td><strong>Sysselsättningsgrad</strong></td><td>@_sysselsattningsgrad.ToString("0.##") %</td></tr>
+                    <tr><td><strong>Period</strong></td><td>@(_startdatum?.ToString("yyyy-MM-dd")) – @(_slutdatum?.ToString("yyyy-MM-dd") ?? "Tillsvidare")</td></tr>
+                    <tr><td><strong>Kollektivavtal</strong></td><td>@_kollektivavtal</td></tr>
                 </tbody>
             </MudSimpleTable>
         </MudPaper>
 
         <div class="d-flex gap-2">
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Href="/anstallda" Style="min-height: 48px;">
-                Visa personalakt
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Href="@($"/anstallda/{_nyId}")" Style="min-height: 48px;">
+                Öppna personalakt
             </MudButton>
             <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Large" OnClick="SkapaNy" Style="min-height: 48px;">
-                Skapa ytterligare anställd
+                Anställ ytterligare en person
             </MudButton>
         </div>
     </div>
@@ -113,26 +170,75 @@ else
     private string? _efternamn;
     private string? _epost;
     private string? _telefon;
+
+    private Guid? _enhetId;
+    private EmploymentType _anstallningsform = EmploymentType.Tillsvidare;
+    private CollectiveAgreementType _kollektivavtal = CollectiveAgreementType.AB;
+    private Guid? _avtalsId;
+    private decimal _manadslon = 30000m;
+    private decimal _sysselsattningsgrad = 100m;
+    private DateTime? _startdatum = DateTime.Today;
+    private DateTime? _slutdatum;
+    private string? _befattning;
+    private string? _bestaKod;
+    private string? _aidKod;
+
     private string? _felmeddelande;
-    private bool _personnummerFel;
-    private bool _fornamnFel;
-    private bool _efternamnFel;
-    private bool _epostFel;
+    private bool _personnummerFel, _fornamnFel, _efternamnFel, _epostFel, _enhetFel, _lonFel, _gradFel;
     private List<string> _valideringsfel = [];
     private bool _sparar;
     private bool _skapad;
-    private string _genereratPersonnummer = "";
-    private string _genereratPersonalId = "";
+    private Guid _nyId;
+    private string _enhetNamnSparad = "";
+
+    private List<EnhetVal> _enheter = [];
+    private List<AvtalVal> _avtal = [];
+
+    private bool KraverSlutdatum => RegionHR.Core.Domain.Employment.KraverSlutdatum(_anstallningsform);
+    private string SlutdatumLabel => KraverSlutdatum ? "Slutdatum (obligatoriskt)" : "Slutdatum (endast tidsbegränsad)";
+    private string SlutdatumHjalp => _anstallningsform switch
+    {
+        EmploymentType.Tillsvidare => "Lämna tomt — en tillsvidareanställning har inget slutdatum.",
+        EmploymentType.Provanstallning => "Provanställning får vara i högst 6 månader (LAS 6 §).",
+        _ when KraverSlutdatum => "Tidsbegränsad anställning kräver ett slutdatum.",
+        _ => ""
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _enheter = await Service.HamtaEnheterAsync();
+            _avtal = await Service.HamtaAvtalAsync();
+        }
+        catch (Exception ex)
+        {
+            _felmeddelande = $"Kunde inte ladda enheter/avtal: {ex.Message}";
+        }
+    }
+
+    private static string FormNamn(EmploymentType f) => f switch
+    {
+        EmploymentType.Tillsvidare => "Tillsvidare",
+        EmploymentType.Vikariat => "Vikariat",
+        EmploymentType.Provanstallning => "Provanställning",
+        EmploymentType.SAVA => "Särskild visstid",
+        EmploymentType.Timavlonad => "Timavlönad",
+        EmploymentType.Sasongsanstallning => "Säsongsanställning",
+        _ => f.ToString()
+    };
 
     private async Task Spara()
     {
         _felmeddelande = null;
-        _personnummerFel = false;
-        _fornamnFel = false;
-        _efternamnFel = false;
-        _epostFel = false;
+        _personnummerFel = _fornamnFel = _efternamnFel = _epostFel = _enhetFel = _lonFel = _gradFel = false;
         _valideringsfel = [];
 
+        if (string.IsNullOrWhiteSpace(_personnummer))
+        {
+            _personnummerFel = true;
+            _valideringsfel.Add("Personnummer är obligatoriskt.");
+        }
         if (string.IsNullOrWhiteSpace(_fornamn))
         {
             _fornamnFel = true;
@@ -148,6 +254,31 @@ else
             _epostFel = true;
             _valideringsfel.Add("E-postadressen måste innehålla @.");
         }
+        if (_enhetId is null)
+        {
+            _enhetFel = true;
+            _valideringsfel.Add("Välj en enhet.");
+        }
+        if (_manadslon <= 0 && _anstallningsform != EmploymentType.Timavlonad)
+        {
+            _lonFel = true;
+            _valideringsfel.Add("Månadslön måste anges.");
+        }
+        if (_sysselsattningsgrad is <= 0 or > 100)
+        {
+            _gradFel = true;
+            _valideringsfel.Add("Sysselsättningsgrad måste vara mellan 1 och 100 %.");
+        }
+        if (_startdatum is null)
+            _valideringsfel.Add("Startdatum är obligatoriskt.");
+
+        var start = _startdatum is null ? default : DateOnly.FromDateTime(_startdatum.Value);
+        var slut = _slutdatum is null ? (DateOnly?)null : DateOnly.FromDateTime(_slutdatum.Value);
+
+        if (KraverSlutdatum && slut is null)
+            _valideringsfel.Add($"{FormNamn(_anstallningsform)} kräver ett slutdatum.");
+        if (_anstallningsform == EmploymentType.Tillsvidare && slut is not null)
+            _valideringsfel.Add("En tillsvidareanställning får inte ha slutdatum.");
 
         if (_valideringsfel.Count > 0)
             return;
@@ -155,44 +286,27 @@ else
         _sparar = true;
         try
         {
-            // Generate personnummer if not provided
-            if (string.IsNullOrWhiteSpace(_personnummer))
-            {
-                var year = Random.Shared.Next(1960, 2000);
-                var month = Random.Shared.Next(1, 13);
-                var day = Random.Shared.Next(1, 29);
-                var seq = Random.Shared.Next(1000, 9999);
-                _personnummer = $"{year:D4}{month:D2}{day:D2}-{seq:D4}";
-            }
+            var enhetId = RegionHR.SharedKernel.Domain.OrganizationId.From(_enhetId!.Value);
+            RegionHR.SharedKernel.Domain.CollectiveAgreementId? avtalsId =
+                _avtalsId is null ? null : RegionHR.SharedKernel.Domain.CollectiveAgreementId.From(_avtalsId.Value);
 
-            _genereratPersonnummer = _personnummer;
-            _genereratPersonalId = $"P-{DateTime.Now:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}";
+            _nyId = (await Service.SkapaMedAnstallningAsync(
+                _personnummer!, _fornamn!, _efternamn!, _epost, _telefon,
+                enhetId, _anstallningsform, _kollektivavtal,
+                _manadslon, _sysselsattningsgrad, start, slut,
+                _bestaKod, _aidKod, _befattning, avtalsId)).Value;
 
-            // Auto-generate e-post if not provided
-            if (string.IsNullOrWhiteSpace(_epost))
-            {
-                _epost = $"{_fornamn!.ToLower()}.{_efternamn!.ToLower()}@region.se";
-            }
-
-            try
-            {
-                await Service.SkapaAsync(_personnummer, _fornamn!, _efternamn!, _epost);
-            }
-            catch
-            {
-                // DB may not be available in dev — continue with UI result
-            }
-
+            _enhetNamnSparad = _enheter.FirstOrDefault(e => e.Id.Value == _enhetId!.Value)?.Namn ?? "—";
             _skapad = true;
         }
         catch (ArgumentException ex)
         {
-            _personnummerFel = true;
+            // Domänvalidering (t.ex. ogiltigt personnummer eller LAS-regel)
             _felmeddelande = ex.Message;
         }
         catch (Exception ex)
         {
-            _felmeddelande = $"Kunde inte skapa anställd: {ex.Message}";
+            _felmeddelande = $"Kunde inte anställa: {ex.Message}";
         }
         finally
         {
@@ -202,19 +316,19 @@ else
 
     private void SkapaNy()
     {
-        _personnummer = null;
-        _fornamn = null;
-        _efternamn = null;
-        _epost = null;
-        _telefon = null;
+        _personnummer = _fornamn = _efternamn = _epost = _telefon = null;
+        _enhetId = null;
+        _anstallningsform = EmploymentType.Tillsvidare;
+        _kollektivavtal = CollectiveAgreementType.AB;
+        _avtalsId = null;
+        _manadslon = 30000m;
+        _sysselsattningsgrad = 100m;
+        _startdatum = DateTime.Today;
+        _slutdatum = null;
+        _befattning = _bestaKod = _aidKod = null;
         _felmeddelande = null;
-        _personnummerFel = false;
-        _fornamnFel = false;
-        _efternamnFel = false;
-        _epostFel = false;
         _valideringsfel = [];
         _skapad = false;
-        _genereratPersonnummer = "";
-        _genereratPersonalId = "";
+        _nyId = Guid.Empty;
     }
 }

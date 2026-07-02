@@ -27,13 +27,67 @@ public sealed class RehabService
         _repository = repository;
     }
 
-    /// <summary>Skapa rehabiliteringsärende från SickLeaveMonitor-signal.</summary>
+    /// <summary>Skapa rehabiliteringsärende från SickLeaveMonitor-signal (utan känt dag 1).</summary>
     public async Task<RehabCase> SkapaFranSignalAsync(
         EmployeeId anstallId, RehabTrigger trigger, CancellationToken ct)
     {
         var rehabCase = RehabCase.Skapa(anstallId, trigger);
         await _repository.AddAsync(rehabCase, ct);
         return rehabCase;
+    }
+
+    /// <summary>
+    /// Skapa rehabiliteringsärende förankrat i sjukfallets faktiska dag 1.
+    /// Milstolparna (dag 14/90/180/365) räknas från <paramref name="sjukfallDag1"/>.
+    /// </summary>
+    public async Task<RehabCase> SkapaFranSignalAsync(
+        EmployeeId anstallId, RehabTrigger trigger, DateOnly sjukfallDag1, CancellationToken ct)
+    {
+        var rehabCase = RehabCase.Skapa(anstallId, trigger, sjukfallDag1);
+        await _repository.AddAsync(rehabCase, ct);
+        return rehabCase;
+    }
+
+    /// <summary>Har den anställde redan ett pågående (ej avslutat) rehabärende?</summary>
+    public async Task<bool> HarAktivtArendeAsync(EmployeeId anstallId, CancellationToken ct)
+    {
+        var arenden = await _repository.GetByEmployeeAsync(anstallId, ct);
+        return arenden.Any(a => a.Status != RehabStatus.Avslutad);
+    }
+
+    /// <summary>
+    /// Idempotent auto-triggning: skapar ett rehabärende från en detekterad signal
+    /// ENDAST om den anställde saknar pågående ärende. Returnerar det skapade ärendet,
+    /// eller null om ett aktivt ärende redan fanns (ingen dubblett skapas).
+    /// </summary>
+    public async Task<RehabCase?> SkapaOmSaknasAsync(
+        EmployeeId anstallId, RehabSignal signal, CancellationToken ct)
+    {
+        if (await HarAktivtArendeAsync(anstallId, ct))
+            return null;
+
+        return await SkapaFranSignalAsync(anstallId, signal.Trigger, signal.SjukfallDag1, ct);
+    }
+
+    /// <summary>Registrera att en milstolpe-uppföljning (dag 14/90/180/365) har genomförts.</summary>
+    public async Task RegistreraUppfoljningAsync(
+        Guid caseId, int dagNr, string kommentar, EmployeeId utfordAv, CancellationToken ct)
+    {
+        var rehabCase = await _repository.GetByIdAsync(caseId, ct)
+            ?? throw new InvalidOperationException($"Rehabiliteringsärende {caseId} hittades inte.");
+
+        rehabCase.RegistreraUppfoljning(dagNr, kommentar, utfordAv);
+        await _repository.UpdateAsync(rehabCase, ct);
+    }
+
+    /// <summary>Korrigera/sätt sjukfallets dag 1 och räkna om milstolparna.</summary>
+    public async Task SattSjukfallDag1Async(Guid caseId, DateOnly sjukfallDag1, CancellationToken ct)
+    {
+        var rehabCase = await _repository.GetByIdAsync(caseId, ct)
+            ?? throw new InvalidOperationException($"Rehabiliteringsärende {caseId} hittades inte.");
+
+        rehabCase.SattSjukfallDag1(sjukfallDag1);
+        await _repository.UpdateAsync(rehabCase, ct);
     }
 
     /// <summary>Tilldela ärendeägare (HR-person) till ett ärende.</summary>

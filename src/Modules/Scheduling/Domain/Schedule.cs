@@ -69,6 +69,17 @@ public sealed class Schedule : AggregateRoot<ScheduleId>
         return shift;
     }
 
+    /// <summary>
+    /// Ta bort ett planerat pass ur schemat. Returnerar true om passet fanns och togs bort.
+    /// </summary>
+    public bool TaBortPass(Guid passId)
+    {
+        var pass = _pass.FirstOrDefault(p => p.Id == passId);
+        if (pass is null) return false;
+        _pass.Remove(pass);
+        return true;
+    }
+
     public void Publicera()
     {
         if (Status != ScheduleStatus.Utkast)

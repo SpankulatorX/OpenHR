@@ -32,15 +32,12 @@ public sealed class PayrollCalculationEngine
     private const decimal PBB_2025 = 58800m;
     private const decimal PBB_2026 = 59200m;
 
-    // Arbetsgivaravgifter
-    private const decimal ARBETSGIVARAVGIFT_STANDARD = 0.3142m;
-    private const decimal ARBETSGIVARAVGIFT_UNG = 0.2081m;
-    private const decimal ARBETSGIVARAVGIFT_ALDRE = 0.1021m;    // Endast ålderspensionsavgift
-    private const decimal ARBETSGIVARAVGIFT_UNG_LON_TAK = 25000m; // Max lön per månad med reducerad ungdomsavgift
+    // Arbetsgivaravgifter: satser och åldersregler ligger i domänen
+    // RegionHR.Payroll.Domain.Arbetsgivaravgift (årsversionerat, verifierat mot Skatteverket 2026).
 
     // Semester per AB (sammalöneregeln)
     private const decimal SEMESTER_PROCENT_PER_DAG = 0.0080m;   // 0.80% per dag
-    private const decimal SEMESTER_TILLAGG_PROCENT = 0.0043m;   // 0.43% per semesterdag av månadslön (AB 25)
+    private const decimal SEMESTER_TILLAGG_PROCENT = 0.00605m;   // 0,605% per semesterdag av månadslön (AB §27 mom 15)
     private const int SEMESTER_DAGAR_PER_AR = 25;               // Enligt AB
 
     // Sjuklön
@@ -259,16 +256,17 @@ public sealed class PayrollCalculationEngine
                         + result.Sjuklon + result.Semestertillagg + foraldraloneUtfyllnad - result.Karensavdrag;
         result.SkattepliktBrutto = result.Brutto; // Förenklad, alla delar skattepliktiga i detta steg
 
-        // Steg 7: Skatteberäkning
-        if (employee.Skattetabell.HasValue && employee.Skattekolumn.HasValue)
-        {
-            var taxTable = await _taxTableProvider.GetTableAsync(
-                year, employee.Skattetabell.Value, employee.Skattekolumn.Value, ct);
+        // Steg 7: Skatteberäkning enligt Skatteverkets skattetabell.
+        // Systemet är experten: saknas skatteuppgifter på den anställde faller vi tillbaka
+        // på kommunens tabell (härledd ur kommunalskattesatsen/kommunnamnet) och kolumn 1,
+        // så att preliminärskatten aldrig blir 0 i drift.
+        var tabellnummer = employee.Skattetabell ?? HarledTabellnummer(employee, year);
+        var skattekolumn = employee.Skattekolumn ?? 1;
 
-            if (taxTable is not null)
-            {
-                result.Skatt = taxTable.BeraknaManadenSkatt(result.SkattepliktBrutto);
-            }
+        var taxTable = await _taxTableProvider.GetTableAsync(year, tabellnummer, skattekolumn, ct);
+        if (taxTable is not null)
+        {
+            result.Skatt = taxTable.BeraknaManadenSkatt(result.SkattepliktBrutto);
         }
 
         // Jämkningsjustering
@@ -286,10 +284,9 @@ public sealed class PayrollCalculationEngine
         // Steg 9: Netto
         result.Netto = result.Brutto - result.Skatt - result.Loneutmatning - result.Fackavgift - result.OvrigaAvdrag;
 
-        // Steg 10: Arbetsgivaravgifter
-        var avgiftSats = BeraknaArbetsgivaravgiftSats(employee, year);
-        result.ArbetsgivaravgiftSats = avgiftSats;
-        result.Arbetsgivaravgifter = BeraknaArbetsgivaravgiftBelopp(result.Brutto, employee, year).RoundToKronor();
+        // Steg 10: Arbetsgivaravgifter (satsen beror på födelseår + inkomstår/månad)
+        result.ArbetsgivaravgiftSats = BeraknaArbetsgivaravgiftSats(employee, year, month);
+        result.Arbetsgivaravgifter = BeraknaArbetsgivaravgiftBelopp(result.Brutto, employee, year, month).RoundToKronor();
 
         // Steg 11: Pension AKAP-KR
         result.Pensionsgrundande = Money.SEK(result.Rader
@@ -326,100 +323,41 @@ public sealed class PayrollCalculationEngine
     }
 
     /// <summary>
-    /// Beräkna arbetsgivaravgiftssats baserat på den anställdes födelseår.
-    /// - Född year - 22 eller senare (under 23 vid årets ingång): 20.81% (reducerad)
-    /// - Född year - 66 eller tidigare (66+ vid årets ingång): 10.21% (reducerad)
-    /// - Övriga: 31.42% (standard)
+    /// Beräkna arbetsgivaravgiftssats för en anställd. Satsen härleds ur födelseåret
+    /// (maskerat personnummer) och gällande inkomstår/månad via domänen
+    /// <see cref="Arbetsgivaravgift"/>. Saknas personnummer används full avgift.
     /// </summary>
-    internal static decimal BeraknaArbetsgivaravgiftSats(EmployeeDto employee, int year)
+    internal static decimal BeraknaArbetsgivaravgiftSats(EmployeeDto employee, int year, int month)
     {
         var fodelseAr = ExtractFodelseAr(employee.PersonnummerMaskerat);
-        if (fodelseAr is null)
-            return ARBETSGIVARAVGIFT_STANDARD;
-
-        return BeraknaArbetsgivaravgiftSatsFranFodelseAr(fodelseAr.Value, year);
+        return fodelseAr is null
+            ? Arbetsgivaravgift.FullSats(year)
+            : Arbetsgivaravgift.Sats(fodelseAr.Value, year, month);
     }
 
     /// <summary>
-    /// Beräkna arbetsgivaravgiftssats med explicit födelseår och beräkningsår.
-    /// Returnerar den primära satsen (för ungdom gäller denna upp till löntak).
-    ///
-    /// Åldersregler:
-    /// - 2025: Född 1957 eller tidigare (68+ under året) → 10.21%
-    /// - 2026: Född 1959 eller tidigare (67+ under året) → 10.21% (sänkt tröskel)
-    /// - Ungdom 2025: Född 2003-2006 (19-22 under året) → 20.81% på lön t.o.m. 25 000 kr/mån
-    /// - Ungdom 2026: Född 2004-2007 (19-22 under året) → 20.81% på lön t.o.m. 25 000 kr/mån
+    /// Beräkna faktiskt arbetsgivaravgiftsbelopp. Hanterar ungdomsnedsättningens
+    /// lönetak (reducerad sats upp till 25 000 kr, full sats därutöver) via domänen.
     /// </summary>
-    internal static decimal BeraknaArbetsgivaravgiftSatsFranFodelseAr(int fodelseAr, int berakningsAr)
-    {
-        // Äldre: reducerad avgift (bara ålderspensionsavgift)
-        if (ArAldreMedReduceradAvgift(fodelseAr, berakningsAr))
-            return ARBETSGIVARAVGIFT_ALDRE;
-
-        // Ungdom: reducerad avgift (på lön upp till tak)
-        if (ArUngMedReduceradAvgift(fodelseAr, berakningsAr))
-            return ARBETSGIVARAVGIFT_UNG;
-
-        return ARBETSGIVARAVGIFT_STANDARD;
-    }
-
-    /// <summary>
-    /// Avgör om en anställd kvalificerar för reducerad äldresats.
-    /// 2025: Född 1957 eller tidigare (turns 68+ during year)
-    /// 2026+: Född (beräkningsår - 67) eller tidigare (turns 67+ during year)
-    /// </summary>
-    internal static bool ArAldreMedReduceradAvgift(int fodelseAr, int berakningsAr)
-    {
-        if (berakningsAr <= 2025)
-        {
-            // 2025 och tidigare: 68+ under året → född 1957 eller tidigare
-            return fodelseAr <= berakningsAr - 68;
-        }
-        // 2026+: 67+ under året → sänkt tröskel
-        return fodelseAr <= berakningsAr - 67;
-    }
-
-    /// <summary>
-    /// Avgör om en anställd kvalificerar för reducerad ungdomsavgift.
-    /// Gäller 19-22 år under kalenderåret, på lön upp till 25 000 kr/mån.
-    /// </summary>
-    internal static bool ArUngMedReduceradAvgift(int fodelseAr, int berakningsAr)
-    {
-        var alderUnderAret = berakningsAr - fodelseAr;
-        return alderUnderAret >= 19 && alderUnderAret <= 22;
-    }
-
-    /// <summary>
-    /// Beräkna faktiskt arbetsgivaravgiftsbelopp, hanterar ungdomens löntak-split.
-    /// </summary>
-    internal static Money BeraknaArbetsgivaravgiftBelopp(Money brutto, EmployeeDto employee, int year)
+    internal static Money BeraknaArbetsgivaravgiftBelopp(Money brutto, EmployeeDto employee, int year, int month)
     {
         var fodelseAr = ExtractFodelseAr(employee.PersonnummerMaskerat);
-        if (fodelseAr is null)
-            return brutto * ARBETSGIVARAVGIFT_STANDARD;
-
-        return BeraknaArbetsgivaravgiftBeloppFranFodelseAr(brutto, fodelseAr.Value, year);
+        return fodelseAr is null
+            ? brutto * Arbetsgivaravgift.FullSats(year)
+            : Arbetsgivaravgift.Belopp(brutto, fodelseAr.Value, year, month);
     }
 
     /// <summary>
-    /// Beräkna faktiskt arbetsgivaravgiftsbelopp med explicit födelseår.
-    /// Ungdomsrabatten gäller bara på lön upp till 25 000 kr/mån;
-    /// överskjutande del beskattas med standardavgift.
+    /// Härled Skatteverkets tabellnummer när den anställde saknar explicit skattetabell.
+    /// Använder i första hand kommunalskattesatsen (avrundad till hel procent), annars
+    /// kommunens sats ur <see cref="KommunSkattesatser"/> (default Örebro → tabell 34).
     /// </summary>
-    internal static Money BeraknaArbetsgivaravgiftBeloppFranFodelseAr(Money brutto, int fodelseAr, int berakningsAr)
+    private static int HarledTabellnummer(EmployeeDto employee, int year)
     {
-        if (ArAldreMedReduceradAvgift(fodelseAr, berakningsAr))
-            return brutto * ARBETSGIVARAVGIFT_ALDRE;
+        if (employee.KommunalSkattesats is > 0m)
+            return (int)Math.Round(employee.KommunalSkattesats.Value, MidpointRounding.AwayFromZero);
 
-        if (ArUngMedReduceradAvgift(fodelseAr, berakningsAr))
-        {
-            // Reducerad avgift på lön upp till tak, standardavgift på resten
-            var underTak = Math.Min(brutto.Amount, ARBETSGIVARAVGIFT_UNG_LON_TAK);
-            var overTak = brutto.Amount - underTak;
-            return Money.SEK(underTak * ARBETSGIVARAVGIFT_UNG + overTak * ARBETSGIVARAVGIFT_STANDARD);
-        }
-
-        return brutto * ARBETSGIVARAVGIFT_STANDARD;
+        return KommunSkattesatser.Tabellnummer(employee.Kommun, year);
     }
 
     /// <summary>
