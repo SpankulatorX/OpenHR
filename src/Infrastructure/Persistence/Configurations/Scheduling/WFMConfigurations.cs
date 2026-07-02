@@ -170,7 +170,7 @@ public class SchedulingRunConfiguration : IEntityTypeConfiguration<SchedulingRun
 
         builder.Property(e => e.PeriodFran).HasColumnName("period_fran");
         builder.Property(e => e.PeriodTill).HasColumnName("period_till");
-        builder.Property(e => e.Parametrar).HasColumnName("parametrar").HasColumnType("jsonb");
+        builder.Property(e => e.Parametrar).HasColumnName("parametrar");
         builder.Property(e => e.GenereradePass).HasColumnName("genererade_pass");
         builder.Property(e => e.TotalOBKostnad).HasColumnName("total_ob_kostnad").HasPrecision(12, 2);
         builder.Property(e => e.TotalOvertidKostnad).HasColumnName("total_overtid_kostnad").HasPrecision(12, 2);

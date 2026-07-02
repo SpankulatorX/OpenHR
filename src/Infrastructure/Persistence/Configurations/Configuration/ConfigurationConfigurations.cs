@@ -16,7 +16,7 @@ public class TenantConfigurationConfiguration : IEntityTypeConfiguration<TenantC
         builder.Property(x => x.Sprak).HasMaxLength(10);
         builder.Property(x => x.Valuta).HasMaxLength(5);
         builder.Property(x => x.LogoUrl).HasMaxLength(1000);
-        builder.Property(x => x.Konfiguration).HasColumnType("jsonb");
+        builder.Property(x => x.Konfiguration);
         builder.HasIndex(x => x.Organisationsnummer).IsUnique();
     }
 }
@@ -31,7 +31,7 @@ public class CustomFieldConfiguration : IEntityTypeConfiguration<CustomField>
         builder.Property(x => x.DisplayName).HasMaxLength(300).IsRequired();
         builder.Property(x => x.FieldType).HasConversion<string>().HasMaxLength(20);
         builder.Property(x => x.Target).HasConversion<string>().HasMaxLength(30);
-        builder.Property(x => x.Alternativ).HasColumnType("jsonb");
+        builder.Property(x => x.Alternativ);
         builder.Property(x => x.Standardvarde).HasMaxLength(500);
         builder.HasIndex(x => x.Target);
         builder.HasIndex(x => new { x.FieldName, x.Target }).IsUnique();

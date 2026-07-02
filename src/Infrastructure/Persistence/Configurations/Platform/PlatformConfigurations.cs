@@ -53,7 +53,7 @@ public class WorkflowNodeConfiguration : IEntityTypeConfiguration<WorkflowNode>
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Ordning).IsRequired();
         builder.Property(x => x.Typ).HasMaxLength(50).IsRequired();
-        builder.Property(x => x.Konfiguration).HasColumnType("jsonb");
+        builder.Property(x => x.Konfiguration);
         builder.Property(x => x.Namn).HasMaxLength(300).IsRequired();
         builder.HasIndex(x => new { x.WorkflowDefinitionId, x.Ordning });
     }
@@ -90,7 +90,7 @@ public class ExtensionConfiguration : IEntityTypeConfiguration<Extension>
         builder.Property(x => x.Typ).HasConversion<string>().HasColumnName("typ").HasMaxLength(30);
         builder.Property(x => x.Licens).HasColumnName("licens").HasMaxLength(100);
         builder.Property(x => x.Kompatibilitet).HasColumnName("kompatibilitet").HasMaxLength(50);
-        builder.Property(x => x.Innehall).HasColumnName("innehall").HasColumnType("jsonb");
+        builder.Property(x => x.Innehall).HasColumnName("innehall");
         builder.Property(x => x.SkapadVid).HasColumnName("skapad_vid");
 
         builder.HasIndex(x => x.Namn);
@@ -110,7 +110,7 @@ public class ExtensionInstallationConfiguration : IEntityTypeConfiguration<Exten
         builder.Property(x => x.Version).HasColumnName("version").HasMaxLength(50).IsRequired();
         builder.Property(x => x.InstallationsDatum).HasColumnName("installations_datum");
         builder.Property(x => x.Status).HasConversion<string>().HasColumnName("status").HasMaxLength(20);
-        builder.Property(x => x.Konfiguration).HasColumnName("konfiguration").HasColumnType("jsonb");
+        builder.Property(x => x.Konfiguration).HasColumnName("konfiguration");
 
         builder.HasIndex(x => x.ExtensionId);
     }

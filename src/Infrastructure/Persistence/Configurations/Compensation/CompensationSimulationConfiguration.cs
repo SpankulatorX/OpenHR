@@ -14,8 +14,8 @@ public class CompensationSimulationConfiguration : IEntityTypeConfiguration<Comp
         builder.Property(e => e.Id).HasColumnName("id");
 
         builder.Property(e => e.Namn).HasColumnName("namn").HasMaxLength(200).IsRequired();
-        builder.Property(e => e.Parametrar).HasColumnName("parametrar").HasColumnType("jsonb");
-        builder.Property(e => e.BeraknatResultat).HasColumnName("beraknat_resultat").HasColumnType("jsonb");
+        builder.Property(e => e.Parametrar).HasColumnName("parametrar");
+        builder.Property(e => e.BeraknatResultat).HasColumnName("beraknat_resultat");
         builder.Property(e => e.SkapadVid).HasColumnName("skapad_vid");
         builder.Property(e => e.SkapadAv).HasColumnName("skapad_av").HasMaxLength(200);
     }

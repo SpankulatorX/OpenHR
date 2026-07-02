@@ -54,8 +54,8 @@ public class GrievanceInvestigationConfiguration : IEntityTypeConfiguration<Grie
             .HasColumnName("grievance_id");
         builder.Property(e => e.Utredare).HasColumnName("utredare").HasMaxLength(200);
         builder.Property(e => e.Resultat).HasColumnName("resultat");
-        builder.Property(e => e.Bevis).HasColumnName("bevis").HasColumnType("jsonb");
-        builder.Property(e => e.VittneUttalanden).HasColumnName("vittne_uttalanden").HasColumnType("jsonb");
+        builder.Property(e => e.Bevis).HasColumnName("bevis");
+        builder.Property(e => e.VittneUttalanden).HasColumnName("vittne_uttalanden");
         builder.Property(e => e.StartadVid).HasColumnName("startad_vid");
         builder.Property(e => e.AvslutadVid).HasColumnName("avslutad_vid");
     }
@@ -73,7 +73,7 @@ public class GrievanceHearingConfiguration : IEntityTypeConfiguration<GrievanceH
             .HasConversion(id => id.Value, v => GrievanceId.From(v))
             .HasColumnName("grievance_id");
         builder.Property(e => e.Datum).HasColumnName("datum");
-        builder.Property(e => e.Deltagare).HasColumnName("deltagare").HasColumnType("jsonb");
+        builder.Property(e => e.Deltagare).HasColumnName("deltagare");
         builder.Property(e => e.Protokoll).HasColumnName("protokoll");
         builder.Property(e => e.Beslut).HasColumnName("beslut");
     }

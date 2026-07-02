@@ -53,15 +53,21 @@ public static class DependencyInjection
         }
         else
         {
+            // List<string>-kolumner mappas till jsonb — Npgsql kräver explicit
+            // EnableDynamicJson(), annars kastar varje write InvalidCastException.
+            var dataSourceBuilder = new Npgsql.NpgsqlDataSourceBuilder(connectionString);
+            dataSourceBuilder.EnableDynamicJson();
+            var dataSource = dataSourceBuilder.Build();
+
             services.AddDbContext<RegionHRDbContext>((sp, options) =>
-                options.UseNpgsql(connectionString, npgsql =>
+                options.UseNpgsql(dataSource, npgsql =>
                 {
                     npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "public");
                 })
                 .AddInterceptors(auditInterceptor, sp.GetRequiredService<DomainEventInterceptor>()));
 
             services.AddDbContextFactory<RegionHRDbContext>(options =>
-                options.UseNpgsql(connectionString, npgsql =>
+                options.UseNpgsql(dataSource, npgsql =>
                 {
                     npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "public");
                 }), ServiceLifetime.Scoped);

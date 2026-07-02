@@ -22,7 +22,7 @@ public class OpenShiftConfiguration : IEntityTypeConfiguration<OpenShift>
         builder.Property(e => e.PassTyp).HasColumnName("pass_typ").HasMaxLength(20);
         builder.Property(e => e.StartTid).HasColumnName("start_tid");
         builder.Property(e => e.SlutTid).HasColumnName("slut_tid");
-        builder.Property(e => e.KravProfil).HasColumnName("krav_profil").HasColumnType("jsonb");
+        builder.Property(e => e.KravProfil).HasColumnName("krav_profil");
         builder.Property(e => e.Ersattning).HasColumnName("ersattning").HasMaxLength(30);
         builder.Property(e => e.Status).HasConversion<string>().HasColumnName("status").HasMaxLength(20);
         builder.Property(e => e.TilldeladAnstallId)

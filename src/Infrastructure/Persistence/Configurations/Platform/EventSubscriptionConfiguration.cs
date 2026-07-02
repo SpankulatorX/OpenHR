@@ -15,7 +15,7 @@ public class EventSubscriptionConfiguration : IEntityTypeConfiguration<EventSubs
         builder.Property(x => x.HemligNyckel).HasColumnName("hemlig_nyckel").HasMaxLength(500).IsRequired();
         builder.Property(x => x.EventFilter).HasColumnName("event_filter").HasColumnType("jsonb");
         builder.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20).IsRequired();
-        builder.Property(x => x.RetryConfig).HasColumnName("retry_config").HasColumnType("jsonb");
+        builder.Property(x => x.RetryConfig).HasColumnName("retry_config");
         builder.Property(x => x.SkapadVid).HasColumnName("skapad_vid").IsRequired();
         builder.Property(x => x.KonsekutivaMisslyckanden).HasColumnName("konsekutiva_misslyckanden");
         builder.HasIndex(x => x.Status);

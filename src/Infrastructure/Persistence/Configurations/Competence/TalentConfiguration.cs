@@ -59,7 +59,7 @@ public class CareerPathStepConfiguration : IEntityTypeConfiguration<CareerPathSt
         builder.ToTable("career_path_steps", "competence");
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Befattning).HasMaxLength(300).IsRequired();
-        builder.Property(x => x.KravdaSkills).HasColumnType("jsonb");
+        builder.Property(x => x.KravdaSkills);
         builder.Property(x => x.Ordning).IsRequired();
     }
 }
@@ -97,7 +97,7 @@ public class InternalOpportunityConfiguration : IEntityTypeConfiguration<Interna
         builder.HasKey(x => x.Id);
         builder.Property(x => x.Typ).HasMaxLength(50).IsRequired();
         builder.Property(x => x.Titel).HasMaxLength(300).IsRequired();
-        builder.Property(x => x.Kravprofil).HasColumnType("jsonb");
+        builder.Property(x => x.Kravprofil);
         builder.Property(x => x.Status).HasConversion<string>().HasMaxLength(20);
         builder.HasMany(x => x.Ansokningar).WithOne().HasForeignKey(x => x.InternalOpportunityId);
         builder.HasIndex(x => x.Status);

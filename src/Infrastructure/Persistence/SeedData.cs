@@ -20,11 +20,11 @@ public static class SeedData
 
         // === Organization units ===
         var region = OrganizationUnit.Skapa(
-            "Region Vastra Gotaland", OrganizationUnitType.Region,
+            "Region Örebro län", OrganizationUnitType.Region,
             "10000", DateOnly.FromDateTime(DateTime.Today.AddYears(-20)));
 
         var sjukhus = OrganizationUnit.Skapa(
-            "Sahlgrenska Universitetssjukhuset", OrganizationUnitType.Forvaltning,
+            "Universitetssjukhuset Örebro", OrganizationUnitType.Forvaltning,
             "20000", DateOnly.FromDateTime(DateTime.Today.AddYears(-20)),
             overordnadEnhetId: region.Id);
 
@@ -569,7 +569,7 @@ public static class SeedData
                 "2 ars erfarenhet nattjour. Soker heltid."),
             RegionHR.Recruitment.Domain.TalentPoolEntry.Skapa(
                 "Karin Ek", "karin.ek@mail.se", "Sjukskoterska, barnklinik",
-                "Nyexaminerad 2025. Praktik pa Sahlgrenska."));
+                "Nyexaminerad 2025. Praktik pa USÖ."));
 
         // === HeadcountPlan per enhet (budget for 2026) ===
         var hcAvd32 = RegionHR.Positions.Domain.HeadcountPlan.Skapa(avd32.Id.Value, 2026, 8, 8.0m, 2_760_000m);
@@ -788,7 +788,11 @@ public static class SeedData
 
         // === ScheduledShifts (idag, baserat på DateTime.Today) ===
         var idagDatum = DateOnly.FromDateTime(DateTime.Today);
-        var schemaId = ScheduleId.New();
+        // FK-krav (PostgreSQL): passen måste peka på ett Schedule som faktiskt finns.
+        var grundschema = RegionHR.Scheduling.Domain.Schedule.SkapaGrundschema(
+            avd32.Id, "Grundschema Avdelning 32", idagDatum.AddDays(-28), 4);
+        db.Schedules.Add(grundschema);
+        var schemaId = grundschema.Id;
         db.ScheduledShifts.AddRange(
             new RegionHR.Scheduling.Domain.ScheduledShift { Id = Guid.NewGuid(), SchemaId = schemaId, AnstallId = employees[0].Id, Datum = idagDatum, PassTyp = RegionHR.Scheduling.Domain.ShiftType.Dag, PlaneradStart = new TimeOnly(7, 0), PlaneradSlut = new TimeOnly(16, 0), Rast = TimeSpan.FromMinutes(60), Status = RegionHR.Scheduling.Domain.ShiftStatus.Planerad, OBKategori = OBCategory.Ingen },
             new RegionHR.Scheduling.Domain.ScheduledShift { Id = Guid.NewGuid(), SchemaId = schemaId, AnstallId = employees[2].Id, Datum = idagDatum, PassTyp = RegionHR.Scheduling.Domain.ShiftType.Dag, PlaneradStart = new TimeOnly(7, 0), PlaneradSlut = new TimeOnly(16, 0), Rast = TimeSpan.FromMinutes(60), Status = RegionHR.Scheduling.Domain.ShiftStatus.Planerad, OBKategori = OBCategory.Ingen },

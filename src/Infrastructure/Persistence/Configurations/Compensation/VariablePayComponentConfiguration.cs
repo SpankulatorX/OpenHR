@@ -15,7 +15,7 @@ public class VariablePayComponentConfiguration : IEntityTypeConfiguration<Variab
 
         builder.Property(e => e.Namn).HasColumnName("namn").HasMaxLength(200).IsRequired();
         builder.Property(e => e.Typ).HasConversion<string>().HasColumnName("typ").HasMaxLength(20);
-        builder.Property(e => e.BerakningsRegel).HasColumnName("beraknings_regel").HasColumnType("jsonb");
+        builder.Property(e => e.BerakningsRegel).HasColumnName("beraknings_regel");
         builder.Property(e => e.KoppladTillTiddata).HasColumnName("kopplad_till_tiddata");
     }
 }
