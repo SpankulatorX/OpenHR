@@ -15,6 +15,34 @@
     <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
 }
 
+@if (_friskanmald)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _friskanmald = false)">
+        Friskanmälan registrerad — välkommen tillbaka!
+    </MudAlert>
+}
+
+@* === FRISKANMÄLAN: pågående sjukfall kan avslutas här === *@
+@if (_pagaendeSjukfall is not null)
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2" Style="border-left: 4px solid var(--mud-palette-success);">
+        <MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">
+            Du är sjukanmäld sedan @_pagaendeSjukfall.StartDatum.ToString("d MMMM")
+        </MudText>
+        <MudText Typo="Typo.body1" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+            Är du tillbaka på jobbet? Friskanmäl dig här så avslutas sjukfallet.
+        </MudText>
+        <MudDatePicker Label="Vilken dag var din sista sjukdag?" @bind-Date="_sistaSjukdag"
+                       MinDate="@_pagaendeSjukfall.StartDatum.ToDateTime(TimeOnly.MinValue)"
+                       MaxDate="DateTime.Today" Class="mb-3" />
+        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Large"
+                   Style="min-height: 56px; font-size: 1.125rem;"
+                   OnClick="Friskanmal" Disabled="@(_sistaSjukdag == null)">
+            Friskanmäl mig
+        </MudButton>
+    </MudPaper>
+}
+
 <OhrConversationFlow Steps="@_steps" CurrentStep="@_currentStep" OnBack="GoBack">
     @switch (_currentStep)
     {
@@ -119,6 +147,43 @@
     private DateTime? _customDate;
     private DateTime? _endDate;
     private string? _error;
+    private SickLeaveNotification? _pagaendeSjukfall;
+    private DateTime? _sistaSjukdag;
+    private bool _friskanmald;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Auth.EmployeeId.HasValue) return;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _pagaendeSjukfall = await db.SickLeaveNotifications
+                .Where(s => s.AnstallId == Auth.EmployeeId.Value && s.SlutDatum == null)
+                .OrderByDescending(s => s.StartDatum)
+                .FirstOrDefaultAsync();
+            _sistaSjukdag = DateTime.Today;
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta pågående sjukanmälan: {ex.Message}"; }
+    }
+
+    private async Task Friskanmal()
+    {
+        if (_pagaendeSjukfall is null || !_sistaSjukdag.HasValue) return;
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var sjukfall = await db.SickLeaveNotifications
+                .FirstOrDefaultAsync(s => s.Id == _pagaendeSjukfall.Id);
+            if (sjukfall is null) { _error = "Sjukanmälan hittades inte."; return; }
+
+            sjukfall.Avsluta(DateOnly.FromDateTime(_sistaSjukdag.Value));
+            await db.SaveChangesAsync();
+            _pagaendeSjukfall = null;
+            _friskanmald = true;
+        }
+        catch (Exception ex) { _error = $"Kunde inte friskanmäla: {ex.Message}"; }
+    }
 
     private void SelectStartDate(DateOnly date)
     {
@@ -158,6 +223,9 @@
             var anstallId = Auth.EmployeeId.Value;
 
             var notification = SickLeaveNotification.Skapa(anstallId, _startDate);
+            // Retroaktiv anmälan (t.ex. "Igår"): räkna fram korrekt sjukdag direkt
+            // så att läkarintygs-/FK-flaggorna inte släpar tills det dagliga jobbet kört.
+            notification.SynkroniseraDag(DateOnly.FromDateTime(DateTime.Today));
             await db.SickLeaveNotifications.AddAsync(notification);
 
             var request = LeaveRequest.Skapa(

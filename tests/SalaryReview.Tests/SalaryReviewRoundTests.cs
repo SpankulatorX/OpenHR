@@ -64,6 +64,36 @@ public class SalaryReviewRoundTests
     }
 
     [Fact]
+    public void LaggTillForslag_med_lonesankning_kastar_exception_och_ror_inte_budgeten()
+    {
+        var runda = SkapaTestRunda(Money.SEK(10_000m));
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            runda.LaggTillForslag(
+                EmployeeId.New(),
+                Money.SEK(30_000m),
+                Money.SEK(28_000m),
+                "Oavsiktlig sänkning"));
+
+        Assert.Contains("lägre än nuvarande", ex.Message);
+        Assert.Empty(runda.Forslag);
+        // En negativ ökning får inte tyst frigöra budget.
+        Assert.Equal(Money.Zero, runda.FordeladBudget);
+    }
+
+    [Fact]
+    public void LaggTillForslag_med_oforandrad_lon_tillats()
+    {
+        var runda = SkapaTestRunda(Money.SEK(10_000m));
+
+        var forslag = runda.LaggTillForslag(
+            EmployeeId.New(), Money.SEK(30_000m), Money.SEK(30_000m), "Ingen förändring");
+
+        Assert.Equal(Money.Zero, forslag.Okning);
+        Assert.Equal(Money.Zero, runda.FordeladBudget);
+    }
+
+    [Fact]
     public void Facklig_avstamning_flow_Planering_till_Genomford()
     {
         var runda = SkapaTestRunda(Money.SEK(50_000m));

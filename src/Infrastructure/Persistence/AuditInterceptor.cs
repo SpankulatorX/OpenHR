@@ -8,17 +8,51 @@ using RegionHR.IntegrationHub.Infrastructure;
 namespace RegionHR.Infrastructure.Persistence;
 
 /// <summary>
+/// Abstraktion över "vem är inloggad just nu?" så att infrastrukturlagret kan
+/// stämpla granskningsposter med den faktiska användaren utan att känna till
+/// webblagret. Interfacet ligger i Infrastructure (inte Web) eftersom
+/// beroenderiktningen är Web → Infrastructure; den HttpContext-baserade
+/// implementationen finns i <c>src/Web/Services/HttpContextCurrentUser.cs</c>.
+/// </summary>
+public interface ICurrentUser
+{
+    /// <summary>Stabil identifierare för den inloggade (t.ex. employee_id), eller null om okänd.</summary>
+    string? Id { get; }
+
+    /// <summary>Visningsnamn för den inloggade, eller null om okänd.</summary>
+    string? Namn { get; }
+}
+
+/// <summary>
 /// EF Core SaveChangesInterceptor that automatically creates AuditEntry records
 /// when entities are created, updated, or deleted.
+///
+/// Granskningsposter stämplas med den inloggade användaren via
+/// <see cref="ICurrentUser"/>. När ingen användare kan härledas (bakgrundsjobb,
+/// seeding, migrationer) faller stämpeln tillbaka på "system".
 /// </summary>
 public sealed class AuditInterceptor : SaveChangesInterceptor
 {
+    private const string SystemUser = "system";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         DictionaryKeyPolicy = JsonNamingPolicy.CamelCase
     };
+
+    private readonly ICurrentUser? _currentUser;
+
+    /// <summary>
+    /// <paramref name="currentUser"/> är avsiktligt valfri: bakgrundstjänster och
+    /// tester utan användarkontext kan skapa interceptorn utan argument och får
+    /// då "system"-stämpling som tidigare.
+    /// </summary>
+    public AuditInterceptor(ICurrentUser? currentUser = null)
+    {
+        _currentUser = currentUser;
+    }
 
     public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
         DbContextEventData eventData,
@@ -45,8 +79,15 @@ public sealed class AuditInterceptor : SaveChangesInterceptor
         return base.SavingChanges(eventData, result);
     }
 
-    private static void CreateAuditEntries(RegionHRDbContext dbContext)
+    private void CreateAuditEntries(RegionHRDbContext dbContext)
     {
+        // Härled användarstämpel EN gång per SaveChanges. Tomt/whitespace
+        // behandlas som okänt → "system" (spårbarheten får aldrig bli "").
+        var currentId = _currentUser?.Id;
+        var currentNamn = _currentUser?.Namn;
+        var userId = string.IsNullOrWhiteSpace(currentId) ? SystemUser : currentId;
+        var userName = string.IsNullOrWhiteSpace(currentNamn) ? SystemUser : currentNamn;
+
         var entries = dbContext.ChangeTracker
             .Entries()
             .Where(e => e.State is EntityState.Added or EntityState.Modified or EntityState.Deleted)
@@ -84,8 +125,8 @@ public sealed class AuditInterceptor : SaveChangesInterceptor
                 action: action,
                 oldValues: oldValues,
                 newValues: newValues,
-                userId: "system",
-                userName: "system",
+                userId: userId,
+                userName: userName,
                 ipAddress: null);
 
             dbContext.AuditEntries.Add(auditEntry);

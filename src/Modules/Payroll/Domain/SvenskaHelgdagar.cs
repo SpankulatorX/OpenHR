@@ -18,10 +18,13 @@ public static class SvenskaHelgdagar
     }
 
     /// <summary>
-    /// Avgör om ett datum infaller under en storhelgsperiod.
-    /// Storhelg: julafton-annandag jul, nyårsafton-nyårsdagen,
-    /// påskafton-annandag påsk, midsommarafton-midsommardagen,
-    /// Kristi himmelsfärd.
+    /// Avgör om ett datum (hela dygnet) infaller under en storhelgsperiod
+    /// (O-tilläggstid A enligt AB 25 § 21):
+    /// julafton–annandag jul, nyårsafton–nyårsdagen,
+    /// långfredagen–annandag påsk samt midsommarafton–söndagen efter midsommardagen.
+    /// Kristi himmelsfärdsdag är helgdag (O-tilläggstid B) men INTE storhelg.
+    /// Kanttimmarna (från kl. 18.00 dagen före långfredagen respektive till kl. 07.00
+    /// måndagen efter midsommarhelgen) hanteras av <see cref="ArStorhelg(DateOnly, TimeOnly)"/>.
     /// </summary>
     public static bool ArStorhelg(DateOnly datum)
     {
@@ -42,21 +45,45 @@ public static class SvenskaHelgdagar
         if (datum == new DateOnly(year, 1, 1))
             return true;
 
-        // Påskafton - Annandag påsk
-        var paskafton = paskdagen.AddDays(-1);
+        // Långfredagen - Annandag påsk (AB 25 § 21: O-tilläggstid A börjar redan
+        // kl. 18.00 dagen före långfredagen — timkanten hanteras i tidsöverlasten)
+        var langfredagen = paskdagen.AddDays(-2);
         var annandagPask = paskdagen.AddDays(1);
-        if (datum >= paskafton && datum <= annandagPask)
+        if (datum >= langfredagen && datum <= annandagPask)
             return true;
 
-        // Midsommarafton - Midsommardagen
+        // Midsommarafton - söndagen efter midsommardagen (A-tiden löper till kl. 07.00
+        // på måndagen — timkanten hanteras i tidsöverlasten)
         var midsommardagen = BeraknaMidsommardagen(year);
         var midsommarafton = midsommardagen.AddDays(-1);
-        if (datum >= midsommarafton && datum <= midsommardagen)
+        var sondagenEfterMidsommar = midsommardagen.AddDays(1);
+        if (datum >= midsommarafton && datum <= sondagenEfterMidsommar)
             return true;
 
-        // Kristi himmelsfärd (torsdag, 39 dagar efter påskdagen)
-        var kristiHimmelsfardsdag = paskdagen.AddDays(39);
-        if (datum == kristiHimmelsfardsdag)
+        // Kristi himmelsfärdsdag ingår INTE i O-tilläggstid A enligt AB 25 § 21
+        // (den är helgdag → O-tilläggstid B).
+        return false;
+    }
+
+    /// <summary>
+    /// Tidsmedveten storhelgsbedömning (O-tilläggstid A enligt AB 25 § 21).
+    /// Utöver hela storhelgsdygnen ingår kanterna:
+    /// från kl. 18.00 dagen före långfredagen (skärtorsdagen) och
+    /// till kl. 07.00 på måndagen efter midsommarhelgen.
+    /// </summary>
+    public static bool ArStorhelg(DateOnly datum, TimeOnly tid)
+    {
+        if (ArStorhelg(datum))
+            return true;
+
+        // Skärtorsdagen (dagen före långfredagen) från kl. 18.00
+        var paskdagen = BeraknaPaskdagen(datum.Year);
+        if (datum == paskdagen.AddDays(-3) && tid >= new TimeOnly(18, 0))
+            return true;
+
+        // Måndagen efter midsommarhelgen till kl. 07.00
+        var midsommardagen = BeraknaMidsommardagen(datum.Year);
+        if (datum == midsommardagen.AddDays(2) && tid < new TimeOnly(7, 0))
             return true;
 
         return false;
@@ -102,41 +129,46 @@ public static class SvenskaHelgdagar
     }
 
     /// <summary>
-    /// Bestäm OB-kategori baserat på datum och tid.
-    /// Storhelg > helg > vardag kväll/natt > ingen.
+    /// Bestäm OB-kategori baserat på datum och tid enligt AB 25 § 21.
+    /// Prioritet: storhelg (A) > helg (B) > vardagsnatt (C) > vardagskväll (D) > ingen.
     ///
-    /// OB-tider per AB 25 (Allmänna bestämmelser, från 2025-04-01):
-    /// - Vardagkväll: mån-tors 19:00-22:00, fre 17:00-22:00 (AB 25: fredag OB från 17:00)
-    /// - Vardagnatt: mån-fre 22:00-06:00
-    /// - Helg: lör 07:00 - sön 24:00 (samt helgdagar)
-    /// - Storhelg: storhelgsperioder dygnet runt
-    ///
-    /// Före 2025-04-01: fredag kväll OB börjar kl 19:00 (som övriga vardagar).
+    /// O-tilläggstider per AB 25 (Allmänna bestämmelser, i lydelse 2025-04-01):
+    /// - A (storhelg): storhelgsperioderna inkl. kanterna (se <see cref="ArStorhelg(DateOnly, TimeOnly)"/>)
+    /// - B (helg): helgdag/lördag/söndag hela dygnet, fredag från kl. 17:00 till 24:00
+    ///   (före 2025-04-01: från kl. 19:00) samt måndag 00:00–07:00
+    /// - C (vardagsnatt): övriga vardagar 22:00–06:00
+    /// - D (vardagskväll): övriga vardagar 19:00–22:00
     /// </summary>
     public static OBCategory BeraknaOBKategori(DateOnly datum, TimeOnly tid)
     {
-        // Storhelg har högst prioritet
-        if (ArStorhelg(datum))
+        // O-tilläggstid A (storhelg) har högst prioritet — tidsmedveten så att
+        // kanterna (skärtorsdag 18:00, måndag efter midsommar till 07:00) träffas.
+        if (ArStorhelg(datum, tid))
             return OBCategory.Storhelg;
 
-        // Helgdag (röd dag som inte är storhelg) eller lördag/söndag
+        // O-tilläggstid B: helgdag (röd dag som inte är storhelg) eller lördag/söndag, hela dygnet
         if (ArHelgdag(datum) || datum.DayOfWeek == DayOfWeek.Saturday || datum.DayOfWeek == DayOfWeek.Sunday)
             return OBCategory.Helg;
 
-        // Vardagstider (måndag-fredag)
-        // Natt: 22:00-06:00
+        // O-tilläggstid B: fredag från kl. 17:00 (AB 25, fr.o.m. 2025-04-01; tidigare 19:00)
+        // till 24:00 — helgtid, inte vardagskväll (D).
+        if (datum.DayOfWeek == DayOfWeek.Friday)
+        {
+            var helgStart = datum >= new DateOnly(2025, 4, 1) ? new TimeOnly(17, 0) : new TimeOnly(19, 0);
+            if (tid >= helgStart)
+                return OBCategory.Helg;
+        }
+
+        // O-tilläggstid B: måndag 00:00–07:00 (helgtiden löper till kl. 07 på måndagen)
+        if (datum.DayOfWeek == DayOfWeek.Monday && tid < new TimeOnly(7, 0))
+            return OBCategory.Helg;
+
+        // O-tilläggstid C: vardagsnatt 22:00–06:00
         if (tid >= new TimeOnly(22, 0) || tid < new TimeOnly(6, 0))
             return OBCategory.VardagNatt;
 
-        // AB 25: Fredag kväll OB från 17:00 (istället för 19:00), gäller från 2025-04-01
-        var kvallStart = new TimeOnly(19, 0);
-        if (datum.DayOfWeek == DayOfWeek.Friday && datum >= new DateOnly(2025, 4, 1))
-        {
-            kvallStart = new TimeOnly(17, 0);
-        }
-
-        // Kväll: kvallStart-22:00
-        if (tid >= kvallStart && tid < new TimeOnly(22, 0))
+        // O-tilläggstid D: vardagskväll 19:00–22:00
+        if (tid >= new TimeOnly(19, 0) && tid < new TimeOnly(22, 0))
             return OBCategory.VardagKvall;
 
         // Dagtid vardag: ingen OB

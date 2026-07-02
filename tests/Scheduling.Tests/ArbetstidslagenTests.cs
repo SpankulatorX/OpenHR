@@ -105,7 +105,7 @@ public class ArbetstidslagenTests
     [Fact]
     public void Veckovila_6ArbetstdagarIRad_7eMasteFri()
     {
-        // 6 dagar i rad (mån-lör), kontrollera att söndag fortfarande godkänns
+        // 6 dagar i rad (mån-lör), nytt pass på söndagen (7:e dagen) raderar veckovilan
         var existing = new List<ShiftAssignment>();
         for (int i = 0; i < 6; i++)
         {
@@ -116,18 +116,23 @@ public class ArbetstidslagenTests
                 new TimeOnly(16, 0)));
         }
 
-        // Försök lägga till pass på söndagen (7:e dagen)
+        // Försök lägga till pass på söndagen (7:e dagen) — det NYA passet ska räknas in
+        var nyttPass = SkapaPass(_anstallId, new DateOnly(2025, 3, 23), new TimeOnly(7, 0), new TimeOnly(16, 0));
         var resultat = _sut.UppfyllerVeckovila(
             _anstallId,
             new DateOnly(2025, 3, 23), // Söndag
-            existing);
+            existing,
+            nyttPass);
 
         Assert.False(resultat);
     }
 
     [Fact]
-    public void Veckovila_5Arbetsdagar_Godkant()
+    public void Veckovila_5ArbetsdagarPlusNyttLordagspass_Underkant()
     {
+        // Mån-fre befintliga pass. Ett NYTT lördagspass gör att längsta sammanhängande
+        // vilan i veckan blir lör 16:00 → mån 00:00 = 32h < 36h → brott.
+        // (Tidigare bugg: <6 pass i veckan gav alltid true och det nya passet räknades inte in.)
         var existing = new List<ShiftAssignment>();
         for (int i = 0; i < 5; i++)
         {
@@ -138,11 +143,37 @@ public class ArbetstidslagenTests
                 new TimeOnly(16, 0)));
         }
 
-        // Lägga till pass på lördag (6:e dagen) — fortfarande OK
+        var nyttPass = SkapaPass(_anstallId, new DateOnly(2025, 3, 22), new TimeOnly(7, 0), new TimeOnly(16, 0));
         var resultat = _sut.UppfyllerVeckovila(
             _anstallId,
             new DateOnly(2025, 3, 22), // Lördag
-            existing);
+            existing,
+            nyttPass);
+
+        Assert.False(resultat);
+    }
+
+    [Fact]
+    public void Veckovila_4ArbetsdagarPlusNyttFredagspass_Godkant()
+    {
+        // Mån-tors befintliga pass + nytt fredagspass → lör+sön fria
+        // = fre 16:00 → mån 00:00 = 56h sammanhängande vila ≥ 36h → OK.
+        var existing = new List<ShiftAssignment>();
+        for (int i = 0; i < 4; i++)
+        {
+            existing.Add(SkapaPass(
+                _anstallId,
+                new DateOnly(2025, 3, 17).AddDays(i), // Mån-Tors
+                new TimeOnly(7, 0),
+                new TimeOnly(16, 0)));
+        }
+
+        var nyttPass = SkapaPass(_anstallId, new DateOnly(2025, 3, 21), new TimeOnly(7, 0), new TimeOnly(16, 0));
+        var resultat = _sut.UppfyllerVeckovila(
+            _anstallId,
+            new DateOnly(2025, 3, 21), // Fredag
+            existing,
+            nyttPass);
 
         Assert.True(resultat);
     }

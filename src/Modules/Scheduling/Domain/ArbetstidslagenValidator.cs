@@ -84,7 +84,7 @@ public sealed class ArbetstidslagenValidator
                 ViolationSeverity.Hard));
         }
 
-        if (!UppfyllerVeckovila(anstallId, newShift.Datum, existing))
+        if (!UppfyllerVeckovila(anstallId, newShift.Datum, existing, newShift))
         {
             violations.Add(new ValidationViolation(
                 "ATL §14 Veckovila",
@@ -272,11 +272,14 @@ public sealed class ArbetstidslagenValidator
 
     /// <summary>
     /// Kontrollera veckovila: minst 36 timmars sammanhängande vila per 7-dagarsperiod.
+    /// Det nya passet (om angivet) räknas in i veckan, så att kontrollen validerar
+    /// veckovilan som den blir EFTER att passet lagts in — oavsett antal pass i veckan.
     /// </summary>
     public bool UppfyllerVeckovila(
         EmployeeId anstallId,
         DateOnly datum,
-        IReadOnlyList<ShiftAssignment> existing)
+        IReadOnlyList<ShiftAssignment> existing,
+        ShiftAssignment? nyttPass = null)
     {
         // Beräkna veckans start (måndag)
         var veckoStart = datum.AddDays(-(int)datum.DayOfWeek + (datum.DayOfWeek == DayOfWeek.Sunday ? -6 : 1));
@@ -284,11 +287,17 @@ public sealed class ArbetstidslagenValidator
 
         var passIVeckan = existing
             .Where(a => a.AnstallId == anstallId && a.Datum >= veckoStart && a.Datum < veckoSlut)
-            .OrderBy(a => a.Datum).ThenBy(a => a.Start)
             .ToList();
 
-        // Om 6 eller fler pass i veckan kontrolleras att det finns en lucka på >= 36h
-        if (passIVeckan.Count < 6) return true;
+        // Det nya passet måste ingå — annars godkänns pass som raderar veckovilan.
+        if (nyttPass is not null && nyttPass.Datum >= veckoStart && nyttPass.Datum < veckoSlut)
+            passIVeckan.Add(nyttPass);
+
+        if (passIVeckan.Count == 0) return true;
+
+        passIVeckan = passIVeckan
+            .OrderBy(a => a.Datum).ThenBy(a => a.Start)
+            .ToList();
 
         return HarTillrackligVeckovila(passIVeckan, veckoStart, veckoSlut);
     }

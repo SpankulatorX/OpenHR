@@ -1,3 +1,4 @@
+using RegionHR.Agreements.Domain;
 using RegionHR.SharedKernel.Domain;
 using RegionHR.Scheduling.Domain;
 
@@ -345,17 +346,22 @@ public sealed class ConstraintScheduleSolver
 
     private static Money BeraknaOBKostnad(List<ShiftAssignment> tilldelningar)
     {
+        // Kanoniska, årsversionerade O-tilläggssatser enligt AB § 21 (ABOTillaggSatser) —
+        // inga hårdkodade belopp. Helgdygn (lör/sön) prissätts som O-tilläggstid B
+        // oavsett passtyp; vardagskväll/-natt som D respektive C.
         var total = 0m;
         foreach (var t in tilldelningar)
         {
-            total += t.PassTyp switch
-            {
-                ShiftType.Kvall => t.PlaneradeTimmar * 126.50m,
-                ShiftType.Natt => t.PlaneradeTimmar * 152.00m,
-                _ when t.Datum.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
-                    => t.PlaneradeTimmar * 100.00m, // Helg-OB
-                _ => 0m
-            };
+            var kategori = t.Datum.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday
+                ? OBCategory.Helg
+                : t.PassTyp switch
+                {
+                    ShiftType.Kvall => OBCategory.VardagKvall,
+                    ShiftType.Natt => OBCategory.VardagNatt,
+                    _ => OBCategory.Ingen
+                };
+
+            total += t.PlaneradeTimmar * ABOTillaggSatser.Grundsats(kategori, t.Datum);
         }
         return Money.SEK(total);
     }

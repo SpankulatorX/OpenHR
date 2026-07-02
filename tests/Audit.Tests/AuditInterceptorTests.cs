@@ -14,18 +14,30 @@ public class AuditInterceptorTests : IDisposable
 
     public AuditInterceptorTests()
     {
-        var interceptor = new AuditInterceptor();
-        var options = new DbContextOptionsBuilder<RegionHRDbContext>()
-            .UseInMemoryDatabase(databaseName: $"AuditTest-{Guid.NewGuid()}")
-            .AddInterceptors(interceptor)
-            .Options;
-
-        _dbContext = new RegionHRDbContext(options);
+        // Ingen ICurrentUser → interceptorn ska falla tillbaka på "system".
+        _dbContext = CreateContext(currentUser: null);
     }
 
     public void Dispose()
     {
         _dbContext.Dispose();
+    }
+
+    private static RegionHRDbContext CreateContext(ICurrentUser? currentUser)
+    {
+        var interceptor = new AuditInterceptor(currentUser);
+        var options = new DbContextOptionsBuilder<RegionHRDbContext>()
+            .UseInMemoryDatabase(databaseName: $"AuditTest-{Guid.NewGuid()}")
+            .AddInterceptors(interceptor)
+            .Options;
+
+        return new RegionHRDbContext(options);
+    }
+
+    private sealed class FakeCurrentUser(string? id, string? namn) : ICurrentUser
+    {
+        public string? Id => id;
+        public string? Namn => namn;
     }
 
     [Fact]
@@ -53,6 +65,7 @@ public class AuditInterceptorTests : IDisposable
         Assert.Equal(AuditAction.Create, audit.Action);
         Assert.Null(audit.OldValues);
         Assert.NotNull(audit.NewValues);
+        // Utan ICurrentUser (bakgrundsjobb/seeding) stämplas posten "system".
         Assert.Equal("system", audit.UserId);
         Assert.Equal("system", audit.UserName);
 
@@ -156,5 +169,48 @@ public class AuditInterceptorTests : IDisposable
         var allAudits = _dbContext.AuditEntries.ToList();
         Assert.Single(allAudits);
         Assert.Equal("TestEntity", allAudits[0].EntityType);
+    }
+
+    [Fact]
+    public async Task SaveChanges_WithCurrentUser_StampsActualUser()
+    {
+        // Arrange - interceptor med inloggad användare
+        var employeeId = Guid.NewGuid().ToString();
+        await using var db = CreateContext(new FakeCurrentUser(employeeId, "Eva Nilsson"));
+
+        var employee = Employee.Skapa(
+            new Personnummer("198112289874"),
+            "Anna",
+            "Svensson");
+
+        // Act
+        db.Employees.Add(employee);
+        await db.SaveChangesAsync();
+
+        // Assert - posten är spårbar till den faktiska användaren, inte "system"
+        var audit = Assert.Single(db.AuditEntries.Where(a => a.EntityType == "Employee").ToList());
+        Assert.Equal(employeeId, audit.UserId);
+        Assert.Equal("Eva Nilsson", audit.UserName);
+    }
+
+    [Fact]
+    public async Task SaveChanges_WithEmptyCurrentUser_FallsBackToSystem()
+    {
+        // Arrange - ICurrentUser finns men saknar identitet (utloggad/anonym)
+        await using var db = CreateContext(new FakeCurrentUser(null, "   "));
+
+        var employee = Employee.Skapa(
+            new Personnummer("198112289874"),
+            "Anna",
+            "Svensson");
+
+        // Act
+        db.Employees.Add(employee);
+        await db.SaveChangesAsync();
+
+        // Assert - tom/whitespace-identitet får aldrig ge tomma stämplar
+        var audit = Assert.Single(db.AuditEntries.Where(a => a.EntityType == "Employee").ToList());
+        Assert.Equal("system", audit.UserId);
+        Assert.Equal("system", audit.UserName);
     }
 }

@@ -3,6 +3,7 @@
 @using RegionHR.Infrastructure.Export
 @using Microsoft.Extensions.Localization
 @inject RegionHR.Web.Services.AnstallningService Service
+@inject RegionHR.Web.Services.UnitScopeService Scope
 @inject NavigationManager Nav
 @inject ExportService Export
 @inject IJSRuntime JS
@@ -114,7 +115,21 @@ else
         _loading = true;
         try
         {
-            _anstallda = await Service.HamtaAllaAsync(string.IsNullOrWhiteSpace(_sokterm) ? null : _sokterm);
+            var alla = await Service.HamtaAllaAsync(string.IsNullOrWhiteSpace(_sokterm) ? null : _sokterm);
+
+            // Enhets-scoping (samma mönster som Chef/Index.razor): en chef ser
+            // bara sin egen enhets medarbetare; HR/Admin ser allt. Fail-closed:
+            // kan enheten inte härledas för en chef visas INGET i stället för
+            // hela organisationen.
+            if (Scope.IsUnitScoped)
+            {
+                var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
+                alla = scopeIds is null
+                    ? []
+                    : alla.Where(a => scopeIds.Contains(a.Id.Value)).ToList();
+            }
+
+            _anstallda = alla;
         }
         catch
         {

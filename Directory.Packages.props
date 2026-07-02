@@ -28,7 +28,9 @@
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.16.0" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.16.0" />
     <!-- PDF Generation -->
+    <!-- PdfSharpCore behålls: PdfPayslipGenerator (MinLon-lönespecen) använder den fortfarande -->
     <PackageVersion Include="PdfSharpCore" Version="1.3.65" />
+    <PackageVersion Include="QuestPDF" Version="2025.7.0" />
     <!-- Excel Export -->
     <PackageVersion Include="ClosedXML" Version="0.104.2" />
     <!-- Hosting -->

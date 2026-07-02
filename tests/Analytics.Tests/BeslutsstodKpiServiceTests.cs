@@ -51,6 +51,15 @@ public class BeslutsstodKpiServiceTests
         Assert.Equal(50.0m, kpi.PersonalomsattningProcent); // 1 avslut / 2 aktiva
     }
 
+    /// <summary>Skapar en godkänd sjukfrånvaro (Utkast → Inskickad → Godkänd).</summary>
+    private static LeaveRequest GodkandSjukfranvaro(Employee emp, DateOnly from, DateOnly to)
+    {
+        var leave = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro, from, to, null);
+        leave.SkickaIn();
+        leave.Godkann(Guid.NewGuid(), null);
+        return leave;
+    }
+
     [Fact]
     public void Berakna_SickLeavePercent_OverPossibleWorkdays()
     {
@@ -58,9 +67,8 @@ public class BeslutsstodKpiServiceTests
         var emp = Anstalld();
         Tillsvidare(emp, enhet);
 
-        // 5 arbetsdagar sjukfrånvaro (mån–fre).
-        var leave = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
-            new DateOnly(2026, 1, 5), new DateOnly(2026, 1, 9), null);
+        // 5 arbetsdagar godkänd sjukfrånvaro (mån–fre).
+        var leave = GodkandSjukfranvaro(emp, new DateOnly(2026, 1, 5), new DateOnly(2026, 1, 9));
         Assert.Equal(5, leave.AntalDagar);
 
         var res = BeslutsstodKpiService.Berakna([emp], [], [leave], [], [enhet], Snapshot);
@@ -77,11 +85,37 @@ public class BeslutsstodKpiServiceTests
         var emp = Anstalld();
         Tillsvidare(emp, enhet);
 
-        // Sjukfrånvaro för > 12 mån sedan (utanför fönstret).
-        var leave = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
-            new DateOnly(2024, 1, 5), new DateOnly(2024, 1, 12), null);
+        // Godkänd sjukfrånvaro för > 12 mån sedan (utanför fönstret).
+        var leave = GodkandSjukfranvaro(emp, new DateOnly(2024, 1, 5), new DateOnly(2024, 1, 12));
 
         var res = BeslutsstodKpiService.Berakna([emp], [], [leave], [], [enhet], Snapshot);
+        Assert.Equal(0m, ForEnhet(res, enhet).SjukfranvaroProcent);
+    }
+
+    [Fact]
+    public void Berakna_NonApprovedSickLeave_IsExcluded()
+    {
+        var enhet = Enhet();
+        var emp = Anstalld();
+        Tillsvidare(emp, enhet);
+
+        // Utkast — räknas inte.
+        var utkast = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
+            new DateOnly(2026, 1, 5), new DateOnly(2026, 1, 9), null);
+
+        // Avslagen — räknas inte.
+        var avslagen = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
+            new DateOnly(2026, 2, 2), new DateOnly(2026, 2, 6), null);
+        avslagen.SkickaIn();
+        avslagen.Avvisa(Guid.NewGuid(), "Avslag");
+
+        // Återkallad — räknas inte.
+        var aterkallad = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
+            new DateOnly(2026, 3, 2), new DateOnly(2026, 3, 6), null);
+        aterkallad.Aterkalla();
+
+        var res = BeslutsstodKpiService.Berakna(
+            [emp], [], [utkast, avslagen, aterkallad], [], [enhet], Snapshot);
         Assert.Equal(0m, ForEnhet(res, enhet).SjukfranvaroProcent);
     }
 

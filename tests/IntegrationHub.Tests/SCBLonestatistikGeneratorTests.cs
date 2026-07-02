@@ -129,6 +129,23 @@ public class SCBLonestatistikGeneratorTests
     }
 
     [Fact]
+    public void Okant_kon_bildar_egen_grupp_och_snedvrider_inte_loneandelen()
+    {
+        var input = Bygg(
+            Ind("204012", "Sjuksköterska", "Man", 40000m, 100m),
+            Ind("204012", "Sjuksköterska", "Kvinna", 38000m, 100m),
+            Ind("204012", "Sjuksköterska", "", 90000m, 100m));
+
+        var result = new SCBLonestatistikGenerator().Generera(input);
+
+        Assert.Equal(3, result.Grupper.Count);
+        Assert.Contains(result.Grupper, g => g.Kon == "Okänt");
+        Assert.Equal(1, result.Grupper.Single(g => g.Kon == "M").Antal);
+        // Individen med okänt kön räknas inte in bland män: 38000 / 40000 = 95.0 %
+        Assert.Equal(95.0m, result.KvinnorLoneandelProcent);
+    }
+
+    [Fact]
     public void Tom_indata_ger_inga_grupper_men_giltig_fil()
     {
         var result = new SCBLonestatistikGenerator().Generera(Bygg());

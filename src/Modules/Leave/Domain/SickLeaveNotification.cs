@@ -57,4 +57,40 @@ public sealed class SickLeaveNotification
         LakarintygKravs = dagNr >= 8;
         FKAnmalanKravs = dagNr >= 15;
     }
+
+    /// <summary>
+    /// Berknar aktuellt sjukdagnummer utifrn startdatum: dag 1 = startdatum.
+    /// Avslutade sjukfall rknas t.o.m. slutdatum, pgende t.o.m. angivet datum.
+    /// </summary>
+    public int BeraknaSjukDag(DateOnly idag)
+    {
+        var till = SlutDatum.HasValue && SlutDatum.Value < idag ? SlutDatum.Value : idag;
+        if (till < StartDatum) return 1;
+        return till.DayNumber - StartDatum.DayNumber + 1;
+    }
+
+    /// <summary>
+    /// Synkroniserar <see cref="SjukDag"/> och lagkravsflaggorna (lkarintyg dag 8,
+    /// FK-anmlan dag 15) mot angivet datum. Anropas dagligen av bakgrundsjobbet
+    /// fr ppna sjukfall samt vid registrering av sjukanmlan med retroaktiv start.
+    /// </summary>
+    public void SynkroniseraDag(DateOnly idag) => UppdateraDag(BeraknaSjukDag(idag));
+
+    /// <summary>True om sjukfallet r avslutat (friskanmlt).</summary>
+    public bool ArAvslutad => SlutDatum.HasValue;
+
+    /// <summary>
+    /// Friskanmlan: avslutar sjukfallet med angiven sista sjukdag och fryser
+    /// dagrkningen dr, s att pminnelser och auto-rehab slutar rkna vidare.
+    /// </summary>
+    public void Avsluta(DateOnly sistaSjukdag)
+    {
+        if (SlutDatum.HasValue)
+            throw new InvalidOperationException("Sjukfallet r redan avslutat.");
+        if (sistaSjukdag < StartDatum)
+            throw new ArgumentException("Sista sjukdagen kan inte vara fre startdatum.", nameof(sistaSjukdag));
+
+        SlutDatum = sistaSjukdag;
+        UppdateraDag(BeraknaSjukDag(sistaSjukdag));
+    }
 }

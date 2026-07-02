@@ -85,12 +85,34 @@
     private string _newKursnamn = "";
     private string _newBeskrivning = "";
 
-    private void SkapaUtbildning()
+    private async Task SkapaUtbildning()
     {
-        _showForm = false;
-        _skapad = true;
-        _newKursnamn = "";
-        _newBeskrivning = "";
+        if (string.IsNullOrWhiteSpace(_newKursnamn))
+        {
+            _error = "Ange ett kursnamn.";
+            return;
+        }
+
+        using var db = DbFactory.CreateDbContext();
+        try
+        {
+            var kurs = Course.Skapa(
+                _newKursnamn.Trim(), _newBeskrivning.Trim(),
+                CourseFormat.Klassrum, langdMinuter: 60, obligatorisk: false);
+            db.Courses.Add(kurs);
+            await db.SaveChangesAsync();
+
+            _courses.Insert(0, kurs); // Listan är sorterad på SkapadVid fallande.
+            _error = null;
+            _showForm = false;
+            _skapad = true;
+            _newKursnamn = "";
+            _newBeskrivning = "";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte spara utbildningen: {ex.Message}";
+        }
     }
 
     private List<Course> _courses = [];

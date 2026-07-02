@@ -228,4 +228,73 @@ public class SickLeaveNotificationTests
         Assert.Throws<ArgumentOutOfRangeException>(() => sjuk.UppdateraDag(0));
         Assert.Throws<ArgumentOutOfRangeException>(() => sjuk.UppdateraDag(-1));
     }
+
+    [Fact]
+    public void BeraknaSjukDag_Dag1PaStartdatum()
+    {
+        var sjuk = SickLeaveNotification.Skapa(_anstallId, new DateOnly(2026, 3, 16));
+
+        Assert.Equal(1, sjuk.BeraknaSjukDag(new DateOnly(2026, 3, 16)));
+    }
+
+    [Fact]
+    public void BeraknaSjukDag_HarledsUrStartdatum()
+    {
+        var sjuk = SickLeaveNotification.Skapa(_anstallId, new DateOnly(2026, 3, 16));
+
+        Assert.Equal(8, sjuk.BeraknaSjukDag(new DateOnly(2026, 3, 23)));
+        Assert.Equal(15, sjuk.BeraknaSjukDag(new DateOnly(2026, 3, 30)));
+    }
+
+    [Fact]
+    public void SynkroniseraDag_SatterFlaggorUtifranDagensDatum()
+    {
+        var sjuk = SickLeaveNotification.Skapa(_anstallId, new DateOnly(2026, 3, 16));
+
+        // Dag 8: lkarintyg krvs, FK nnu inte.
+        sjuk.SynkroniseraDag(new DateOnly(2026, 3, 23));
+        Assert.Equal(8, sjuk.SjukDag);
+        Assert.True(sjuk.LakarintygKravs);
+        Assert.False(sjuk.FKAnmalanKravs);
+
+        // Dag 15: bda flaggorna.
+        sjuk.SynkroniseraDag(new DateOnly(2026, 3, 30));
+        Assert.Equal(15, sjuk.SjukDag);
+        Assert.True(sjuk.FKAnmalanKravs);
+    }
+
+    [Fact]
+    public void Avsluta_SatterSlutDatumOchFryserDagraknignen()
+    {
+        var sjuk = SickLeaveNotification.Skapa(_anstallId, new DateOnly(2026, 3, 16));
+
+        sjuk.Avsluta(new DateOnly(2026, 3, 20)); // dag 5
+
+        Assert.True(sjuk.ArAvslutad);
+        Assert.Equal(new DateOnly(2026, 3, 20), sjuk.SlutDatum);
+        Assert.Equal(5, sjuk.SjukDag);
+        Assert.False(sjuk.LakarintygKravs);
+
+        // Dagrkningen rknar inte vidare efter avslut.
+        Assert.Equal(5, sjuk.BeraknaSjukDag(new DateOnly(2026, 4, 30)));
+        sjuk.SynkroniseraDag(new DateOnly(2026, 4, 30));
+        Assert.Equal(5, sjuk.SjukDag);
+    }
+
+    [Fact]
+    public void Avsluta_KastarOmRedanAvslutad()
+    {
+        var sjuk = SickLeaveNotification.Skapa(_anstallId, new DateOnly(2026, 3, 16));
+        sjuk.Avsluta(new DateOnly(2026, 3, 20));
+
+        Assert.Throws<InvalidOperationException>(() => sjuk.Avsluta(new DateOnly(2026, 3, 21)));
+    }
+
+    [Fact]
+    public void Avsluta_KastarOmSlutForeStart()
+    {
+        var sjuk = SickLeaveNotification.Skapa(_anstallId, new DateOnly(2026, 3, 16));
+
+        Assert.Throws<ArgumentException>(() => sjuk.Avsluta(new DateOnly(2026, 3, 15)));
+    }
 }

@@ -109,6 +109,21 @@ public class LASKorrigeringKonverteringTests
         Assert.Throws<ArgumentException>(() => acc.KonverteraTillTillsvidare(Dag(0), "  "));
     }
 
+    [Fact]
+    public void ManuellKonvertering_OverleverOmberakning()
+    {
+        // En manuell konvertering (HR-beslut, under gränsen) får inte wipas av den
+        // återkommande omberäkningen i det dagliga jobbet.
+        var acc = LASAccumulation.Skapa(EmployeeId.New(), EmploymentType.SAVA);
+        acc.LaggTillPeriod(Dag(-120), Dag(0)); // under gräns
+        Assert.True(acc.KonverteraTillTillsvidare(Dag(0), "Karl Berg"));
+
+        acc.Omberakna(DateOnly.FromDateTime(DateTime.Today));
+
+        Assert.Equal(LASStatus.KonverteradTillTillsvidare, acc.Status);
+        Assert.Equal(Dag(0), acc.KonverteringsDatum);
+    }
+
     // ── Service: skrivväg + attestkontroll ──────────────────────────
 
     private static LASService NyService(out InMemoryLASRepository repo)
@@ -203,7 +218,7 @@ public class LASKorrigeringKonverteringTests
         var service = NyService(out var repo);
         var anstalld = EmployeeId.New();
         var hrAktor = Guid.NewGuid();
-        // SAVA ≥ 274 dagar i 3-årsperioden → berättigad
+        // SAVA > 274 dagar i 3-årsperioden ("mer än" 9 månader) → berättigad
         await service.RegistreraPeriodAsync(anstalld, EmploymentType.SAVA, Dag(-290), Dag(-10), hrAktor, "HR");
 
         var har = await service.BeviljaForetradesrattAsync(anstalld, Dag(-10), hrAktor, "HR");

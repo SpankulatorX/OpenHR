@@ -76,7 +76,10 @@ else
                         <td>@c.Claim.Datum.ToString("yyyy-MM-dd")</td>
                         <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(c.Claim.Status)">@StatusText(c.Claim.Status)</MudChip></td>
                         <td>
-                            @if (c.Claim.Status == WellnessClaimStatus.Inskickad && Auth.EmployeeId.HasValue)
+                            @* Godkännande kräver chefs-/HR-behörighet och får inte avse egen ansökan
+                               (jämför FKAnmalan-sidans HR-spärr). *@
+                            @if (c.Claim.Status == WellnessClaimStatus.Inskickad && Auth.EmployeeId.HasValue
+                                 && Auth.IsChef && c.Claim.AnstallId != Auth.EmployeeId.Value)
                             {
                                 <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => GodkannClaim(c))">Godkänn</MudButton>
                             }
@@ -119,7 +122,10 @@ else
         _saving = true; _error = null;
         try
         {
-            var claim = WellnessClaim.Skapa(Auth.EmployeeId.Value, _formAktivitet, _formBelopp, DateOnly.FromDateTime(_formDatum!.Value));
+            var datum = DateOnly.FromDateTime(_formDatum!.Value);
+            var tidigareGodkant = await SummaGodkantUnderAretAsync(db, Auth.EmployeeId.Value, datum.Year);
+            var claim = WellnessClaim.Skapa(Auth.EmployeeId.Value, _formAktivitet, _formBelopp, datum,
+                tidigareGodkantUnderAret: tidigareGodkant);
             db.WellnessClaims.Add(claim);
             await db.SaveChangesAsync();
             _claims.Insert(0, new ClaimVm(Auth.UserName ?? "Jag", claim));
@@ -131,10 +137,43 @@ else
 
     private async Task GodkannClaim(ClaimVm vm)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) { _error = "Kräver kopplad anställd."; return; }
-        try { vm.Claim.Godkann(Auth.EmployeeId.Value); await db.SaveChangesAsync(); _success = "Ansökan godkänd."; }
+        // Behörighetsspärr (jämför FKAnmalan): endast chef/HR/Admin får godkänna,
+        // och aldrig sin egen ansökan.
+        if (!Auth.IsChef) { _error = "Endast chef eller HR kan godkänna friskvårdsansökningar."; return; }
+        if (vm.Claim.AnstallId == Auth.EmployeeId.Value) { _error = "Du kan inte godkänna din egen ansökan."; return; }
+        _error = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            // Hämta om entiteten i samma context som SaveChanges — den listade instansen
+            // kommer från en annan (disposad) context och trackas inte här.
+            var claim = await db.WellnessClaims.FirstOrDefaultAsync(c => c.Id == vm.Claim.Id);
+            if (claim is null) { _error = "Ansökan hittades inte."; return; }
+
+            var tidigareGodkant = await SummaGodkantUnderAretAsync(db, claim.AnstallId, claim.Datum.Year, claim.Id);
+            claim.Godkann(Auth.EmployeeId.Value, tidigareGodkantUnderAret: tidigareGodkant);
+            await db.SaveChangesAsync();
+
+            var idx = _claims.IndexOf(vm);
+            if (idx >= 0) _claims[idx] = vm with { Claim = claim };
+            _success = "Ansökan godkänd.";
+        }
         catch (Exception ex) { _error = $"Fel: {ex.Message}"; }
+    }
+
+    /// <summary>Summan av årets redan godkända friskvårdsansökningar för den anställde.</summary>
+    private static async Task<decimal> SummaGodkantUnderAretAsync(
+        RegionHRDbContext db, Guid anstallId, int ar, Guid? exkluderaClaimId = null)
+    {
+        var arStart = new DateOnly(ar, 1, 1);
+        var arSlut = new DateOnly(ar, 12, 31);
+        return await db.WellnessClaims
+            .Where(c => c.AnstallId == anstallId
+                        && c.Status == WellnessClaimStatus.Godkand
+                        && c.Datum >= arStart && c.Datum <= arSlut
+                        && (exkluderaClaimId == null || c.Id != exkluderaClaimId))
+            .SumAsync(c => c.Belopp);
     }
 
     private static string StatusText(WellnessClaimStatus s) => s switch { WellnessClaimStatus.Inskickad => "Inskickad", WellnessClaimStatus.Godkand => "Godkänd", WellnessClaimStatus.Avslagen => "Avslagen", _ => s.ToString() };

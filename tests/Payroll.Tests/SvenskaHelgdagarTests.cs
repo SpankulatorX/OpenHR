@@ -205,10 +205,47 @@ public class SvenskaHelgdagarTests
     }
 
     [Fact]
-    public void ArStorhelg_KristiHimmelsfardsdag_ReturnsTrue()
+    public void ArStorhelg_KristiHimmelsfardsdag_ReturnsFalse()
     {
-        // Kristi himmelsfärdsdag 2025: 29 maj
-        Assert.True(SvenskaHelgdagar.ArStorhelg(new DateOnly(2025, 5, 29)));
+        // Kristi himmelsfärdsdag 2025: 29 maj — helgdag (O-tilläggstid B) men INTE storhelg
+        // enligt AB 25 § 21 (ingår inte i O-tilläggstid A).
+        Assert.False(SvenskaHelgdagar.ArStorhelg(new DateOnly(2025, 5, 29)));
+    }
+
+    [Fact]
+    public void ArStorhelg_Langfredagen_ReturnsTrue()
+    {
+        // Långfredagen 2025: 18 april — ingår i O-tilläggstid A (AB 25 § 21).
+        Assert.True(SvenskaHelgdagar.ArStorhelg(new DateOnly(2025, 4, 18)));
+    }
+
+    [Fact]
+    public void ArStorhelg_SkartorsdagFran18_ReturnsTrue()
+    {
+        // Skärtorsdagen 2025: 17 april. A-tiden börjar kl. 18.00 dagen före långfredagen.
+        var skartorsdag = new DateOnly(2025, 4, 17);
+        Assert.True(SvenskaHelgdagar.ArStorhelg(skartorsdag, new TimeOnly(18, 0)));
+        Assert.True(SvenskaHelgdagar.ArStorhelg(skartorsdag, new TimeOnly(21, 30)));
+        Assert.False(SvenskaHelgdagar.ArStorhelg(skartorsdag, new TimeOnly(12, 0)));
+        // Dygnsnivå: skärtorsdagen som helhet är inte storhelg.
+        Assert.False(SvenskaHelgdagar.ArStorhelg(skartorsdag));
+    }
+
+    [Fact]
+    public void ArStorhelg_SondagenEfterMidsommar_ReturnsTrue()
+    {
+        // Midsommardagen 2025: 21 juni (lördag). A-tiden löper t.o.m. söndagen 22 juni
+        // (och till kl. 07.00 på måndagen).
+        Assert.True(SvenskaHelgdagar.ArStorhelg(new DateOnly(2025, 6, 22)));
+    }
+
+    [Fact]
+    public void ArStorhelg_MandagEfterMidsommarTill07_ReturnsTrue()
+    {
+        var mandag = new DateOnly(2025, 6, 23);
+        Assert.True(SvenskaHelgdagar.ArStorhelg(mandag, new TimeOnly(6, 30)));
+        Assert.False(SvenskaHelgdagar.ArStorhelg(mandag, new TimeOnly(7, 0)));
+        Assert.False(SvenskaHelgdagar.ArStorhelg(mandag));
     }
 
     [Fact]
@@ -257,11 +294,41 @@ public class SvenskaHelgdagarTests
     }
 
     [Fact]
-    public void BeraknaOBKategori_VardagTidigMorgon_VardagNatt()
+    public void BeraknaOBKategori_MandagTidigMorgon_Helg()
     {
-        // Måndag 05:00 → VardagNatt (före 06:00)
+        // Måndag 05:00 → O-tilläggstid B (helgtiden löper till kl. 07 på måndagen, AB 25 § 21)
         var datum = new DateOnly(2025, 3, 10); // Måndag
+        Assert.Equal(OBCategory.Helg, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(5, 0)));
+        Assert.Equal(OBCategory.Helg, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(6, 30)));
+    }
+
+    [Fact]
+    public void BeraknaOBKategori_TisdagTidigMorgon_VardagNatt()
+    {
+        // Tisdag 05:00 → VardagNatt (O-tilläggstid C, före 06:00)
+        var datum = new DateOnly(2025, 3, 11); // Tisdag
         Assert.Equal(OBCategory.VardagNatt, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(5, 0)));
+    }
+
+    [Fact]
+    public void BeraknaOBKategori_FredagKvallEfterAB25_Helg()
+    {
+        // AB 25 (fr.o.m. 2025-04-01): fredag 17:00–24:00 är O-tilläggstid B (helg), inte D (kväll)
+        var fredag = new DateOnly(2025, 5, 9); // Fredag efter 2025-04-01
+        Assert.Equal(OBCategory.Helg, SvenskaHelgdagar.BeraknaOBKategori(fredag, new TimeOnly(17, 0)));
+        Assert.Equal(OBCategory.Helg, SvenskaHelgdagar.BeraknaOBKategori(fredag, new TimeOnly(20, 0)));
+        Assert.Equal(OBCategory.Helg, SvenskaHelgdagar.BeraknaOBKategori(fredag, new TimeOnly(23, 0)));
+        // Före 17:00 på fredag: dagtid, ingen OB
+        Assert.Equal(OBCategory.Ingen, SvenskaHelgdagar.BeraknaOBKategori(fredag, new TimeOnly(16, 59)));
+    }
+
+    [Fact]
+    public void BeraknaOBKategori_FredagKvallForeAB25_HelgFran19()
+    {
+        // Före 2025-04-01: fredagshelgen börjar kl. 19:00
+        var fredag = new DateOnly(2025, 3, 14); // Fredag före 2025-04-01
+        Assert.Equal(OBCategory.Ingen, SvenskaHelgdagar.BeraknaOBKategori(fredag, new TimeOnly(17, 30)));
+        Assert.Equal(OBCategory.Helg, SvenskaHelgdagar.BeraknaOBKategori(fredag, new TimeOnly(19, 0)));
     }
 
     [Fact]
@@ -310,10 +377,35 @@ public class SvenskaHelgdagarTests
     }
 
     [Fact]
-    public void BeraknaOBKategori_KristiHimmelsfardsdag_Storhelg()
+    public void BeraknaOBKategori_KristiHimmelsfardsdag_Helg()
     {
+        // Kristi himmelsfärdsdag är helgdag → O-tilläggstid B, INTE storhelg (AB 25 § 21)
         var datum = new DateOnly(2025, 5, 29); // Kristi himmelsfärdsdag 2025
-        Assert.Equal(OBCategory.Storhelg, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(12, 0)));
+        Assert.Equal(OBCategory.Helg, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(12, 0)));
+    }
+
+    [Fact]
+    public void BeraknaOBKategori_Langfredagen_Storhelg()
+    {
+        var datum = new DateOnly(2025, 4, 18); // Långfredagen 2025
+        Assert.Equal(OBCategory.Storhelg, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(10, 0)));
+    }
+
+    [Fact]
+    public void BeraknaOBKategori_SkartorsdagKvall_Storhelg()
+    {
+        // Skärtorsdagen från kl. 18.00 ingår i storhelgen (AB 25 § 21)
+        var datum = new DateOnly(2025, 4, 17);
+        Assert.Equal(OBCategory.Storhelg, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(19, 0)));
+    }
+
+    [Fact]
+    public void BeraknaOBKategori_MandagEfterMidsommarFore07_Storhelg()
+    {
+        // Storhelgen efter midsommar löper till kl. 07.00 på måndagen
+        var datum = new DateOnly(2025, 6, 23);
+        Assert.Equal(OBCategory.Storhelg, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(6, 0)));
+        Assert.Equal(OBCategory.Ingen, SvenskaHelgdagar.BeraknaOBKategori(datum, new TimeOnly(9, 0)));
     }
 
     [Fact]

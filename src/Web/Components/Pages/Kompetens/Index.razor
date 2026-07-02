@@ -32,6 +32,11 @@
     <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _skapad = false)">Kompetens skapad!</MudAlert>
 }
 
+@if (_skapadFel != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _skapadFel = null)">@_skapadFel</MudAlert>
+}
+
 @* --- Expiry alert banner --- *@
 @if (_expiringCount > 0)
 {
@@ -134,17 +139,73 @@
 @code {
     private bool _showForm;
     private bool _skapad;
+    private string? _skapadFel;
     private string _newNamn = "";
     private string _newAnstelld = "";
     private string _newGiltigTill = "";
 
-    private void SkapaKompetens()
+    private async Task SkapaKompetens()
     {
-        _showForm = false;
-        _skapad = true;
-        _newNamn = "";
-        _newAnstelld = "";
-        _newGiltigTill = "";
+        _skapadFel = null;
+        if (string.IsNullOrWhiteSpace(_newNamn))
+        {
+            _skapadFel = "Ange ett namn på kompetensen.";
+            return;
+        }
+
+        using var db = DbFactory.CreateDbContext();
+        try
+        {
+            // Resolvera anställd: GUID direkt, annars namnsökning.
+            Guid anstallId;
+            var anstalldInput = _newAnstelld.Trim();
+            if (Guid.TryParse(anstalldInput, out var direktId))
+            {
+                anstallId = direktId;
+            }
+            else
+            {
+                var kandidater = await db.Employees
+                    .Select(e => new { e.Id, e.Fornamn, e.Efternamn })
+                    .ToListAsync();
+                var traff = anstalldInput.Length == 0 ? null : kandidater.FirstOrDefault(k =>
+                    $"{k.Fornamn} {k.Efternamn}".Contains(anstalldInput, StringComparison.OrdinalIgnoreCase));
+                if (traff is null)
+                {
+                    _skapadFel = "Hittade ingen anställd som matchar. Ange namn eller anställnings-ID (GUID).";
+                    return;
+                }
+                anstallId = traff.Id.Value;
+            }
+
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+            DateOnly? giltigTill = DateOnly.TryParse(_newGiltigTill, out var datum) ? datum : null;
+
+            var cert = Certification.Skapa(
+                anstallId, _newNamn.Trim(), CertificationType.Certifikat,
+                utfardare: null, giltigFran: today, giltigTill: giltigTill);
+            db.Certifications.Add(cert);
+            await db.SaveChangesAsync();
+
+            _certs.Insert(0, cert);
+            if (cert.GiltigTill.HasValue &&
+                cert.GiltigTill.Value >= today &&
+                cert.GiltigTill.Value <= today.AddDays(90))
+            {
+                _expiringCerts = _expiringCerts.Append(cert).OrderBy(c => c.GiltigTill).ToList();
+                _expiringCount = _expiringCerts.Count;
+            }
+
+            _showForm = false;
+            _skapad = true;
+            _newNamn = "";
+            _newAnstelld = "";
+            _newGiltigTill = "";
+        }
+        catch (Exception ex)
+        {
+            _skapadFel = $"Kunde inte spara kompetensen: {ex.Message}";
+        }
     }
 
     private List<Certification> _certs = [];

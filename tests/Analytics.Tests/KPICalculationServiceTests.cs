@@ -335,6 +335,77 @@ public class KPICalculationServiceTests
     }
 
     [Fact]
+    public async Task CalculateAllAsync_Headcount_CountsDistinctIndividualsAndExcludesFutureEmployments()
+    {
+        using var db = CreateInMemoryDb(nameof(CalculateAllAsync_Headcount_CountsDistinctIndividualsAndExcludesFutureEmployments));
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var enhetId = OrganizationId.New();
+
+        // En person med två parallella aktiva anställningar → räknas som EN individ.
+        var dubbel = Employee.Skapa(Personnummer.CreateValidated("19900101234"), "Anna", "Andersson");
+        dubbel.LaggTillAnstallning(enhetId, EmploymentType.Tillsvidare, CollectiveAgreementType.AB,
+            Money.SEK(30000), new Percentage(50), today.AddYears(-2));
+        dubbel.LaggTillAnstallning(enhetId, EmploymentType.Tillsvidare, CollectiveAgreementType.AB,
+            Money.SEK(30000), new Percentage(50), today.AddYears(-1));
+
+        // Framtida (ej påbörjad) anställning → räknas inte.
+        var framtida = Employee.Skapa(Personnummer.CreateValidated("19850615237"), "Erik", "Eriksson");
+        framtida.LaggTillAnstallning(enhetId, EmploymentType.Tillsvidare, CollectiveAgreementType.AB,
+            Money.SEK(30000), new Percentage(100), today.AddDays(30));
+
+        db.Employees.AddRange(dubbel, framtida);
+        db.KPIDefinitions.Add(KPIDefinition.Skapa("Headcount", "Workforce", "COUNT(*)", "count", "HigherIsBetter", 100, 80, 50));
+        await db.SaveChangesAsync();
+
+        var service = new KPICalculationService(db);
+        var result = await service.CalculateAllAsync("2026-Q1");
+
+        Assert.Single(result);
+        Assert.Equal(1m, result[0].Varde);
+    }
+
+    [Fact]
+    public async Task CalculateAllAsync_SickLeave_ExcludesNonApprovedRequests()
+    {
+        using var db = CreateInMemoryDb(nameof(CalculateAllAsync_SickLeave_ExcludesNonApprovedRequests));
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var enhetId = OrganizationId.New();
+        var emp = Employee.Skapa(Personnummer.CreateValidated("19900101234"), "Anna", "Andersson");
+        emp.LaggTillAnstallning(enhetId, EmploymentType.Tillsvidare, CollectiveAgreementType.AB,
+            Money.SEK(30000), new Percentage(100), today.AddYears(-2));
+        db.Employees.Add(emp);
+
+        // Godkänd sjukfrånvaro (räknas): mån–fre = 5 dagar.
+        var godkand = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
+            new DateOnly(2026, 1, 5), new DateOnly(2026, 1, 9), null);
+        godkand.SkickaIn();
+        godkand.Godkann(Guid.NewGuid(), null);
+
+        // Utkast (räknas inte).
+        var utkast = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
+            new DateOnly(2026, 1, 12), new DateOnly(2026, 1, 16), null);
+
+        // Avslagen (räknas inte).
+        var avslagen = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
+            new DateOnly(2026, 2, 2), new DateOnly(2026, 2, 6), null);
+        avslagen.SkickaIn();
+        avslagen.Avvisa(Guid.NewGuid(), "Avslag");
+
+        db.LeaveRequests.AddRange(godkand, utkast, avslagen);
+        db.KPIDefinitions.Add(KPIDefinition.Skapa("Sjukfranvaro %", "Health", "sick/possible*100", "percent", "LowerIsBetter", 3, 5, 8));
+        await db.SaveChangesAsync();
+
+        var service = new KPICalculationService(db);
+        var result = await service.CalculateAllAsync("2026-Q1");
+
+        Assert.Single(result);
+        // 5 godkända dagar / (1 individ * 3 mån * 21 arbetsdagar) * 100
+        Assert.Equal(5m / 63m * 100m, result[0].Varde);
+    }
+
+    [Fact]
     public async Task CalculateAllAsync_SnapshotsArePersistedToDb()
     {
         using var db = CreateInMemoryDb(nameof(CalculateAllAsync_SnapshotsArePersistedToDb));

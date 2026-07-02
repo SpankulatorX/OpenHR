@@ -119,6 +119,8 @@ public class BiDwExportBuilderTests
         AnstallningTillsvidare(emp, enhet, 100m, "Sjuksköterska");
         var leave = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
             new DateOnly(2026, 4, 6), new DateOnly(2026, 4, 8), "Influensa");
+        leave.SkickaIn();
+        leave.Godkann(Guid.NewGuid(), null);
 
         var schema = BiDwExportBuilder.Bygg([emp], [], [leave], [enhet], Snapshot);
 
@@ -128,6 +130,28 @@ public class BiDwExportBuilderTests
         Assert.Equal("Sjukfranvaro", fakta.FranvaroTyp);
         Assert.Equal(1, fakta.AntalFall);
         Assert.Equal(leave.AntalDagar, fakta.AntalDagar);
+    }
+
+    [Fact]
+    public void Bygg_NonApprovedLeave_ProducesNoAbsenceFact()
+    {
+        var enhet = Enhet("Akutmottagning", "KST100");
+        var emp = Kvinna();
+        AnstallningTillsvidare(emp, enhet, 100m, "Sjuksköterska");
+
+        // Utkast — inte faktagrundande.
+        var utkast = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Sjukfranvaro,
+            new DateOnly(2026, 4, 6), new DateOnly(2026, 4, 8), null);
+
+        // Avslagen — inte faktagrundande.
+        var avslagen = LeaveRequest.Skapa(emp.Id.Value, LeaveType.Semester,
+            new DateOnly(2026, 5, 4), new DateOnly(2026, 5, 8), null);
+        avslagen.SkickaIn();
+        avslagen.Avvisa(Guid.NewGuid(), "Avslag");
+
+        var schema = BiDwExportBuilder.Bygg([emp], [], [utkast, avslagen], [enhet], Snapshot);
+
+        Assert.Empty(schema.FaktaFranvaro);
     }
 
     [Fact]

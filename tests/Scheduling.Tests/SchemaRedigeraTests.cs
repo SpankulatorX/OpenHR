@@ -52,6 +52,68 @@ public class SchemaRedigeraTests
         Assert.Single(schema.Pass);
         Assert.Equal(pass.Id, schema.Pass[0].Id);
         Assert.Equal(ShiftStatus.Planerad, pass.Status);
+        // Vardagsdagpass har ingen OB — får inte defaulta till kvälls-OB (enum-värde 0).
+        Assert.Equal(OBCategory.Ingen, pass.OBKategori);
+    }
+
+    [Fact]
+    public void LaggTillPass_VardagsDagpass_FarOBKategoriIngen()
+    {
+        // Måndag 2026-01-12 (vardag, ej helgdag) 07:00-16:00 → ingen OB.
+        var schema = Schedule.SkapaGrundschema(_enhet, "G", new DateOnly(2026, 1, 5), 4);
+
+        var pass = schema.LaggTillPass(_anstallId, new DateOnly(2026, 1, 12),
+            ShiftType.Dag, new TimeOnly(7, 0), new TimeOnly(16, 0), TimeSpan.FromMinutes(60));
+
+        Assert.Equal(OBCategory.Ingen, pass.OBKategori);
+    }
+
+    [Fact]
+    public void LaggTillPass_VardagsKvallspass_FarKvallsOB()
+    {
+        // Måndag 2026-01-12 15:00-22:00 → passets senare del (19-22) är kvälls-OB.
+        var schema = Schedule.SkapaGrundschema(_enhet, "G", new DateOnly(2026, 1, 5), 4);
+
+        var pass = schema.LaggTillPass(_anstallId, new DateOnly(2026, 1, 12),
+            ShiftType.Kvall, new TimeOnly(15, 0), new TimeOnly(22, 0), TimeSpan.FromMinutes(30));
+
+        Assert.Equal(OBCategory.VardagKvall, pass.OBKategori);
+    }
+
+    [Fact]
+    public void LaggTillPass_NattpassOverMidnatt_FarNattOB()
+    {
+        // Måndag 2026-01-12 21:00 - tisdag 07:00 → natt-OB (natt prioriteras över kväll).
+        var schema = Schedule.SkapaGrundschema(_enhet, "G", new DateOnly(2026, 1, 5), 4);
+
+        var pass = schema.LaggTillPass(_anstallId, new DateOnly(2026, 1, 12),
+            ShiftType.Natt, new TimeOnly(21, 0), new TimeOnly(7, 0), TimeSpan.FromMinutes(45));
+
+        Assert.Equal(OBCategory.VardagNatt, pass.OBKategori);
+    }
+
+    [Fact]
+    public void LaggTillPass_Helgpass_FarHelgOB()
+    {
+        // Lördag 2026-01-10 07:00-16:00 → helg-OB.
+        var schema = Schedule.SkapaGrundschema(_enhet, "G", new DateOnly(2026, 1, 5), 4);
+
+        var pass = schema.LaggTillPass(_anstallId, new DateOnly(2026, 1, 10),
+            ShiftType.Dag, new TimeOnly(7, 0), new TimeOnly(16, 0), TimeSpan.FromMinutes(60));
+
+        Assert.Equal(OBCategory.Helg, pass.OBKategori);
+    }
+
+    [Fact]
+    public void LaggTillPass_Storhelgspass_FarStorhelgsOB()
+    {
+        // Julafton 2026-12-24 07:00-16:00 → storhelgs-OB.
+        var schema = Schedule.SkapaGrundschema(_enhet, "G", new DateOnly(2026, 12, 21), 4);
+
+        var pass = schema.LaggTillPass(_anstallId, new DateOnly(2026, 12, 24),
+            ShiftType.Dag, new TimeOnly(7, 0), new TimeOnly(16, 0), TimeSpan.FromMinutes(60));
+
+        Assert.Equal(OBCategory.Storhelg, pass.OBKategori);
     }
 
     [Fact]

@@ -199,7 +199,28 @@ else
                         .ToList()))
                 .ToList();
 
-            BuildAnomalies(run, empNames);
+            // Baslinje för anomalisignalen: den anställdes egen föregående period.
+            var foregaendeBrutto = new Dictionary<Guid, decimal>();
+            if (!run.ArRetroaktiv)
+            {
+                var foregaende = await db.PayrollRuns
+                    .Include(r => r.Resultat)
+                    .Where(r => !r.ArRetroaktiv
+                                && (r.Year < run.Year || (r.Year == run.Year && r.Month < run.Month)))
+                    .OrderByDescending(r => r.Year)
+                    .ThenByDescending(r => r.Month)
+                    .ThenByDescending(r => r.StartadVid)
+                    .FirstOrDefaultAsync();
+
+                if (foregaende is not null)
+                {
+                    foregaendeBrutto = foregaende.Resultat
+                        .GroupBy(r => r.AnstallId.Value)
+                        .ToDictionary(g => g.Key, g => g.First().Brutto.Amount);
+                }
+            }
+
+            BuildAnomalies(run, empNames, foregaendeBrutto);
         }
         catch (Exception ex) { _error = $"Kunde inte hämta lönekörning: {ex.Message}"; }
         finally { _loading = false; }
@@ -211,29 +232,40 @@ else
             _expanded.Remove(index);
     }
 
-    private void BuildAnomalies(PayrollRun run, Dictionary<Guid, string> empNames)
+    private void BuildAnomalies(PayrollRun run, Dictionary<Guid, string> empNames, Dictionary<Guid, decimal> foregaendeBrutto)
     {
-        if (run.Resultat.Count == 0) return;
+        // Retroaktiva körningar innehåller differensposter — de avviker per definition
+        // och ska inte flaggas mot en baslinje.
+        if (run.ArRetroaktiv || run.Resultat.Count == 0) return;
 
-        var avgBrutto = run.TotalBrutto.Amount / Math.Max(run.AntalAnstallda, 1);
-        var threshold = avgBrutto * 0.10m;
+        // Baslinje per anställd: egen brutto föregående period. För anställda utan
+        // historik används förväntad grundlön (månadslön × sysselsättningsgrad).
+        // Jämförelse mot körningens genomsnitt flaggade nästan alla (alla löner
+        // skiljer sig från snittet) — därför jämförs mot individens egen nivå,
+        // med ett band på ±20 %.
+        const decimal band = 0.20m;
 
-        var anomalousResults = run.Resultat
-            .Where(r => Math.Abs(r.Brutto.Amount - avgBrutto) > threshold)
-            .Take(10)
-            .ToList();
-
-        foreach (var r in anomalousResults)
+        foreach (var r in run.Resultat)
         {
+            var harHistorik = foregaendeBrutto.TryGetValue(r.AnstallId.Value, out var baslinje);
+            if (!harHistorik)
+                baslinje = r.Manadslon.Amount * r.Sysselsattningsgrad / 100m;
+            if (baslinje <= 0m) continue;
+
+            var diff = r.Brutto.Amount - baslinje;
+            var pct = Math.Abs(diff / baslinje * 100m);
+            if (pct <= band * 100m) continue;
+
             var namn = empNames.GetValueOrDefault(r.AnstallId.Value, "Okänd");
-            var diff = r.Brutto.Amount - avgBrutto;
-            var pct = avgBrutto > 0 ? Math.Abs(diff / avgBrutto * 100) : 0;
-            var direction = diff > 0 ? "+" : "";
+            var direction = diff > 0 ? "+" : "-";
+            var jamforelse = harHistorik ? "föreg. period" : "förväntad grundlön";
 
             _anomalier.Add(new Anomali(
                 namn,
-                $"{r.Brutto.Amount:N0} kr (snitt {avgBrutto:N0} kr, {direction}{pct:F0}%)",
+                $"{r.Brutto.Amount:N0} kr ({jamforelse} {baslinje:N0} kr, {direction}{pct:F0}%)",
                 SummarizeDeviations(r)));
+
+            if (_anomalier.Count >= 10) break;
         }
     }
 

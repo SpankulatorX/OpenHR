@@ -43,10 +43,13 @@ services:
     build: .
     container_name: regionhr-app
     ports:
-      - "5076:8080"
+      # Appen lyssnar på 5076 i containern (Dockerfile ASPNETCORE_URLS) — inte 8080.
+      - "5076:5076"
     environment:
       - ASPNETCORE_ENVIRONMENT=Development
       - ConnectionStrings__RegionHR=Host=db;Port=5432;Database=openhr;Username=postgres;Password=postgres
+      # Demon SKA seedas med demodata (default är false så en produktions-DB inte fylls av misstag).
+      - SeedDemoData=true
     depends_on:
       db:
         condition: service_healthy

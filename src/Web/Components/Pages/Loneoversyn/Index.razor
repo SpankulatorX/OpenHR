@@ -25,7 +25,7 @@ else
                 <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _showForm = false)" />
             </div>
             <MudGrid Spacing="3">
-                <MudItem xs="12" sm="3"><MudTextField @bind-Value="_formNamn" Label="Namn" Variant="Variant.Outlined" Required="true" /></MudItem>
+                <MudItem xs="12" sm="3"><MudTextField @bind-Value="_formNamn" Label="Namn" Variant="Variant.Outlined" Required="true" Immediate="true" /></MudItem>
                 <MudItem xs="12" sm="3"><MudNumericField T="int" @bind-Value="_formAr" Label="År" Variant="Variant.Outlined" /></MudItem>
                 <MudItem xs="12" sm="3">
                     <MudSelect T="CollectiveAgreementType" @bind-Value="_formAvtal" Label="Avtalsområde" Variant="Variant.Outlined">
@@ -33,9 +33,10 @@ else
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="3"><MudNumericField T="decimal" @bind-Value="_formBudget" Label="Budget (kr)" Variant="Variant.Outlined" /></MudItem>
+                <MudItem xs="12" sm="3"><MudDatePicker @bind-Date="_formIkrafttradande" Label="Ikraftträdande (revisionsdatum)" Variant="Variant.Outlined" DateFormat="yyyy-MM-dd" Required="true" /></MudItem>
             </MudGrid>
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SkapaRunda"
-                       Disabled="@(string.IsNullOrWhiteSpace(_formNamn) || _saving)">Skapa</MudButton>
+                       Disabled="@(string.IsNullOrWhiteSpace(_formNamn) || _formIkrafttradande is null || _saving)">Skapa</MudButton>
         </MudPaper>
     }
 
@@ -72,6 +73,7 @@ else
     private int _formAr = 2026;
     private CollectiveAgreementType _formAvtal = CollectiveAgreementType.AB;
     private decimal _formBudget = 10000000m;
+    private DateTime? _formIkrafttradande = DateTime.Today.AddMonths(2);
 
     protected override async Task OnInitializedAsync()
     {
@@ -86,11 +88,11 @@ else
     private async Task SkapaRunda()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        if (string.IsNullOrWhiteSpace(_formNamn)) return;
+        if (string.IsNullOrWhiteSpace(_formNamn) || _formIkrafttradande is null) return;
         _saving = true; _error = null;
         try
         {
-            var runda = SalaryReviewRound.Skapa(_formNamn!, _formAr, _formAvtal, Money.SEK(_formBudget), DateOnly.FromDateTime(DateTime.Today.AddMonths(2)));
+            var runda = SalaryReviewRound.Skapa(_formNamn!, _formAr, _formAvtal, Money.SEK(_formBudget), DateOnly.FromDateTime(_formIkrafttradande.Value));
             db.SalaryReviewRounds.Add(runda);
             await db.SaveChangesAsync();
             _rundor.Insert(0, runda);

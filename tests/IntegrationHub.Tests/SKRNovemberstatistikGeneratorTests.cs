@@ -93,6 +93,20 @@ public class SKRNovemberstatistikGeneratorTests
     }
 
     [Fact]
+    public void Okant_kon_bildar_egen_grupp_i_stallet_for_att_raknas_som_man()
+    {
+        var input = Bygg(2025,
+            Ind("Sjuksköterska", "Man", true, 100m, 40),
+            Ind("Sjuksköterska", "", true, 100m, 35));
+
+        var result = new SKRNovemberstatistikGenerator().Generera(input);
+
+        Assert.Equal(2, result.Grupper.Count);
+        Assert.Contains(result.Grupper, g => g.Kon == "Okänt");
+        Assert.Equal(1, result.Grupper.Single(g => g.Kon == "M").AntalAnstallda);
+    }
+
+    [Fact]
     public void Saknad_personalgrupp_blir_ospecificerad()
     {
         var input = Bygg(2025, Ind("", "Kvinna", true, 100m, 45));

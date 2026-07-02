@@ -31,12 +31,15 @@ public sealed class LASService
         if (accumulation is null)
         {
             accumulation = LASAccumulation.Skapa(anstallId, typ);
-            accumulation.LaggTillPeriod(startDatum, slutDatum);
+            accumulation.LaggTillPeriod(startDatum, slutDatum, form: typ);
             await _repository.AddAsync(accumulation, ct);
         }
         else
         {
-            accumulation.LaggTillPeriod(startDatum, slutDatum);
+            // SAVA- och vikariatstid ackumuleras separat — periodens form skickas med
+            // så att dagarna räknas mot rätt gräns (365 resp. 730 dagar), även när
+            // formen skiljer sig från ackumuleringens ursprungsform.
+            accumulation.LaggTillPeriod(startDatum, slutDatum, form: typ);
             await _repository.UpdateAsync(accumulation, ct);
         }
 

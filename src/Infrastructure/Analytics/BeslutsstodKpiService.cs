@@ -14,6 +14,8 @@ namespace RegionHR.Infrastructure.Analytics;
 /// KPI:er:
 ///  • Personalomsättning % — avslutade anställningar senaste 12 mån / aktivt headcount.
 ///  • Sjukfrånvaro %       — sjukfrånvarodagar senaste 12 mån / (headcount × arbetsdagar).
+///                           Endast godkänd/inskickad frånvaro räknas (Utkast/Avslagen/
+///                           Återkallad exkluderas).
 ///  • Bemanningsgrad %     — tillsatta positioner / bemanningsbara positioner.
 ///  • LAS-riskantal        — aktiva tidsbegränsade anställningar nära LAS-omvandlingsgräns.
 ///  • Lönekostnad/enhet    — arbetskraftskostnad (brutto + arbetsgivaravgift) per månad och per FTE.
@@ -92,6 +94,8 @@ public static class BeslutsstodKpiService
         foreach (var lr in leaveRequests)
         {
             if (lr.Typ != LeaveType.Sjukfranvaro) continue;
+            // Endast godkänd (eller inskickad, ännu ej behandlad) frånvaro är KPI-grundande.
+            if (lr.Status is not (LeaveRequestStatus.Godkand or LeaveRequestStatus.Inskickad)) continue;
             if (lr.FranDatum < fonsterStart || lr.FranDatum > snapshotDatum) continue;
             if (!empById.TryGetValue(lr.AnstallId, out var emp)) continue;
 

@@ -36,6 +36,15 @@ public class PayrollRunConfiguration : IEntityTypeConfiguration<PayrollRun>
 
         builder.HasMany(e => e.Resultat).WithOne().HasForeignKey(r => r.KorningsId);
 
+        // Optimistisk låsning: PostgreSQL:s systemkolumn xmin som samtidighetstoken
+        // (shadow property — Npgsql utelämnar systemkolumnen ur CREATE TABLE;
+        // InMemory-providern behandlar den som vanlig token → tester opåverkade).
+        // Samtidiga skrivningar mot samma lönekörning ger DbUpdateConcurrencyException
+        // i stället för tyst "last write wins".
+        builder.Property<uint>("xmin")
+            .IsRowVersion()
+            .HasColumnName("xmin");
+
         builder.Ignore(e => e.DomainEvents);
         builder.Ignore(e => e.Period);
         builder.Ignore(e => e.UpdatedAt);

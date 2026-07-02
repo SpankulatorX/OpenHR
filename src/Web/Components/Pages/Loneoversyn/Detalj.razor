@@ -4,11 +4,13 @@
 @using RegionHR.SalaryReview.Domain
 @using RegionHR.SharedKernel.Domain
 @using RegionHR.Web.Services
+@using RegionHR.Infrastructure.Payroll
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject NavigationManager Nav
 @inject AuthService Auth
 @inject ISnackbar Snackbar
+@inject PayrollBatchService PayrollBatch
 
 <PageTitle>OpenHR - Löneöversyn</PageTitle>
 
@@ -56,12 +58,16 @@ else
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="3"><MudTextField T="string" Value="@_valdNuvarandeLonText" Label="Nuvarande lön" Variant="Variant.Outlined" ReadOnly="true" /></MudItem>
-                <MudItem xs="12" sm="3"><MudNumericField T="decimal" @bind-Value="_nyLon" Label="Föreslagen lön (kr)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                <MudItem xs="12" sm="3"><MudNumericField T="decimal" @bind-Value="_nyLon" Label="Föreslagen lön (kr)" Variant="Variant.Outlined" Min="0" Immediate="true" /></MudItem>
                 <MudItem xs="12" sm="2"><MudTextField T="string" Value="@OkningPreview" Label="Ökning" Variant="Variant.Outlined" ReadOnly="true" /></MudItem>
             </MudGrid>
-            <MudTextField @bind-Value="_motivering" Label="Motivering" Variant="Variant.Outlined" Lines="2" Class="mt-3" />
+            <MudTextField @bind-Value="_motivering" Label="Motivering" Variant="Variant.Outlined" Lines="2" Class="mt-3" Immediate="true" />
+            @if (ArLonesankning)
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">Föreslagen lön är lägre än nuvarande lön — lönesänkningar kan inte läggas till i en löneöversyn.</MudAlert>
+            }
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="LaggTillForslag"
-                       Disabled="@(_valdKandidat is null || _nyLon <= 0 || string.IsNullOrWhiteSpace(_motivering) || _busy)">Lägg till förslag</MudButton>
+                       Disabled="@(_valdKandidat is null || _nyLon <= 0 || ArLonesankning || string.IsNullOrWhiteSpace(_motivering) || _busy)">Lägg till förslag</MudButton>
         </MudPaper>
     }
 
@@ -150,7 +156,7 @@ else
     {
         <MudAlert Severity="Severity.Success" Class="mb-2">
             Genomförd @(_runda.GenomfordDatum?.ToString("yyyy-MM-dd") ?? "-"). Ny lön applicerad på @AntalGodkanda anställning(ar).
-            Total retroaktiv efterbetalning: <strong>@TotalRetro.ToString("N0") kr</strong> (betalas ut i nästa lönekörning).
+            Total retroaktiv efterbetalning: <strong>@TotalRetro.ToString("N0") kr</strong> (utbetalas via den retroaktiva lönekörning som skapades vid genomförandet — se Lön → Lönekörningar).
         </MudAlert>
     }
 }
@@ -174,11 +180,12 @@ else
 
     private string _valdNuvarandeLonText => _valdKandidat is null ? "-" : $"{_valdKandidat.NuvarandeLon.Amount:N0} kr";
     private string OkningPreview => _valdKandidat is null ? "-" : $"{(_nyLon - _valdKandidat.NuvarandeLon.Amount):N0} kr";
+    private bool ArLonesankning => _valdKandidat is not null && _nyLon > 0 && _nyLon < _valdKandidat.NuvarandeLon.Amount;
     private int AntalAktiva => _runda?.Forslag.Count(f => f.Status != SalaryProposalStatus.Avslagen) ?? 0;
     private int AntalGodkanda => _runda?.Forslag.Count(f => f.Status == SalaryProposalStatus.Godkand) ?? 0;
     private decimal TotalRetro => _runda?.Forslag.Sum(f => f.RetroaktivtBelopp?.Amount ?? 0m) ?? 0m;
 
-    protected override void OnInitialized() => _svc = new LoneoversynService(DbFactory);
+    protected override void OnInitialized() => _svc = new LoneoversynService(DbFactory, PayrollBatch);
 
     protected override async Task OnParametersSetAsync() => await LaddaAsync();
 
@@ -266,6 +273,10 @@ else
         var resultat = await _svc.GenomforAsync(RundaId, genomfordAv);
         _info = $"Löneöversyn genomförd. Ny lön applicerad på {resultat.AntalAnstallda} anställning(ar), " +
                 $"total retroaktiv efterbetalning {resultat.TotalRetroaktivt.Amount:N0} kr.";
+        if (resultat.RetroaktivaKorningar.Count > 0)
+            _info += $" Retroaktiv lönekörning skapad för {resultat.RetroaktivaKorningar.Count} period(er): {string.Join(", ", resultat.RetroaktivaKorningar)}.";
+        if (resultat.RetroaktivaFel.Count > 0)
+            _error = "Retroaktiv lönekörning kunde inte skapas för: " + string.Join("; ", resultat.RetroaktivaFel);
         Snackbar.Add(_info, Severity.Success);
     });
 

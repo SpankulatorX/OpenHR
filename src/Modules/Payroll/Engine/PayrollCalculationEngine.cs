@@ -1,3 +1,4 @@
+using RegionHR.Agreements.Domain;
 using RegionHR.Core.Contracts;
 using RegionHR.SharedKernel.Domain;
 using RegionHR.Payroll.Domain;
@@ -10,15 +11,17 @@ namespace RegionHR.Payroll.Engine;
 ///
 /// Pipeline:
 /// 1. Grundlön (månadslön * sysselsättningsgrad)
-/// 2. Tillägg (OB, övertid, jour)
-/// 3. Frånvaroavdrag (sjuklön, semester)
-/// 4. Bruttolön
-/// 5. Skatteavdrag (skattetabell)
-/// 6. Nettolöneavdrag (utmätning, fackavgift)
-/// 7. Nettolön
-/// 8. Arbetsgivaravgifter
-/// 9. Pension (AKAP-KR)
-/// 10. Semesterlöneskuld
+/// 2. Tillägg (OB inkl. natthöjda satser, övertid, jour, beredskap)
+/// 3. Frånvaroavdrag (sjukavdrag, karensavdrag, föräldraledighetsavdrag, semester)
+///    — frånvaro sänker alltid brutto, sjuklön/utfyllnad kompenserar delvis
+/// 4. Skattefria resersättningar (attesterade resekrav)
+/// 5. Bruttolön
+/// 6. Skatteavdrag (skattetabell, på skattepliktigt brutto)
+/// 7. Nettolöneavdrag (utmätning, fackavgift)
+/// 8. Nettolön
+/// 9. Arbetsgivaravgifter (på avgiftspliktigt underlag)
+/// 10. Pension (AKAP-KR)
+/// 11. Semesterlöneskuld
 /// </summary>
 public sealed class PayrollCalculationEngine
 {
@@ -93,31 +96,72 @@ public sealed class PayrollCalculationEngine
             Kostnadsstalle = input.Kostnadsstalle
         });
 
-        // Steg 2: OB-tillägg
+        // Steg 2: OB-tillägg (O-tillägg enligt AB § 21).
+        // Grundsatsen per kategori hämtas ur regelverket (kollektivavtal + ev. lokala avvikelser).
+        // För O-tilläggstid A (storhelg) och B (helg) tillämpas den natthöjda satsen kl. 22–06
+        // ur den kanoniska tabellen ABOTillaggSatser (AB § 21 anm.), så att natt-timmar
+        // aldrig prissätts med den lägre grundsatsen.
         var obTillagg = Money.Zero;
         if (input.OBTimmar.Count > 0)
         {
-            obTillagg = await BeraknaOBTillaggAsync(employment.Kollektivavtal, input.OBTimmar, ct);
-            result.OBTillagg = obTillagg;
+            var periodDatum = new DateOnly(year, month, 1);
+            var arABAvtal = employment.Kollektivavtal
+                is CollectiveAgreementType.AB or CollectiveAgreementType.HOK;
+
             foreach (var ob in input.OBTimmar)
             {
-                var sats = await _rulesEngine.GetOBRateAsync(employment.Kollektivavtal, ob.Kategori, new DateOnly(year, month, 1), ct);
-                result.LaggTillRad(new PayrollResultLine
+                if (ob.Timmar <= 0m)
+                    continue;
+
+                var grundsats = await _rulesEngine.GetOBRateAsync(employment.Kollektivavtal, ob.Kategori, periodDatum, ct);
+
+                // Natthöjning finns endast för helg (B) och storhelg (A).
+                var nattTimmar = ob.Kategori is OBCategory.Helg or OBCategory.Storhelg
+                    ? Math.Clamp(ob.NattTimmar, 0m, ob.Timmar)
+                    : 0m;
+                var dagTimmar = ob.Timmar - nattTimmar;
+
+                if (dagTimmar > 0m)
                 {
-                    LoneartKod = "1310", Benamning = $"OB-tillägg {ob.Kategori}",
-                    Antal = ob.Timmar, Sats = Money.SEK(sats),
-                    Belopp = Money.SEK(ob.Timmar * sats),
-                    Skattekategori = TaxCategory.Skattepliktig,
-                    ArSemestergrundande = true, ArPensionsgrundande = true
-                });
+                    var belopp = Money.SEK(dagTimmar * grundsats);
+                    obTillagg += belopp;
+                    result.LaggTillRad(new PayrollResultLine
+                    {
+                        LoneartKod = "1310", Benamning = $"OB-tillägg {ob.Kategori}",
+                        Antal = dagTimmar, Sats = Money.SEK(grundsats),
+                        Belopp = belopp,
+                        Skattekategori = TaxCategory.Skattepliktig,
+                        ArSemestergrundande = true, ArPensionsgrundande = true
+                    });
+                }
+
+                if (nattTimmar > 0m)
+                {
+                    var nattsats = arABAvtal
+                        ? ABOTillaggSatser.Nattsats(ob.Kategori, periodDatum)
+                        : grundsats;
+                    var belopp = Money.SEK(nattTimmar * nattsats);
+                    obTillagg += belopp;
+                    result.LaggTillRad(new PayrollResultLine
+                    {
+                        LoneartKod = "1310", Benamning = $"OB-tillägg {ob.Kategori} natt",
+                        Antal = nattTimmar, Sats = Money.SEK(nattsats),
+                        Belopp = belopp,
+                        Skattekategori = TaxCategory.Skattepliktig,
+                        ArSemestergrundande = true, ArPensionsgrundande = true
+                    });
+                }
             }
+
+            result.OBTillagg = obTillagg;
         }
 
         // Steg 2b: Jour
         var jourTillagg = Money.Zero;
         if (input.JourTimmar > 0)
         {
-            var timlon = employment.Manadslon / (38.25m * 52m / 12m);
+            // Timlön enligt AB: månadslön / 165 (samma delare som övertid, AB § 20 mom. 3)
+            var timlon = ABOvertidSatser.Overtidstimlon(employment.Manadslon);
             var jourRegler = await _rulesEngine.GetJourReglerAsync(employment.Kollektivavtal, new DateOnly(year, month, 1), ct);
             var jourSats = timlon * jourRegler.PassivTimlonFaktor;
             jourTillagg = Money.SEK(input.JourTimmar * jourSats);
@@ -136,7 +180,8 @@ public sealed class PayrollCalculationEngine
         var beredskapsTillagg = Money.Zero;
         if (input.BeredskapsTimmar > 0)
         {
-            var timlon = employment.Manadslon / (38.25m * 52m / 12m);
+            // Timlön enligt AB: månadslön / 165
+            var timlon = ABOvertidSatser.Overtidstimlon(employment.Manadslon);
             var beredskapsRegler = await _rulesEngine.GetBeredskapsReglerAsync(employment.Kollektivavtal, new DateOnly(year, month, 1), ct);
             var beredskapsSats = timlon * beredskapsRegler.PassivTimlonFaktor;
             beredskapsTillagg = Money.SEK(input.BeredskapsTimmar * beredskapsSats);
@@ -152,13 +197,17 @@ public sealed class PayrollCalculationEngine
         }
 
         // Steg 3: Övertid
+        // AB § 20 mom. 3: övertidskompensation per övertidstimme = 180 % (enkel) resp.
+        // 240 % (kvalificerad) av timlönen (månadslön / 165). Övertidstimmarna ligger
+        // UTANFÖR den ordinarie arbetstid som månadslönen täcker, därför utges hela
+        // beloppet (inte bara tillägget ovanpå en redan betald timme).
         var overtid = Money.Zero;
         if (input.OvertidTimmar > 0)
         {
-            var timlon = employment.Manadslon / (38.25m * 52m / 12m);
-            // AB 25: Enkel övertid = 180% total (tillägg 80%), Kvalificerad = 240% total (tillägg 140%)
-            // Grundlönen täcker bas 100%, så tillägget är 0.8x resp 1.4x timlön
-            var overtidsSats = input.KvalificeradOvertid ? timlon * 1.4m : timlon * 0.8m;
+            var overtidstimlon = ABOvertidSatser.Overtidstimlon(employment.Manadslon);
+            var overtidsSats = overtidstimlon * (input.KvalificeradOvertid
+                ? ABOvertidSatser.KvalificeradOvertidProcent
+                : ABOvertidSatser.EnkelOvertidProcent);
             overtid = Money.SEK(input.OvertidTimmar * overtidsSats);
             result.Overtidstillagg = overtid;
             result.LaggTillRad(new PayrollResultLine
@@ -171,7 +220,28 @@ public sealed class PayrollCalculationEngine
             });
         }
 
-        // Steg 4: Sjuklön / Karensavdrag
+        // Steg 4: Sjukfrånvaro — sjukavdrag, karensavdrag och sjuklön.
+        // Månadslönen betalas ut i sin helhet i steg 1, därför görs löneavdrag med full
+        // daglön för VARJE sjukfrånvarodag (AB § 28 / Sjuklönelagen). Sjuklön 80 % utges
+        // för dag 2–14; dag 15+ ersätts av Försäkringskassan men löneavdraget kvarstår.
+        // Nettoeffekten är att en sjukmånad alltid ger LÄGRE brutto än en frisk månad.
+        var arbetsdagarIManaden = Math.Max(1, input.ArbetsdagarIManadens);
+        var sjukavdrag = Money.Zero;
+        var sjukdagarTotalt = input.SjukdagarMedLon + input.SjukdagarUtanLon;
+        if (sjukdagarTotalt > 0)
+        {
+            var avdragDaglon = Money.SEK(employment.Manadslon * employment.Sysselsattningsgrad / 100m / arbetsdagarIManaden);
+            sjukavdrag = avdragDaglon * sjukdagarTotalt;
+            result.LaggTillRad(new PayrollResultLine
+            {
+                LoneartKod = "3005", Benamning = "Sjukavdrag",
+                Antal = sjukdagarTotalt, Sats = avdragDaglon.RoundToOren(),
+                Belopp = Money.Zero - sjukavdrag,
+                Skattekategori = TaxCategory.Skattepliktig, ArAvdrag = true,
+                Kostnadsstalle = input.Kostnadsstalle
+            });
+        }
+
         if (input.SjukdagarMedLon > 0)
         {
             var veckolon = Money.SEK(employment.Manadslon * employment.Sysselsattningsgrad / 100m * 12m / 52m);
@@ -198,10 +268,25 @@ public sealed class PayrollCalculationEngine
             });
         }
 
-        // Steg 4b: Föräldralöneutfyllnad per AB
+        // Steg 4b: Föräldraledighet — löneavdrag för hela den lediga perioden plus
+        // föräldralöneutfyllnad per AB. Den lediga tiden är obetald (Försäkringskassan
+        // betalar föräldrapenning); arbetsgivaren drar full daglön och lägger till
+        // utfyllnaden (10 % av daglönen) för dagar med utfyllnadsrätt.
+        var foraldraledighetsavdrag = Money.Zero;
         var foraldraloneUtfyllnad = Money.Zero;
         if (input.ForaldraledigaDagar > 0)
         {
+            var avdragDaglon = Money.SEK(employment.Manadslon * employment.Sysselsattningsgrad / 100m / arbetsdagarIManaden);
+            foraldraledighetsavdrag = avdragDaglon * input.ForaldraledigaDagar;
+            result.LaggTillRad(new PayrollResultLine
+            {
+                LoneartKod = "3210", Benamning = "Föräldraledighetsavdrag",
+                Antal = input.ForaldraledigaDagar, Sats = avdragDaglon.RoundToOren(),
+                Belopp = Money.Zero - foraldraledighetsavdrag,
+                Skattekategori = TaxCategory.Skattepliktig, ArAvdrag = true,
+                Kostnadsstalle = input.Kostnadsstalle
+            });
+
             var foraldraRegler = await _rulesEngine.GetForaldraloneReglerAsync(employment.Kollektivavtal, new DateOnly(year, month, 1), ct);
             // Begränsa till maximalt antal dagar med utfyllnad
             var dagarMedUtfyllnad = Math.Min(input.ForaldraledigaDagar, foraldraRegler.DagarMedUtfyllnad);
@@ -251,10 +336,54 @@ public sealed class PayrollCalculationEngine
             });
         }
 
-        // Steg 6: Beräkna brutto
+        // Steg 5b: Resersättningar från attesterade resekrav (traktamente, milersättning, utlägg).
+        // Satserna följer Skatteverkets schablonbelopp och är därmed skattefria kostnads-
+        // ersättningar: de ingår i utbetalningen men inte i det skattepliktiga underlaget
+        // och är varken semester- eller pensionsgrundande.
+        var reseErsattningSkattefri = Money.Zero;
+        if (input.ReseTraktamente > Money.Zero)
+        {
+            reseErsattningSkattefri += input.ReseTraktamente;
+            result.LaggTillRad(new PayrollResultLine
+            {
+                LoneartKod = "5100", Benamning = "Inrikes traktamente",
+                Antal = 1, Sats = input.ReseTraktamente, Belopp = input.ReseTraktamente,
+                Skattekategori = TaxCategory.Traktamente,
+                Kostnadsstalle = input.Kostnadsstalle
+            });
+        }
+        if (input.ReseMilersattning > Money.Zero)
+        {
+            reseErsattningSkattefri += input.ReseMilersattning;
+            result.LaggTillRad(new PayrollResultLine
+            {
+                LoneartKod = "5200", Benamning = "Milersättning",
+                Antal = 1, Sats = input.ReseMilersattning, Belopp = input.ReseMilersattning,
+                Skattekategori = TaxCategory.Milersattning,
+                Kostnadsstalle = input.Kostnadsstalle
+            });
+        }
+        if (input.ReseUtlagg > Money.Zero)
+        {
+            reseErsattningSkattefri += input.ReseUtlagg;
+            result.LaggTillRad(new PayrollResultLine
+            {
+                LoneartKod = "5300", Benamning = "Utlägg (resekrav)",
+                Antal = 1, Sats = input.ReseUtlagg, Belopp = input.ReseUtlagg,
+                Skattekategori = TaxCategory.Skattefri,
+                Kostnadsstalle = input.Kostnadsstalle
+            });
+        }
+
+        // Steg 6: Beräkna brutto. Frånvaroavdragen (sjukavdrag, karensavdrag och
+        // föräldraledighetsavdrag) dras här — en sjuk- eller föräldraledig månad ger
+        // alltid LÄGRE (aldrig högre) brutto än en fullt arbetad månad.
         result.Brutto = grundlon + obTillagg + jourTillagg + beredskapsTillagg + overtid
-                        + result.Sjuklon + result.Semestertillagg + foraldraloneUtfyllnad - result.Karensavdrag;
-        result.SkattepliktBrutto = result.Brutto; // Förenklad, alla delar skattepliktiga i detta steg
+                        + result.Sjuklon + result.Semestertillagg + foraldraloneUtfyllnad
+                        + reseErsattningSkattefri
+                        - result.Karensavdrag - sjukavdrag - foraldraledighetsavdrag;
+        // Skattepliktigt brutto: allt utom skattefria kostnadsersättningar (resekraven).
+        result.SkattepliktBrutto = result.Brutto - reseErsattningSkattefri;
 
         // Steg 7: Skatteberäkning enligt Skatteverkets skattetabell.
         // Systemet är experten: saknas skatteuppgifter på den anställde faller vi tillbaka
@@ -284,9 +413,11 @@ public sealed class PayrollCalculationEngine
         // Steg 9: Netto
         result.Netto = result.Brutto - result.Skatt - result.Loneutmatning - result.Fackavgift - result.OvrigaAvdrag;
 
-        // Steg 10: Arbetsgivaravgifter (satsen beror på födelseår + inkomstår/månad)
+        // Steg 10: Arbetsgivaravgifter (satsen beror på födelseår + inkomstår/månad).
+        // Underlaget är den avgiftspliktiga ersättningen — skattefria kostnadsersättningar
+        // (traktamente, milersättning, utlägg) ingår inte.
         result.ArbetsgivaravgiftSats = BeraknaArbetsgivaravgiftSats(employee, year, month);
-        result.Arbetsgivaravgifter = BeraknaArbetsgivaravgiftBelopp(result.Brutto, employee, year, month).RoundToKronor();
+        result.Arbetsgivaravgifter = BeraknaArbetsgivaravgiftBelopp(result.SkattepliktBrutto, employee, year, month).RoundToKronor();
 
         // Steg 11: Pension AKAP-KR
         result.Pensionsgrundande = Money.SEK(result.Rader
@@ -308,18 +439,6 @@ public sealed class PayrollCalculationEngine
 
         // Proportionera vid del av månad
         return Money.SEK(fullLon * arbetadeDagar / arbetsdagarIManaden);
-    }
-
-    private async Task<Money> BeraknaOBTillaggAsync(
-        CollectiveAgreementType avtal, List<OBInput> obTimmar, CancellationToken ct)
-    {
-        var total = 0m;
-        foreach (var ob in obTimmar)
-        {
-            var rate = await _rulesEngine.GetOBRateAsync(avtal, ob.Kategori, DateOnly.FromDateTime(DateTime.Today), ct);
-            total += ob.Timmar * rate;
-        }
-        return Money.SEK(total);
     }
 
     /// <summary>
@@ -429,6 +548,13 @@ public sealed class PayrollInput
     public decimal OvertidTimmar { get; set; }
     public bool KvalificeradOvertid { get; set; }
     public int SjukdagarMedLon { get; set; }
+
+    /// <summary>
+    /// Sjukfrånvarodagar utan sjuklön (dag 15+, ersätts av Försäkringskassan).
+    /// Löneavdrag görs även för dessa dagar.
+    /// </summary>
+    public int SjukdagarUtanLon { get; set; }
+
     public int SemesterdagarUttagna { get; set; }
     public Money Loneutmatning { get; set; } = Money.Zero;
     public Money Fackavgift { get; set; } = Money.Zero;
@@ -436,10 +562,22 @@ public sealed class PayrollInput
     public decimal JourTimmar { get; set; }
     public decimal BeredskapsTimmar { get; set; }
     public int ForaldraledigaDagar { get; set; }
+
+    // Resersättningar från attesterade (klara för utbetalning) resekrav i Travel-modulen.
+    // Satserna följer Skatteverkets schablonbelopp → skattefria kostnadsersättningar.
+    public Money ReseTraktamente { get; set; } = Money.Zero;
+    public Money ReseMilersattning { get; set; } = Money.Zero;
+    public Money ReseUtlagg { get; set; } = Money.Zero;
 }
 
 public sealed class OBInput
 {
     public OBCategory Kategori { get; set; }
     public decimal Timmar { get; set; }
+
+    /// <summary>
+    /// Andel av <see cref="Timmar"/> som ligger kl. 22.00–06.00. Används för den
+    /// natthöjda O-satsen för helg (B) och storhelg (A) enligt AB § 21 anm.
+    /// </summary>
+    public decimal NattTimmar { get; set; }
 }

@@ -40,18 +40,24 @@ public static class DependencyInjection
         services.AddScoped<IDomainEventDispatcher, DomainEventDispatcher>();
         services.AddScoped<DomainEventInterceptor>();
 
-        // Audit interceptor
-        var auditInterceptor = new AuditInterceptor();
+        // Audit interceptor — scoped så att ICurrentUser (registreras i webblagret) kan
+        // injiceras och granskningsposter stämplas med den faktiska användaren.
+        // När ICurrentUser inte är registrerad (API:t, tester) använder DI
+        // konstruktorns default (null) → stämpeln blir "system" som tidigare.
+        services.AddScoped<AuditInterceptor>();
 
         // DbContext
         if (useInMemory)
         {
             services.AddDbContext<RegionHRDbContext>((sp, options) =>
                 options.UseInMemoryDatabase("RegionHR-Dev")
-                    .AddInterceptors(auditInterceptor, sp.GetRequiredService<DomainEventInterceptor>()));
+                    .AddInterceptors(sp.GetRequiredService<AuditInterceptor>(), sp.GetRequiredService<DomainEventInterceptor>()));
 
-            services.AddDbContextFactory<RegionHRDbContext>(options =>
-                options.UseInMemoryDatabase("RegionHR-Dev"), ServiceLifetime.Scoped);
+            // Factory-contexterna (de flesta Blazor-sidorna) MÅSTE ha samma interceptors,
+            // annars auditloggas/dispatchas inget för ändringar gjorda via IDbContextFactory.
+            services.AddDbContextFactory<RegionHRDbContext>((sp, options) =>
+                options.UseInMemoryDatabase("RegionHR-Dev")
+                    .AddInterceptors(sp.GetRequiredService<AuditInterceptor>(), sp.GetRequiredService<DomainEventInterceptor>()), ServiceLifetime.Scoped);
         }
         else
         {
@@ -66,13 +72,16 @@ public static class DependencyInjection
                 {
                     npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "public");
                 })
-                .AddInterceptors(auditInterceptor, sp.GetRequiredService<DomainEventInterceptor>()));
+                .AddInterceptors(sp.GetRequiredService<AuditInterceptor>(), sp.GetRequiredService<DomainEventInterceptor>()));
 
-            services.AddDbContextFactory<RegionHRDbContext>(options =>
+            // Factory-contexterna (de flesta Blazor-sidorna) MÅSTE ha samma interceptors,
+            // annars auditloggas/dispatchas inget för ändringar gjorda via IDbContextFactory.
+            services.AddDbContextFactory<RegionHRDbContext>((sp, options) =>
                 options.UseNpgsql(dataSource, npgsql =>
                 {
                     npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "public");
-                }), ServiceLifetime.Scoped);
+                })
+                .AddInterceptors(sp.GetRequiredService<AuditInterceptor>(), sp.GetRequiredService<DomainEventInterceptor>()), ServiceLifetime.Scoped);
         }
 
         // Repositories

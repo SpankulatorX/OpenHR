@@ -125,7 +125,8 @@ public class RouteAccessPolicyTests
         Assert.True(RouteAccessPolicy.IsAllowed(path, Hr));
     }
 
-    // ── Admin: TILLÅTEN överallt ──
+    // ── Admin: TILLÅTEN för alla registrerade rutter ──
+    // (Okända rutter nekas numera även Admin — se UnknownRoute_IsDenied_ForEveryone.)
     [Theory]
     [InlineData("/")]
     [InlineData("/audit")]
@@ -133,9 +134,23 @@ public class RouteAccessPolicyTests
     [InlineData("/lon/korningar")]
     [InlineData("/admin/konfiguration")]
     [InlineData("/anstallda/ny")]
-    [InlineData("/nagon/okand/rutt")]
+    [InlineData("/las")]
+    [InlineData("/anpassat/kundobjekt")]
     public void Admin_IsAllowed_Everywhere(string path)
     {
+        Assert.True(RouteAccessPolicy.IsAllowed(path, Admin));
+    }
+
+    // ── LAS och anpassade objekt: HR/Admin, inte Chef/Anställd ──
+    [Theory]
+    [InlineData("/las")]
+    [InlineData("/anpassat")]
+    [InlineData("/anpassat/kundobjekt")]
+    public void LasAndAnpassat_AreHrAdminOnly(string path)
+    {
+        Assert.False(RouteAccessPolicy.IsAllowed(path, Anstalld));
+        Assert.False(RouteAccessPolicy.IsAllowed(path, Chef));
+        Assert.True(RouteAccessPolicy.IsAllowed(path, Hr));
         Assert.True(RouteAccessPolicy.IsAllowed(path, Admin));
     }
 
@@ -174,11 +189,15 @@ public class RouteAccessPolicyTests
         Assert.True(RouteAccessPolicy.IsAllowed(path, Hr));
     }
 
-    // ── Okänd rutt: fail-safe = kräver minst inloggning ──
+    // ── Okänd rutt: fail-closed = NEKAS för alla tills en regel uttryckligen tillåter ──
     [Fact]
-    public void UnknownRoute_RequiresAuthentication()
+    public void UnknownRoute_IsDenied_ForEveryone()
     {
         Assert.False(RouteAccessPolicy.IsAllowed("/nagon/helt/okand/rutt", null));
-        Assert.True(RouteAccessPolicy.IsAllowed("/nagon/helt/okand/rutt", Anstalld));
+        Assert.False(RouteAccessPolicy.IsAllowed("/nagon/helt/okand/rutt", Anstalld));
+        Assert.False(RouteAccessPolicy.IsAllowed("/nagon/helt/okand/rutt", Chef));
+        Assert.False(RouteAccessPolicy.IsAllowed("/nagon/helt/okand/rutt", Hr));
+        Assert.False(RouteAccessPolicy.IsAllowed("/nagon/helt/okand/rutt", Admin));
+        Assert.Empty(RouteAccessPolicy.AllowedRolesFor("/nagon/helt/okand/rutt"));
     }
 }

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RegionHR.Analytics.Domain;
+using RegionHR.Core.Domain;
 using RegionHR.Infrastructure.Persistence;
 using RegionHR.Leave.Domain;
 using RegionHR.Positions.Domain;
@@ -80,22 +81,33 @@ public class KPICalculationService
     }
 
     /// <summary>
-    /// Headcount: antal aktiva anställningar (öppen slutdatum eller slutdatum i framtiden).
+    /// Anställningar som är aktiva på angivet datum: påbörjade (Start &lt;= datum) och
+    /// med öppet slutdatum eller slutdatum på/efter datumet. Framtida (ej påbörjade)
+    /// anställningar räknas inte, i linje med BeslutsstodKpiService/DateRange.IsActiveOn.
+    /// </summary>
+    private IQueryable<Employment> AktivaAnstallningar(DateOnly datum) =>
+        _db.Employments.Where(e =>
+            e.Giltighetsperiod.Start <= datum &&
+            (e.Giltighetsperiod.End == null || e.Giltighetsperiod.End >= datum));
+
+    /// <summary>
+    /// Headcount: antal individer (distinkta anställda) med minst en aktiv anställning.
+    /// En person med flera parallella anställningar räknas en gång.
     /// </summary>
     private async Task<decimal> CalculateHeadcountAsync(DateOnly today, CancellationToken ct)
     {
-        return await _db.Employments
-            .CountAsync(e => e.Giltighetsperiod.End == null || e.Giltighetsperiod.End > today, ct);
+        return await AktivaAnstallningar(today)
+            .Select(e => e.AnstallId)
+            .Distinct()
+            .CountAsync(ct);
     }
 
     /// <summary>
-    /// FTE (heltidsekvivalenter): summa sysselsättningsgrad / 100.
+    /// FTE (heltidsekvivalenter): summa sysselsättningsgrad / 100 för aktiva anställningar.
     /// </summary>
     private async Task<decimal> CalculateFTEAsync(DateOnly today, CancellationToken ct)
     {
-        var activeEmployments = await _db.Employments
-            .Where(e => e.Giltighetsperiod.End == null || e.Giltighetsperiod.End > today)
-            .ToListAsync(ct);
+        var activeEmployments = await AktivaAnstallningar(today).ToListAsync(ct);
 
         if (activeEmployments.Count == 0) return 0m;
 
@@ -131,17 +143,17 @@ public class KPICalculationService
                 e.Giltighetsperiod.End >= twelveMonthsAgo &&
                 e.Giltighetsperiod.End <= today, ct);
 
-        var currentHeadcount = await _db.Employments
-            .CountAsync(e => e.Giltighetsperiod.End == null || e.Giltighetsperiod.End > today, ct);
+        var currentHeadcount = await CalculateHeadcountAsync(today, ct);
 
         if (currentHeadcount == 0) return 0m;
 
-        return (decimal)terminatedCount / currentHeadcount * 100m;
+        return terminatedCount / currentHeadcount * 100m;
     }
 
     /// <summary>
     /// Sjukfrånvaro %: sjukdagar under perioden / (headcount * arbetsdagar i perioden) * 100.
-    /// Periodsformat: "YYYY-QN" (t.ex. "2026-Q1").
+    /// Endast godkänd (eller inskickad, ännu ej behandlad) frånvaro räknas —
+    /// Utkast/Avslagen/Återkallad exkluderas. Periodsformat: "YYYY-QN" (t.ex. "2026-Q1").
     /// </summary>
     private async Task<decimal> CalculateSickLeavePercentAsync(string period, DateOnly today, CancellationToken ct)
     {
@@ -149,12 +161,12 @@ public class KPICalculationService
 
         var totalSickDays = await _db.LeaveRequests
             .Where(r => r.Typ == LeaveType.Sjukfranvaro &&
+                        (r.Status == LeaveRequestStatus.Godkand || r.Status == LeaveRequestStatus.Inskickad) &&
                         r.FranDatum >= periodStart &&
                         r.FranDatum <= periodEnd)
             .SumAsync(r => r.AntalDagar, ct);
 
-        var headcount = await _db.Employments
-            .CountAsync(e => e.Giltighetsperiod.End == null || e.Giltighetsperiod.End > today, ct);
+        var headcount = await CalculateHeadcountAsync(today, ct);
 
         if (headcount == 0) return 0m;
 

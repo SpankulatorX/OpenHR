@@ -87,25 +87,60 @@ else
 
     private async Task GodkannSwap(SwapVm vm)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) { _error = "Kräver kopplad anställd."; return; }
         try
         {
-            vm.Entity.Godkann(Auth.UserName ?? "Chef");
+            // Ladda och mutera i SAMMA context som SaveChanges — annars är entiteten
+            // detached (laddad i en redan disposad context) och inget persisteras.
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var swapId = vm.Entity.Id;
+            var swap = await db.ShiftSwapRequests.FirstOrDefaultAsync(s => s.Id == swapId);
+            if (swap is null) { _actionMsg = "Passbytet hittades inte."; _actionSev = Severity.Error; return; }
+
+            swap.Godkann(Auth.UserName ?? "Chef");
+
+            // Verkställ bytet i schemat: det ursprungliga passet övergår till den som
+            // accepterat, och ett eventuellt ersättningspass övergår till den som begärde.
+            if (swap.ErbjodsAv.HasValue)
+            {
+                var ursprungligtPass = await db.ScheduledShifts
+                    .FirstOrDefaultAsync(p => p.Id == swap.UrsprungligtPassId);
+                if (ursprungligtPass is not null)
+                    ursprungligtPass.AnstallId = swap.ErbjodsAv.Value;
+            }
+            if (swap.ErsattningsPassId.HasValue)
+            {
+                var ersattningsPass = await db.ScheduledShifts
+                    .FirstOrDefaultAsync(p => p.Id == swap.ErsattningsPassId.Value);
+                if (ersattningsPass is not null)
+                    ersattningsPass.AnstallId = swap.BegardAv;
+            }
+
             await db.SaveChangesAsync();
-            _actionMsg = $"Passbyte godkänt."; _actionSev = Severity.Success;
+
+            var idx = _rader.IndexOf(vm);
+            if (idx >= 0) _rader[idx] = vm with { Status = swap.Status, Entity = swap };
+            _actionMsg = $"Passbyte godkänt — schemapasset har flyttats."; _actionSev = Severity.Success;
         }
         catch (Exception ex) { _actionMsg = $"Fel: {ex.Message}"; _actionSev = Severity.Error; }
     }
 
     private async Task NekaSwap(SwapVm vm)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) { _error = "Kräver kopplad anställd."; return; }
         try
         {
-            vm.Entity.Avvisa(Auth.UserName ?? "Chef", "Nekat av chef");
+            // Ladda och mutera i SAMMA context som SaveChanges — annars persisteras inget.
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var swapId = vm.Entity.Id;
+            var swap = await db.ShiftSwapRequests.FirstOrDefaultAsync(s => s.Id == swapId);
+            if (swap is null) { _actionMsg = "Passbytet hittades inte."; _actionSev = Severity.Error; return; }
+
+            swap.Avvisa(Auth.UserName ?? "Chef", "Nekat av chef");
             await db.SaveChangesAsync();
+
+            var idx = _rader.IndexOf(vm);
+            if (idx >= 0) _rader[idx] = vm with { Status = swap.Status, Entity = swap };
             _actionMsg = $"Passbyte nekat."; _actionSev = Severity.Warning;
         }
         catch (Exception ex) { _actionMsg = $"Fel: {ex.Message}"; _actionSev = Severity.Error; }
