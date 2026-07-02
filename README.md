@@ -4,15 +4,15 @@
 
 OpenHR ar ett personalhanteringssystem byggt for att ersatta HEROMA och andra proprietara HR-system inom svensk offentlig sektor. Byggt med oppen kallkod (AGPL-3.0), svensk arbetsratt, kollektivavtal och GDPR.
 
-> **OpenHR 2.1** — 38 moduler, 189 sidor, 217 domanfiler, 1 637 tester (alla grona), 329/330 i18n-nycklar (sv+en). Se [2.0 Expansion](#20-expansion) nedan.
+> **OpenHR 2.2** — 38 moduler, 214 sidor, 240 domanfiler, **2 165 tester (alla grona)**, 329/330 i18n-nycklar (sv+en). Bygg: `dotnet test RegionHR.sln`.
 
 ## Status & begransningar (las forst)
 
-OpenHR ar en **fungerande, testad demonstrator** — inte en driftsatt Heroma-ersattare an. Vad som ar pa riktigt vs demo:
+OpenHR ar en **fungerande, testad demonstrator** — inte en skarp driftsatt Heroma-ersattare an, men tacker nu regionens nio funktionella delprojekt OCH storre delen av integrationslandskapet (IT-arkitektur "Personalstod v7"). Vad som ar pa riktigt vs demo:
 
-- **Pa riktigt:** loneberakning med korrekta 2026-varden (skattetabell, AB O-tillagg, arbetsgivaravgift, traktamente), hela HR-livscykeln (anstalla→schema→tid→lon→utbetalningsfil), rollbaserad behorighet (Anstalld nar aldrig lon/audit/admin via URL), 1 637 grona tester.
-- **Demo/simulering (kraver externa avtal for skarp drift):** inloggning (BankID/SITHS ar simulerad — riktig e-legitimation kraver avtal med Finansiell ID-Teknik/Inera + SITHS-cert), HSA-katalogen (sandbox-adapter — skarp koppling kraver Inera-avtal), bank-/Skatteverket-filer genereras korrekt men skickas inte automatiskt (manuell inlamning). Se `docs/drift-reservloneplan.md`.
-- **Aterstar for produktion:** lasttest for 11 000 samtidiga anvandare, skarpa integrationer, drift-SLA. Se [gap-analys](docs/gap-analysis-enterprise-hr.md).
+- **Pa riktigt:** loneberakning med korrekta 2026-varden (skattetabell, AB O-tillagg, arbetsgivaravgift, traktamente); hela HR-livscykeln (anstalla→schema→tid→lon→utbetalningsfil); rollbaserad URL-behorighet (Anstalld nar aldrig lon/audit/admin); lonefloden (utmatning/fackavgift, tolkersattning, ersattning fortroendevalda); AKAP-KR-pension; LAS auto-kedja; behovsstyrd vardschema-automatik; e-arkiv (arkivlagen); SCORM/e-learning; web push; BI/DW-export + realtids-beslutsstod; KLASSA-informationsklassning; **integrationsramverk** (register + SFTP-transport + jobb-runner + korningslogg + overvakning) med filgeneratorer/adaptrar for AGI, pain.001, KPA-pension, FK-anmalan, SIE/Raindance-kontering, folkbokforing-import, KOLL-export, SCB/SKR-statistik. 2 165 grona tester.
+- **Demo/simulering (kraver externa avtal for skarp drift):** inloggning (BankID/SITHS simulerad; Entra/OIDC ar config-ready via `appsettings` "Oidc"); HSA-katalogen (sandbox); skarp natverkstransport till bank/Forsakringskassan/KPA/Skatteverket-Navet/Inera/Health Connect — filformaten ar byggda + config-ready, bara den avtalsbundna kopplingen fattas. Se `docs/drift-reservloneplan.md`.
+- **Aterstar for produktion:** horisontell skalning for 11 000 anvandare (lasttest: ~1,1 MiB/circuit, median 14 ms → en 2 GB-instans klarar ~1 500 samtidiga; 11k = 2–4 instanser bakom lastbalanserare), skarpa integrationer (avtal), formell KLASSA-riskanalys, drift-SLA. Se [gap-analys](docs/gap-analysis-enterprise-hr.md).
 
 ## Funktionsstatus
 
@@ -100,7 +100,7 @@ Alla rapportvyer laser fran verklig DB-data:
 - **0 Guid.Empty** i personalbundna floden
 
 ### Internationalisering (i18n)
-- **328 nycklar** i sv + en (SharedResources.sv.resx / SharedResources.en.resx)
+- **329/330 nycklar** i sv + en (SharedResources.sv.resx / SharedResources.en.resx)
 - NavMenu, TopBar, formularlabels, felmeddelanden — allt via IStringLocalizer
 - Sprakvaxling via cookie + page reload
 - Forberett for fler sprak (lagg till .resx-fil)
@@ -176,8 +176,8 @@ Dessa kraver extern infrastruktur eller livekopplingar och ar medvetet inte impl
 | ORM | EF Core 9 med migrationer |
 | Arkitektur | Modular Monolith (38 moduler) |
 | Tema | Nordic Refined (light/dark mode) |
-| Auth | Demo-auth med EmployeeId i session |
-| i18n | 328 nycklar, sv + en (IStringLocalizer) |
+| Auth | Rollbaserad (ClaimsPrincipal); demo-login + Entra/OIDC config-ready |
+| i18n | 329/330 nycklar, sv + en (IStringLocalizer) |
 | PWA | Offline cache, push-notiser, background sync |
 | CI/CD | GitHub Actions |
 | Container | Docker Compose |
@@ -208,7 +208,7 @@ Oppna http://localhost:5076/login
 
 ## Datamodell
 
-**207 domanentities** fordelade pa 38 moduler. Alla med EF Core-konfiguration, migrationer och seeddata.
+**240 domanfiler** fordelade pa 38 moduler. Alla med EF Core-konfiguration, migrationer och seeddata.
 
 Nyckelentities (urval): Employee, Employment, OrganizationUnit, PayrollRun, PayrollResult, LeaveRequest, VacationBalance, Case, ScheduledShift, Timesheet, Position, Vacancy, Policy, PulseSurvey, WellnessClaim, Announcement, Recognition, SuccessionPlan, FeedbackRound, MBLNegotiation, ReferenceCheck, InsuranceCoverage, DelegatedAccess, TravelClaim, OffboardingCase, RehabCase, LASAccumulation, Certification, Skill, Course, Notification, PushSubscription, AuditEntry, Document, CollectiveAgreement, AutomationRule, MigrationProject, SalaryBand, BonusProgram, BenefitPlan, KpiDefinition, PredictiveModel, Vendor, FrameworkAgreement, DemandForecast, CareerPath, WebhookSubscription, ApiKey, CustomObjectDefinition, MarketplacePlugin, ServiceRequest, SLADefinition, KnowledgeArticle, ConversationSession, Grievance, GrievanceInvestigation, OpenShift, ShiftBid, PayTransparencyReport, PayGapAnalysis.
 
@@ -216,7 +216,7 @@ Nyckelentities (urval): Employee, Employment, OrganizationUnit, PayrollRun, Payr
 
 ```bash
 dotnet build RegionHR.sln       # 0 errors
-dotnet test RegionHR.sln        # 1 116 tester, 0 failures
+dotnet test RegionHR.sln        # 2 165 tester, 0 failures
 dotnet run --project src/Web/RegionHR.Web.csproj
 ```
 
