@@ -1,0 +1,289 @@
+@page "/lon/tolkersattning"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Payroll.Domain
+@using RegionHR.SharedKernel.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - Tolkersättning</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Tolkersättning</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Ersättning till tolkar och översättare — ett eget ersättningsflöde för externa uppdragstagare:
+    uppdrag → ersättning → utbetalningsunderlag. Preliminärskatt dras på arvodet när tolken saknar F-skatt;
+    reseersättningen är skattefri.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else
+{
+    @if (_success != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+    }
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <div class="d-flex justify-space-between align-center mb-3">
+            <MudText Typo="Typo.h6" Style="font-weight: 600;">Registrerade tolkuppdrag</MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="@(() => _showForm = !_showForm)">Registrera uppdrag</MudButton>
+        </div>
+
+        @if (_showForm)
+        {
+            <MudPaper Class="pa-4 mb-4" Elevation="1" Style="border-left: 4px solid var(--mud-palette-primary);">
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" sm="6"><MudTextField @bind-Value="_tolkNamn" Label="Tolk/översättare (namn eller firma)" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="3"><MudTextField @bind-Value="_personnr" Label="Personnummer (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="3"><MudTextField @bind-Value="_sprak" Label="Språk" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSelect T="TolkuppdragTyp" @bind-Value="_typ" Label="Uppdragstyp" Variant="Variant.Outlined">
+                            <MudSelectItem T="TolkuppdragTyp" Value="TolkuppdragTyp.Kontakttolkning">Kontakttolkning</MudSelectItem>
+                            <MudSelectItem T="TolkuppdragTyp" Value="TolkuppdragTyp.Telefontolkning">Telefontolkning</MudSelectItem>
+                            <MudSelectItem T="TolkuppdragTyp" Value="TolkuppdragTyp.Distanstolkning">Distanstolkning</MudSelectItem>
+                            <MudSelectItem T="TolkuppdragTyp" Value="TolkuppdragTyp.SkriftligOversattning">Skriftlig översättning</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4"><MudDatePicker @bind-Date="_datum" Label="Uppdragsdatum" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudTextField @bind-Value="_enhet" Label="Beställande enhet (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="3"><MudNumericField T="decimal" @bind-Value="_timmar" Label="Antal timmar" Variant="Variant.Outlined" Min="0" HideSpinButtons="false" /></MudItem>
+                    <MudItem xs="12" sm="3"><MudNumericField T="decimal" @bind-Value="_timarvode" Label="Timarvode (kr)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                    <MudItem xs="12" sm="3"><MudNumericField T="decimal" @bind-Value="_forberedelse" Label="Förberedelsearvode (kr)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                    <MudItem xs="12" sm="3"><MudNumericField T="decimal" @bind-Value="_resa" Label="Reseersättning (kr)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudSwitch T="bool" @bind-Value="_fskatt" Color="Color.Primary" Label="Tolken har F-skatt (fakturerar, inget skatteavdrag)" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudTextField @bind-Value="_referens" Label="Referens (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                </MudGrid>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="Spara"
+                           Disabled="@(_saving || string.IsNullOrWhiteSpace(_tolkNamn) || string.IsNullOrWhiteSpace(_sprak) || _datum == null)">
+                    @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                    Spara
+                </MudButton>
+            </MudPaper>
+        }
+
+        @if (_poster.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga tolkuppdrag registrerade.</MudAlert>
+        }
+        else
+        {
+            <MudSimpleTable Hover="true" Elevation="1">
+                <thead><tr><th>Datum</th><th>Tolk</th><th>Språk</th><th>Typ</th><th>Arvode</th><th>Skatt</th><th>Netto</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var p in _poster)
+                    {
+                        <tr>
+                            <td>@p.Uppdragsdatum.ToString("yyyy-MM-dd")</td>
+                            <td><strong>@p.TolkNamn</strong></td>
+                            <td>@p.Sprak</td>
+                            <td>@TypText(p.Typ)</td>
+                            <td>@Kr(p.BeraknaArvode().Amount)</td>
+                            <td>@Kr(p.BeraknaSkatt().Amount)</td>
+                            <td>@Kr(p.BeraknaNetto().Amount)</td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@StatusColor(p.Status)">@StatusText(p.Status)</MudChip></td>
+                            <td>
+                                @if (p.Status == TolkersattningStatus.Registrerad)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Godkann(p.Id))">Godkänn</MudButton>
+                                }
+                                else if (p.Status == TolkersattningStatus.Godkand)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Success" OnClick="@(() => MarkeraUtbetald(p.Id))">Markera utbetald</MudButton>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">Utbetalningsunderlag</MudText>
+        <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+            Skapar ett utbetalningsunderlag (CSV, ISO-8859-1) för samtliga <strong>godkända</strong> tolkuppdrag.
+            Summerar arvode, skatt och netto per uppdrag.
+        </MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="4"><MudTextField @bind-Value="_period" Label="Period (ÅÅÅÅ-MM)" Variant="Variant.Outlined" /></MudItem>
+            <MudItem xs="12" sm="4"><MudTextField @bind-Value="_orgnr" Label="Organisationsnummer" Variant="Variant.Outlined" /></MudItem>
+            <MudItem xs="12" sm="4"><MudDatePicker @bind-Date="_utbetalning" Label="Utbetalningsdatum" Variant="Variant.Outlined" /></MudItem>
+        </MudGrid>
+        <MudText Typo="Typo.body2" Class="mt-2">Godkända uppdrag i underlaget: <strong>@_poster.Count(p => p.Status == TolkersattningStatus.Godkand) st</strong></MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Secondary" Class="mt-3" StartIcon="@Icons.Material.Filled.Download"
+                   Disabled="@(_saving || _poster.Count(p => p.Status == TolkersattningStatus.Godkand) == 0 || string.IsNullOrWhiteSpace(_orgnr))"
+                   OnClick="GeneraUnderlag">
+            Ladda ner underlag
+        </MudButton>
+    </MudPaper>
+}
+
+@code {
+    private List<RegionHR.Payroll.Domain.Tolkersattning> _poster = [];
+    private bool _loading = true, _saving, _showForm;
+    private string? _error, _success;
+
+    // Formulär
+    private string _tolkNamn = "";
+    private string _personnr = "";
+    private string _sprak = "";
+    private TolkuppdragTyp _typ = TolkuppdragTyp.Kontakttolkning;
+    private DateTime? _datum = DateTime.Today;
+    private string _enhet = "";
+    private decimal _timmar = 1m;
+    private decimal _timarvode;
+    private decimal _forberedelse;
+    private decimal _resa;
+    private bool _fskatt;
+    private string _referens = "";
+
+    // Underlag
+    private string _period = DateTime.Today.ToString("yyyy-MM");
+    private string _orgnr = "232100000164";
+    private DateTime? _utbetalning = DateTime.Today;
+
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _poster = await db.Set<RegionHR.Payroll.Domain.Tolkersattning>().OrderByDescending(p => p.Uppdragsdatum).ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta tolkuppdrag: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task Spara()
+    {
+        if (_datum is null) return;
+        _saving = true; _error = null;
+        try
+        {
+            var post = RegionHR.Payroll.Domain.Tolkersattning.Skapa(
+                _tolkNamn, _sprak, _typ, DateOnly.FromDateTime(_datum.Value),
+                _timmar, Money.SEK(_timarvode),
+                forberedelsearvode: Money.SEK(_forberedelse),
+                reseersattning: Money.SEK(_resa),
+                harFSkatt: _fskatt,
+                tolkPersonnummer: _personnr,
+                bestallandeEnhet: _enhet,
+                referens: _referens,
+                registreradAv: "HR");
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Set<RegionHR.Payroll.Domain.Tolkersattning>().Add(post);
+            await db.SaveChangesAsync();
+
+            _success = "Tolkuppdrag registrerat.";
+            _showForm = false;
+            ResetForm();
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte spara uppdrag: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task Godkann(Guid id)
+    {
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var post = await db.Set<RegionHR.Payroll.Domain.Tolkersattning>().FirstOrDefaultAsync(p => p.Id == id);
+            if (post is null) return;
+            post.Godkann();
+            await db.SaveChangesAsync();
+            _success = "Uppdraget godkänt för utbetalning.";
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte godkänna: {ex.Message}"; }
+    }
+
+    private async Task MarkeraUtbetald(Guid id)
+    {
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var post = await db.Set<RegionHR.Payroll.Domain.Tolkersattning>().FirstOrDefaultAsync(p => p.Id == id);
+            if (post is null) return;
+            post.MarkeraUtbetald();
+            await db.SaveChangesAsync();
+            _success = "Uppdraget markerat som utbetalt.";
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte markera utbetald: {ex.Message}"; }
+    }
+
+    private async Task GeneraUnderlag()
+    {
+        _saving = true; _error = null; _success = null;
+        try
+        {
+            var godkanda = _poster.Where(p => p.Status == TolkersattningStatus.Godkand).ToList();
+            if (godkanda.Count == 0)
+            {
+                _error = "Inga godkända uppdrag att ta med i underlaget.";
+                return;
+            }
+
+            var input = new TolkersattningUnderlagInput(
+                _orgnr.Trim(), "Region Örebro län", _period,
+                DateOnly.FromDateTime(_utbetalning ?? DateTime.Today), godkanda);
+            var fil = new TolkersattningUnderlagGenerator().Generera(input);
+
+            var base64 = Convert.ToBase64String(fil.Content);
+            await JS.InvokeVoidAsync("downloadFile", fil.FileName, base64, fil.MimeType);
+
+            _success = $"Underlag genererat med {godkanda.Count} uppdrag.";
+        }
+        catch (Exception ex) { _error = $"Kunde inte skapa underlaget: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private void ResetForm()
+    {
+        _tolkNamn = ""; _personnr = ""; _sprak = ""; _typ = TolkuppdragTyp.Kontakttolkning;
+        _datum = DateTime.Today; _enhet = ""; _timmar = 1m; _timarvode = 0; _forberedelse = 0;
+        _resa = 0; _fskatt = false; _referens = "";
+    }
+
+    private static string Kr(decimal amount) => $"{amount:N0} kr";
+
+    private static string TypText(TolkuppdragTyp typ) => typ switch
+    {
+        TolkuppdragTyp.Kontakttolkning => "Kontakttolkning",
+        TolkuppdragTyp.Telefontolkning => "Telefontolkning",
+        TolkuppdragTyp.Distanstolkning => "Distanstolkning",
+        TolkuppdragTyp.SkriftligOversattning => "Översättning",
+        _ => "Kontakttolkning"
+    };
+
+    private static string StatusText(TolkersattningStatus status) => status switch
+    {
+        TolkersattningStatus.Registrerad => "Registrerad",
+        TolkersattningStatus.Godkand => "Godkänd",
+        TolkersattningStatus.Utbetald => "Utbetald",
+        _ => status.ToString()
+    };
+
+    private static Color StatusColor(TolkersattningStatus status) => status switch
+    {
+        TolkersattningStatus.Registrerad => Color.Default,
+        TolkersattningStatus.Godkand => Color.Primary,
+        TolkersattningStatus.Utbetald => Color.Success,
+        _ => Color.Default
+    };
+}

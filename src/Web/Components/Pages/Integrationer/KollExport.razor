@@ -1,0 +1,223 @@
+@page "/integrationer/koll"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Text
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.IntegrationHub.Adapters.KOLL
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - KOLL-katalogexport</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/integrationer" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">KOLL-katalogexport (RÖL katalogtjänst)</MudText>
+<MudText Typo="Typo.body1" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+    Genererar en katalogfil med anställningsmasterdata (person, anställnings-id, enhet, befattning,
+    anställningsform och status) till Region Örebro läns katalogtjänst KOLL. Filen laddas ner som XML.
+</MudText>
+
+<MudAlert Severity="Severity.Warning" Variant="Variant.Filled" Class="mb-4">
+    <strong>Ej överförd.</strong> Filen produceras lokalt och stämplas
+    <code>@KollExportGenerator.OverforingStatus</code>. Skarp överföring till KOLL (SFTP-filsläpp
+    eller katalogtjänstens webbtjänst) kräver konfigurerad anslutning.
+</MudAlert>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Text">@_error</MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">1. Parametrar</MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="4">
+                <MudTextField @bind-Value="_orgnr" Label="Organisationsnummer" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" sm="5">
+                <MudTextField @bind-Value="_orgnamn" Label="Organisation" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" sm="3">
+                <MudDatePicker @bind-Date="_referensdatum" Label="Referensdatum (status)" Variant="Variant.Outlined" />
+            </MudItem>
+        </MudGrid>
+        <MudCheckBox @bind-Value="_inkluderaAvslutade" Label="Inkludera avslutade anställningar" Class="mt-2" />
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudStack Row="true" Justify="Justify.SpaceBetween" AlignItems="AlignItems.Center" Class="mb-3">
+            <MudText Typo="Typo.h6">2. Förhandsvisning (@Rader.Count poster)</MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       Disabled="@(_genererar || Rader.Count == 0)"
+                       OnClick="LaddaNer">
+                Ladda ner katalogfil (XML)
+            </MudButton>
+        </MudStack>
+
+        @if (Rader.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                Inga anställningar matchar valen. Justera referensdatum eller inkludera avslutade anställningar.
+            </MudAlert>
+        }
+        else
+        {
+            <MudSimpleTable Hover="true" Dense="true" Elevation="0">
+                <thead>
+                    <tr>
+                        <th>Personnummer</th><th>Namn</th><th>Enhet</th><th>Befattning</th>
+                        <th>Anställningsform</th><th>Grad</th><th>Period</th><th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in Rader)
+                    {
+                        <tr>
+                            <td><code>@r.Post.PersonnummerFormaterat</code></td>
+                            <td>@r.Post.Fornamn @r.Post.Efternamn</td>
+                            <td>@r.Post.EnhetNamn <span style="color: var(--mud-palette-text-secondary);">(@r.Post.EnhetKostnadsstalle)</span></td>
+                            <td>@(r.Post.Befattning ?? "—")</td>
+                            <td>@KollExportGenerator.AnstallningsformText(r.Post.Anstallningsform)</td>
+                            <td>@r.Post.Sysselsattningsgrad.ToString("0.#")%</td>
+                            <td>@r.Post.Startdatum.ToString("yyyy-MM-dd")@(r.Post.Slutdatum is { } s ? $" – {s:yyyy-MM-dd}" : "")</td>
+                            <td>
+                                <MudChip T="string" Size="Size.Small"
+                                         Color="@(r.Status == KollAnstallningsStatus.Aktiv ? Color.Success : r.Status == KollAnstallningsStatus.Kommande ? Color.Info : Color.Default)">
+                                    @r.Status
+                                </MudChip>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+
+        @if (_status is not null)
+        {
+            <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-3">@_status</MudAlert>
+        }
+    </MudPaper>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _genererar;
+    private string? _error;
+    private string? _status;
+
+    private string _orgnr = "232100-0164";
+    private string _orgnamn = "Region Örebro län";
+    private DateTime? _referensdatum = DateTime.Today;
+    private bool _inkluderaAvslutade = true;
+
+    private List<PostVy> _allaPoster = [];
+
+    private DateOnly Referens => DateOnly.FromDateTime(_referensdatum ?? DateTime.Today);
+
+    private List<PostVy> Rader =>
+        _allaPoster
+            .Select(p => p with { Status = BeraknaStatus(p.Post.Startdatum, p.Post.Slutdatum, Referens) })
+            .Where(p => _inkluderaAvslutade || p.Status != KollAnstallningsStatus.Avslutad)
+            .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var employees = await db.Employees.Include(e => e.Anstallningar)
+                .OrderBy(e => e.Efternamn).ToListAsync();
+            var units = await db.OrganizationUnits.ToListAsync();
+            var unitById = units.ToDictionary(u => u.Id);
+
+            var tenant = await db.TenantConfigurations
+                .Where(t => t.ArAktiv).OrderByDescending(t => t.SkapadVid).FirstOrDefaultAsync()
+                ?? await db.TenantConfigurations.FirstOrDefaultAsync();
+            if (tenant is not null)
+            {
+                _orgnamn = string.IsNullOrWhiteSpace(tenant.TenantNamn) ? _orgnamn : tenant.TenantNamn;
+                _orgnr = string.IsNullOrWhiteSpace(tenant.Organisationsnummer) ? _orgnr : tenant.Organisationsnummer;
+            }
+
+            foreach (var emp in employees)
+            {
+                foreach (var a in emp.Anstallningar)
+                {
+                    unitById.TryGetValue(a.EnhetId, out var unit);
+                    var post = new KollAnstallningsPost
+                    {
+                        PersonnummerFormaterat = emp.Personnummer.ToString(),
+                        Efternamn = emp.Efternamn,
+                        Fornamn = emp.Fornamn,
+                        AnstallningsId = a.Id.Value.ToString(),
+                        EnhetNamn = unit?.Namn ?? "(okänd enhet)",
+                        EnhetKostnadsstalle = unit?.Kostnadsstalle,
+                        Befattning = a.Befattningstitel,
+                        Anstallningsform = a.Anstallningsform,
+                        Sysselsattningsgrad = a.Sysselsattningsgrad.Value,
+                        Startdatum = a.Giltighetsperiod.Start,
+                        Slutdatum = a.Giltighetsperiod.End,
+                        HsaId = emp.HsaId
+                    };
+                    _allaPoster.Add(new PostVy(post, KollAnstallningsStatus.Aktiv));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte hämta anställningsdata: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LaddaNer()
+    {
+        _genererar = true;
+        _status = null;
+        _error = null;
+        try
+        {
+            var input = new KollExportInput
+            {
+                Organisationsnummer = _orgnr.Trim(),
+                Organisationsnamn = _orgnamn.Trim(),
+                Referensdatum = Referens,
+                Poster = Rader.Select(r => r.Post).ToList()
+            };
+
+            var result = new KollExportGenerator().Generera(input);
+            var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(result.XmlInnehall));
+            await JS.InvokeVoidAsync("downloadFile", result.Filnamn, base64, "application/xml");
+
+            _status = $"Katalogfil genererad med {result.AntalPoster} poster ({result.AntalAktiva} aktiva). Fil: {result.Filnamn}.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte skapa katalogfilen: {ex.Message}";
+        }
+        finally
+        {
+            _genererar = false;
+        }
+    }
+
+    private static KollAnstallningsStatus BeraknaStatus(DateOnly start, DateOnly? slut, DateOnly referens)
+    {
+        if (start > referens) return KollAnstallningsStatus.Kommande;
+        if (slut is { } s && s < referens) return KollAnstallningsStatus.Avslutad;
+        return KollAnstallningsStatus.Aktiv;
+    }
+
+    private sealed record PostVy(KollAnstallningsPost Post, KollAnstallningsStatus Status);
+}

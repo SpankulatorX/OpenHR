@@ -1,0 +1,289 @@
+@page "/integrationer/folkbokforing"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.IntegrationHub.Adapters.Skatteverket
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+
+<PageTitle>OpenHR - Folkbokföringsimport (Navet)</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/integrationer" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Folkbokföringsimport (Skatteverket / Navet)</MudText>
+
+<MudAlert Severity="Severity.Warning" Variant="Variant.Filled" Class="mb-4">
+    <strong>Demo — ej skarp Navet-koppling.</strong> Sidan läser in en folkbokföringsavisering ur en
+    <em>fil</em> och tolkar den. Skarp, löpande hämtning från Skatteverkets bastjänst Navet kräver
+    tecknat avtal och teknisk anslutning (SSEK/webbtjänst). Filtolkningen är byggd; transporten är konfigklar men ej skarp.
+</MudAlert>
+
+<MudExpansionPanels Class="mb-4" Elevation="1">
+    <MudExpansionPanel Text="Filformat (representativ Navet-avisering)">
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+            Ett personblock per person, inlett med <code>#PERSON &lt;personnummer&gt;</code>. Endast ändrade
+            fält skickas som <code>NYCKEL=VÄRDE</code>. Nycklar: EFTERNAMN, FORNAMN, MELLANNAMN, GATUADRESS,
+            POSTNUMMER, POSTORT, LAND, AVLIDEN (YYYY-MM-DD), SEKRETESS (INGEN/SEKRETESSMARKERING/SKYDDAD_FOLKBOKFORING).
+            Rader som börjar med <code>#</code> och tomma rader ignoreras. Vid skyddad identitet maskas adressen bort.
+        </MudText>
+    </MudExpansionPanel>
+</MudExpansionPanels>
+
+<MudPaper Class="pa-4 mb-4" Elevation="2">
+    <MudText Typo="Typo.h6" Class="mb-3">1. Läs in avisering</MudText>
+    <MudFileUpload T="IBrowserFile" Accept=".txt,.csv,.nav,.dat" OnFilesChanged="OnFileSelected" Class="mb-2">
+        <CustomContent>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                       StartIcon="@Icons.Material.Filled.UploadFile"
+                       OnClick="@context.OpenFilePickerAsync">
+                Välj fil
+            </MudButton>
+        </CustomContent>
+    </MudFileUpload>
+    @if (_filnamn is not null)
+    {
+        <MudText Typo="Typo.body2" Class="mb-2"><strong>Vald fil:</strong> @_filnamn</MudText>
+    }
+    <MudText Typo="Typo.body2" Class="mb-1" Style="color: var(--mud-palette-text-secondary);">
+        …eller klistra in aviseringens innehåll:
+    </MudText>
+    <MudTextField @bind-Value="_innehall" Variant="Variant.Outlined" Lines="8"
+                  Placeholder="#PERSON 19850101-1234&#10;EFTERNAMN=Andersson&#10;GATUADRESS=Storgatan 1&#10;POSTNUMMER=70210&#10;POSTORT=Örebro" />
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+               StartIcon="@Icons.Material.Filled.Search"
+               Disabled="@(_analyserar || string.IsNullOrWhiteSpace(_innehall))"
+               OnClick="Analysera">Analysera</MudButton>
+</MudPaper>
+
+@if (_error is not null)
+{
+    <MudAlert Severity="Severity.Error" Variant="Variant.Text" Class="mb-4">@_error</MudAlert>
+}
+
+@if (_result is not null)
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-2">2. Tolkat resultat</MudText>
+        <MudStack Row="true" Spacing="2" Class="mb-3">
+            <MudChip T="string" Size="Size.Small" Color="Color.Info">@_result.AntalPoster poster</MudChip>
+            <MudChip T="string" Size="Size.Small" Color="Color.Success">@_rader.Count(r => r.Matchad) matchade</MudChip>
+            @if (_result.Fel.Count > 0)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Error">@_result.Fel.Count fel</MudChip>
+            }
+        </MudStack>
+
+        @foreach (var f in _result.Fel)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Text" Dense="true" Class="mb-1">@f</MudAlert>
+        }
+        @foreach (var v in _result.Varningar)
+        {
+            <MudAlert Severity="Severity.Warning" Variant="Variant.Text" Dense="true" Class="mb-1">@v</MudAlert>
+        }
+
+        @if (_rader.Count > 0)
+        {
+            <MudSimpleTable Hover="true" Dense="true" Elevation="0" Class="mt-3">
+                <thead>
+                    <tr>
+                        <th>Personnummer</th><th>Matchning</th><th>Namn i avisering</th>
+                        <th>Adress i avisering</th><th>Status</th><th>Åtgärd</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _rader)
+                    {
+                        var a = r.Avisering;
+                        <tr>
+                            <td><code>@a.PersonnummerFormaterat</code></td>
+                            <td>
+                                @if (r.Matchad)
+                                {
+                                    <span>@r.MatchadNamn</span>
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Default">Ingen anställd</MudChip>
+                                }
+                            </td>
+                            <td>@(a.HarNamnAndring ? NamnText(a) : "—")</td>
+                            <td>
+                                @if (a.ArSkyddad)
+                                {
+                                    <em>döljs (skyddad)</em>
+                                }
+                                else if (a.HarAdressAndring)
+                                {
+                                    @($"{a.Gatuadress}, {a.Postnummer} {a.Postort}")
+                                }
+                                else
+                                {
+                                    @("—")
+                                }
+                            </td>
+                            <td>
+                                @if (a.ArSkyddad)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Warning">@a.SekretessBeskrivning</MudChip>
+                                }
+                                @if (a.ArAvliden)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Error">Avliden @a.AvlidenDatum</MudChip>
+                                }
+                            </td>
+                            <td>@AtgardText(r)</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3"
+                       StartIcon="@Icons.Material.Filled.Save"
+                       Disabled="@(_applicerar || !_rader.Any(r => r.KanApplicera))"
+                       OnClick="Applicera">
+                Applicera adressändringar (@_rader.Count(r => r.KanApplicera))
+            </MudButton>
+            <MudText Typo="Typo.caption" Class="d-block mt-2" Style="color: var(--mud-palette-text-secondary);">
+                Endast adressändringar för matchade, icke-skyddade personer appliceras automatiskt.
+                Namnbyten och skyddad identitet kräver kompletterande domänmetoder (se integrationsnotering) och hanteras manuellt.
+            </MudText>
+
+            @if (_applyStatus is not null)
+            {
+                <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-3">@_applyStatus</MudAlert>
+            }
+        }
+    </MudPaper>
+}
+
+@code {
+    private const long MaxFilstorlek = 5 * 1024 * 1024; // 5 MB
+
+    private string _innehall = string.Empty;
+    private string? _filnamn;
+    private FolkbokforingImportResult? _result;
+    private List<RadVy> _rader = [];
+    private bool _analyserar;
+    private bool _applicerar;
+    private string? _applyStatus;
+    private string? _error;
+
+    private async Task OnFileSelected(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            var fil = e.File;
+            _filnamn = fil.Name;
+            using var reader = new StreamReader(fil.OpenReadStream(MaxFilstorlek));
+            _innehall = await reader.ReadToEndAsync();
+            _result = null;
+            _rader = [];
+            _applyStatus = null;
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte läsa filen: {ex.Message}";
+        }
+    }
+
+    private async Task Analysera()
+    {
+        _analyserar = true;
+        _error = null;
+        _applyStatus = null;
+        try
+        {
+            _result = new FolkbokforingImporter().Parsa(_innehall);
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var employees = await db.Employees.ToListAsync();
+            var byPnr = employees.ToDictionary(emp => (string)emp.Personnummer);
+
+            _rader = _result.Aviseringar.Select(a =>
+            {
+                byPnr.TryGetValue(a.Personnummer12, out var emp);
+                return new RadVy(a, emp?.FulltNamn, emp is not null);
+            }).ToList();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte analysera aviseringen: {ex.Message}";
+        }
+        finally
+        {
+            _analyserar = false;
+        }
+    }
+
+    private async Task Applicera()
+    {
+        if (_result is null) return;
+        _applicerar = true;
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var employees = await db.Employees.ToListAsync(); // spårade
+            var byPnr = employees.ToDictionary(emp => (string)emp.Personnummer);
+
+            int adressAndrade = 0, namnEjApplicerade = 0, skyddade = 0, omatchade = 0;
+
+            foreach (var a in _result.Aviseringar)
+            {
+                if (!byPnr.TryGetValue(a.Personnummer12, out var emp)) { omatchade++; continue; }
+
+                if (a.ArSkyddad) { skyddade++; continue; }
+
+                if (a.HarAdressAndring)
+                {
+                    var nyAdress = new Address(a.Gatuadress!, a.Postnummer!, a.Postort!, a.Land ?? "Sverige");
+                    emp.UppdateraKontaktuppgifter(emp.Epost, emp.Telefon, nyAdress);
+                    adressAndrade++;
+                }
+
+                if (a.HarNamnAndring) namnEjApplicerade++;
+            }
+
+            await db.SaveChangesAsync();
+
+            _applyStatus =
+                $"{adressAndrade} adressändring(ar) applicerade. " +
+                $"{namnEjApplicerade} namnändring(ar) och {skyddade} skyddad(e) post(er) kräver manuell hantering. " +
+                $"{omatchade} post(er) saknade matchande anställd.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte applicera ändringar: {ex.Message}";
+        }
+        finally
+        {
+            _applicerar = false;
+        }
+    }
+
+    private static string NamnText(FolkbokforingAvisering a)
+    {
+        var delar = new List<string>();
+        if (a.Fornamn is not null) delar.Add(a.Fornamn);
+        if (a.MellanNamn is not null) delar.Add(a.MellanNamn);
+        if (a.Efternamn is not null) delar.Add(a.Efternamn);
+        return delar.Count > 0 ? string.Join(' ', delar) : "—";
+    }
+
+    private static string AtgardText(RadVy r)
+    {
+        if (!r.Matchad) return "Ingen match — hoppas över";
+        if (r.Avisering.ArSkyddad) return "Skyddad — hanteras manuellt";
+        var delar = new List<string>();
+        if (r.Avisering.HarAdressAndring) delar.Add("adress uppdateras");
+        if (r.Avisering.HarNamnAndring) delar.Add("namn kräver domänmetod");
+        return delar.Count > 0 ? string.Join(", ", delar) : "ingen ändring";
+    }
+
+    private sealed record RadVy(FolkbokforingAvisering Avisering, string? MatchadNamn, bool Matchad)
+    {
+        public bool KanApplicera => Matchad && !Avisering.ArSkyddad && Avisering.HarAdressAndring;
+    }
+}

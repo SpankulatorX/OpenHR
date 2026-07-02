@@ -1,0 +1,279 @@
+@page "/rapporter/beslutsstod"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.IO.Compression
+@using Microsoft.EntityFrameworkCore
+@using RegionHR.Analytics.Domain.BiExport
+@using RegionHR.Infrastructure.Analytics
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Reporting
+@using RegionHR.Leave.Domain
+@using RegionHR.Payroll.Domain
+@using RegionHR.Positions.Domain
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR — Beslutsstöd</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Realtids-beslutsstöd</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Nyckeltal för chefer och HR, beräknade live ur databasen per @( _snapshot.ToString("yyyy-MM-dd") ).
+    Här finns även dimensionsmodellerad BI/DW-export (CSV + JSON) för Power BI, Diver och REDA DW.
+</MudText>
+
+@if (_loading)
+{
+    <div style="text-align: center; padding: 3rem;">
+        <MudProgressCircular Color="Color.Primary" Indeterminate="true" Size="Size.Large" />
+        <MudText Typo="Typo.body1" Class="mt-3">Beräknar nyckeltal ur personal-, löne- och frånvarodata...</MudText>
+    </div>
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else if (_resultat is null)
+{
+    <MudAlert Severity="Severity.Info" Class="mb-4">Ingen data att visa ännu.</MudAlert>
+}
+else
+{
+    var o = _resultat.Oversikt;
+
+    @* ── Regionövergripande KPI-kort ── *@
+    <MudGrid Spacing="3" Class="mb-2">
+        <MudItem xs="6" sm="4" md="3">
+            <MudPaper Class="pa-4" Elevation="2" Style="border-top: 4px solid var(--mud-palette-primary);">
+                <MudText Typo="Typo.overline">Headcount</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700;">@o.Headcount</MudText>
+                <MudText Typo="Typo.caption">@o.Fte.ToString("N1") FTE</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="4" md="3">
+            <MudPaper Class="pa-4" Elevation="2" Style="@KortStil(FargOmsattning(o.PersonalomsattningProcent))">
+                <MudText Typo="Typo.overline">Personalomsättning</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700;">@o.PersonalomsattningProcent.ToString("N1") %</MudText>
+                <MudText Typo="Typo.caption">Senaste 12 mån</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="4" md="3">
+            <MudPaper Class="pa-4" Elevation="2" Style="@KortStil(FargSjuk(o.SjukfranvaroProcent))">
+                <MudText Typo="Typo.overline">Sjukfrånvaro</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700;">@o.SjukfranvaroProcent.ToString("N1") %</MudText>
+                <MudText Typo="Typo.caption">Andel arbetstid, 12 mån</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="4" md="3">
+            <MudPaper Class="pa-4" Elevation="2" Style="@KortStil(FargBemanning(o.Bemanningsgrad, o.AntalPositioner))">
+                <MudText Typo="Typo.overline">Bemanningsgrad</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700;">
+                    @(o.AntalPositioner > 0 ? $"{o.Bemanningsgrad:N1} %" : "—")
+                </MudText>
+                <MudText Typo="Typo.caption">@o.TillsattaPositioner / @o.AntalPositioner positioner</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="4" md="3">
+            <MudPaper Class="pa-4" Elevation="2" Style="@KortStil(FargLasRisk(o.LasRiskAntal))">
+                <MudText Typo="Typo.overline">LAS-risk</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700;">@o.LasRiskAntal st</MudText>
+                <MudText Typo="Typo.caption">Tidsbegränsade nära gräns</MudText>
+            </MudPaper>
+        </MudItem>
+        <MudItem xs="6" sm="4" md="3">
+            <MudPaper Class="pa-4" Elevation="2" Style="border-top: 4px solid var(--mud-palette-primary);">
+                <MudText Typo="Typo.overline">Lönekostnad / mån</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700;">@o.LonekostnadPerManadSEK.ToString("N0") kr</MudText>
+                <MudText Typo="Typo.caption">@o.LonekostnadPerFteSEK.ToString("N0") kr / FTE</MudText>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @* ── BI/DW-export ── *@
+    <MudPaper Class="pa-4 mb-4 mt-2" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-2">BI/DW-export (dimensionsmodell)</MudText>
+        <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+            Stjärnschema med faktatabeller (anställning, lön, frånvaro) och dimensioner
+            (tid, enhet, befattning, kön, ålder). @_schemaSammanfattning
+            Config-klar för schemalagd leverans till regionens DW; UTF-8, invariant talformat.
+        </MudText>
+        <div class="d-flex flex-wrap gap-3">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="LaddaNerCsvPaket" Disabled="_exporterar">
+                Dimensionsmodell (CSV-paket, ZIP)
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.TableChart"
+                       OnClick="LaddaNerPlattCsv" Disabled="_exporterar">
+                Platt anställnings-CSV
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Code"
+                       OnClick="LaddaNerJson" Disabled="_exporterar">
+                JSON (hela schemat)
+            </MudButton>
+        </div>
+    </MudPaper>
+
+    @* ── KPI per enhet ── *@
+    <MudText Typo="Typo.h6" Class="mb-3">Nyckeltal per enhet</MudText>
+    @if (!_resultat.PerEnhet.Any(r => r.Headcount > 0 || r.AntalPositioner > 0))
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga enheter med aktiv bemanning hittades.</MudAlert>
+    }
+    else
+    {
+        <MudSimpleTable Hover="true" Dense="true" Elevation="1">
+            <thead>
+                <tr>
+                    <th>Enhet</th>
+                    <th>Kostnadsställe</th>
+                    <th style="text-align:right;">Headcount</th>
+                    <th style="text-align:right;">FTE</th>
+                    <th style="text-align:right;">Omsättn. %</th>
+                    <th style="text-align:right;">Sjukfrånv. %</th>
+                    <th style="text-align:right;">Bemanning %</th>
+                    <th style="text-align:right;">LAS-risk</th>
+                    <th style="text-align:right;">Lönekostn./mån</th>
+                    <th style="text-align:right;">Kostn./FTE</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _resultat.PerEnhet.Where(r => r.Headcount > 0 || r.AntalPositioner > 0))
+                {
+                    <tr>
+                        <td><strong>@r.EnhetNamn</strong></td>
+                        <td>@r.Kostnadsstalle</td>
+                        <td style="text-align:right;">@r.Headcount</td>
+                        <td style="text-align:right;">@r.Fte.ToString("N1")</td>
+                        <td style="text-align:right; color:@FargVardeOmsattning(r.PersonalomsattningProcent);">@r.PersonalomsattningProcent.ToString("N1")</td>
+                        <td style="text-align:right; color:@FargVardeSjuk(r.SjukfranvaroProcent);">@r.SjukfranvaroProcent.ToString("N1")</td>
+                        <td style="text-align:right;">@(r.AntalPositioner > 0 ? r.Bemanningsgrad.ToString("N1") : "—")</td>
+                        <td style="text-align:right;">@(r.LasRiskAntal > 0 ? r.LasRiskAntal.ToString() : "—")</td>
+                        <td style="text-align:right;">@r.LonekostnadPerManadSEK.ToString("N0")</td>
+                        <td style="text-align:right;">@r.LonekostnadPerFteSEK.ToString("N0")</td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+        <MudText Typo="Typo.caption" Class="mt-2" Style="color: var(--mud-palette-text-secondary);">
+            Omsättning och sjukfrånvaro avser rullande 12 månader. Sjukfrånvaro approximeras mot ~21 arbetsdagar/månad.
+            LAS-risk = aktiva tidsbegränsade anställningar (vikariat/SAVA/säsong) som närmar sig omvandlingsgräns.
+        </MudText>
+    }
+}
+
+@code {
+    private BeslutsstodResultat? _resultat;
+    private BiStjarnschema? _schema;
+    private string _schemaSammanfattning = "";
+    private DateOnly _snapshot = DateOnly.FromDateTime(DateTime.Today);
+    private bool _loading = true;
+    private bool _exporterar;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var employees = await db.Employees
+                .Include(e => e.Anstallningar)
+                .ToListAsync();
+            var payroll = await db.PayrollResults.ToListAsync();
+            var leave = await db.LeaveRequests.ToListAsync();
+            var positions = await db.Positions_Table.ToListAsync();
+            var enheter = await db.OrganizationUnits.ToListAsync();
+
+            _resultat = BeslutsstodKpiService.Berakna(
+                employees, payroll, leave, positions, enheter, _snapshot);
+
+            _schema = BiDwExportBuilder.Bygg(
+                employees, payroll, leave, enheter, _snapshot);
+            _schemaSammanfattning =
+                $"{_schema.AntalFaktarader} faktarader, {_schema.AntalDimensionsrader} dimensionsrader.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte beräkna beslutsstöd: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LaddaNerJson()
+    {
+        if (_schema is null) return;
+        _exporterar = true;
+        try
+        {
+            var bytes = BiExportGenerator.GenereraJsonBytes(_schema);
+            await Ladda($"bi-export_{_snapshot:yyyyMMdd}.json", bytes, "application/json");
+        }
+        finally { _exporterar = false; }
+    }
+
+    private async Task LaddaNerPlattCsv()
+    {
+        if (_schema is null) return;
+        _exporterar = true;
+        try
+        {
+            var csv = BiExportGenerator.GenereraPlattAnstallningCsv(_schema);
+            var bytes = BiExportGenerator.Utf8NoBom.GetBytes(csv);
+            await Ladda($"bi-anstallning-platt_{_snapshot:yyyyMMdd}.csv", bytes, "text/csv");
+        }
+        finally { _exporterar = false; }
+    }
+
+    private async Task LaddaNerCsvPaket()
+    {
+        if (_schema is null) return;
+        _exporterar = true;
+        try
+        {
+            var paket = BiExportGenerator.GenereraCsvPaket(_schema);
+            using var ms = new MemoryStream();
+            using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+            {
+                foreach (var (namn, innehall) in paket)
+                {
+                    var entry = zip.CreateEntry(namn);
+                    await using var es = entry.Open();
+                    var bytes = BiExportGenerator.Utf8NoBom.GetBytes(innehall);
+                    await es.WriteAsync(bytes);
+                }
+            }
+            await Ladda($"bi-dimensionsmodell_{_snapshot:yyyyMMdd}.zip", ms.ToArray(), "application/zip");
+        }
+        finally { _exporterar = false; }
+    }
+
+    private async Task Ladda(string filnamn, byte[] bytes, string mime)
+    {
+        var base64 = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("downloadFile", filnamn, base64, mime);
+    }
+
+    // ── Färgkodning ──────────────────────────────────────────────────────────
+
+    private static string KortStil(string farg) => $"border-top: 4px solid {farg};";
+
+    private static string FargOmsattning(decimal v) =>
+        v >= 20m ? "var(--mud-palette-error)" : v >= 12m ? "var(--mud-palette-warning)" : "var(--mud-palette-success)";
+
+    private static string FargSjuk(decimal v) =>
+        v >= 8m ? "var(--mud-palette-error)" : v >= 5m ? "var(--mud-palette-warning)" : "var(--mud-palette-success)";
+
+    private static string FargBemanning(decimal v, int antalPositioner) =>
+        antalPositioner == 0 ? "var(--mud-palette-primary)"
+            : v >= 95m ? "var(--mud-palette-success)" : v >= 85m ? "var(--mud-palette-warning)" : "var(--mud-palette-error)";
+
+    private static string FargLasRisk(int antal) =>
+        antal >= 5 ? "var(--mud-palette-error)" : antal >= 1 ? "var(--mud-palette-warning)" : "var(--mud-palette-success)";
+
+    private static string FargVardeOmsattning(decimal v) =>
+        v >= 20m ? "var(--mud-palette-error)" : v >= 12m ? "var(--mud-palette-warning)" : "inherit";
+
+    private static string FargVardeSjuk(decimal v) =>
+        v >= 8m ? "var(--mud-palette-error)" : v >= 5m ? "var(--mud-palette-warning)" : "inherit";
+}

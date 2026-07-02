@@ -142,6 +142,19 @@ public static class DependencyInjection
         services.AddSingleton<RegionHR.Infrastructure.Notifications.WebPushSender>();
         services.AddScoped<RegionHR.Infrastructure.Notifications.PushDispatchService>();
 
+        // Integrationsramverk (Health Connect-kompatibelt) — våg 8. Lokal fil-drop; skarp SFTP config-ready.
+        services.AddSingleton(new RegionHR.IntegrationHub.Framework.SftpTransportOptions
+        {
+            LokalDropKatalog = System.IO.Path.Combine(AppContext.BaseDirectory, "integration-drop")
+        });
+        services.AddSingleton<RegionHR.IntegrationHub.Framework.ISftpTransport, RegionHR.Infrastructure.Integrations.Framework.LocalFileDropSftpTransport>();
+        services.AddScoped<RegionHR.IntegrationHub.Framework.IIntegrationRunLogStore, RegionHR.Infrastructure.Integrations.Framework.EfIntegrationRunLogStore>();
+        services.AddScoped<RegionHR.IntegrationHub.Framework.IIntegrationJob, RegionHR.Infrastructure.Integrations.Framework.HealthConnectManifestJob>();
+        services.AddScoped(sp => new RegionHR.Infrastructure.Integrations.Framework.IntegrationJobRunner(
+            sp.GetServices<RegionHR.IntegrationHub.Framework.IIntegrationJob>(),
+            sp.GetRequiredService<RegionHR.IntegrationHub.Framework.ISftpTransport>(),
+            sp.GetRequiredService<RegionHR.IntegrationHub.Framework.IIntegrationRunLogStore>()));
+
         // HälsoSAM — rehabkedja + automatisk triggning (våg 1)
         services.AddScoped<IRehabRepository, RehabRepository>();
         services.AddScoped<RehabService>();

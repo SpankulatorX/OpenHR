@@ -1,0 +1,384 @@
+@page "/admin/klassa"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Text
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.GDPR.Klassa
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - Informationsklassning (KLASSA)</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-1" Style="font-weight: 700;">Informationssäkerhetsklassning (KLASSA)</MudText>
+<MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Klassning av OpenHR:s informationsmängder enligt SKR:s metod KLASSA. Varje mängd värderas i
+    konfidentialitet, riktighet och tillgänglighet (K/R/T) på konsekvensnivå 1&ndash;4. Registret utgör
+    underlag för riskanalys och val av skyddsåtgärder.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else
+{
+    @if (_success != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+    }
+    @if (_saveError != null)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _saveError = null)">@_saveError</MudAlert>
+    }
+
+    @* ── Sammanställning ── *@
+    <MudGrid Spacing="3" Class="mb-4">
+        <MudItem xs="6" sm="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-primary);"><MudText Typo="Typo.h4" Style="font-weight:700;">@_posts.Count</MudText><MudText Typo="Typo.body2">Informationsmängder</MudText></MudPaper></MudItem>
+        <MudItem xs="6" sm="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-error);"><MudText Typo="Typo.h4" Color="Color.Error" Style="font-weight:700;">@_posts.Count(p => p.ArKansligPersonuppgift)</MudText><MudText Typo="Typo.body2">Känsliga (GDPR art. 9)</MudText></MudPaper></MudItem>
+        <MudItem xs="6" sm="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-warning);"><MudText Typo="Typo.h4" Color="Color.Warning" Style="font-weight:700;">@_posts.Count(p => p.HogstaKonsekvens == KonsekvensNiva.Allvarlig)</MudText><MudText Typo="Typo.body2">Högsta nivå (4)</MudText></MudPaper></MudItem>
+        <MudItem xs="6" sm="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-info);"><MudText Typo="Typo.h4" Style="font-weight:700;">@_posts.Count(p => !p.UppfyllerRekommenderatKrav)</MudText><MudText Typo="Typo.body2">Under rekommenderad nivå</MudText></MudPaper></MudItem>
+    </MudGrid>
+
+    @* ── KLASSA-legend ── *@
+    <MudExpansionPanels Class="mb-4" Elevation="1">
+        <MudExpansionPanel Text="Om KLASSA-modellen (K/R/T och konsekvensnivåer 1–4)">
+            <MudText Typo="Typo.body2" Class="mb-2"><strong>Konfidentialitet</strong> — åtkomst begränsas till behöriga.
+                <strong>Riktighet</strong> — informationen är korrekt och ej manipulerad.
+                <strong>Tillgänglighet</strong> — informationen kan nyttjas efter behov av behörig.</MudText>
+            <MudSimpleTable Dense="true" Elevation="0">
+                <thead><tr><th>Nivå</th><th>Innebörd</th></tr></thead>
+                <tbody>
+                    @foreach (var n in _nivaer)
+                    {
+                        <tr><td><MudChip T="string" Size="Size.Small" Color="@NivaColor(n)">@KlassaText.Niva(n)</MudChip></td><td>@KlassaText.NivaBeskrivning(n)</td></tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudExpansionPanel>
+    </MudExpansionPanels>
+
+    <MudStack Row="true" Spacing="2" Class="mb-3">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="NyPost">Ny informationsmängd</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download" OnClick="ExporteraCsv">Exportera CSV</MudButton>
+    </MudStack>
+
+    @if (_showForm)
+    {
+        <MudPaper Class="pa-5 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-primary);">
+            <div class="d-flex justify-space-between align-center mb-3">
+                <MudText Typo="Typo.h6" Style="font-weight:600;">@(_isNy ? "Ny informationsmängd" : $"Redigera: {_editNamn}")</MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="Avbryt" />
+            </div>
+
+            <MudTextField @bind-Value="_editNamn" Label="Informationsmängd" Variant="Variant.Outlined" Class="mb-3" Required="true" Disabled="@(!_isNy)" />
+            <MudTextField @bind-Value="_editBeskrivning" Label="Beskrivning" Variant="Variant.Outlined" Lines="2" Class="mb-3" />
+
+            <MudGrid Spacing="3" Class="mb-1">
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="InformationsKategori" @bind-Value="_editKategori" Label="Kategori" Variant="Variant.Outlined">
+                        @foreach (var k in _kategorier)
+                        {
+                            <MudSelectItem Value="k">@KlassaText.Kategori(k)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_editSystemomrade" Label="Systemområde" Variant="Variant.Outlined" />
+                </MudItem>
+            </MudGrid>
+
+            <MudGrid Spacing="3" Class="mb-1">
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="KonsekvensNiva" @bind-Value="_editKonf" Label="Konfidentialitet" Variant="Variant.Outlined">
+                        @foreach (var n in _nivaer) { <MudSelectItem Value="n">@KlassaText.Niva(n)</MudSelectItem> }
+                    </MudSelect>
+                    <MudTextField @bind-Value="_editKonfMot" Label="Motivering" Variant="Variant.Outlined" Lines="2" Class="mt-2" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="KonsekvensNiva" @bind-Value="_editRikt" Label="Riktighet" Variant="Variant.Outlined">
+                        @foreach (var n in _nivaer) { <MudSelectItem Value="n">@KlassaText.Niva(n)</MudSelectItem> }
+                    </MudSelect>
+                    <MudTextField @bind-Value="_editRiktMot" Label="Motivering" Variant="Variant.Outlined" Lines="2" Class="mt-2" />
+                </MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="KonsekvensNiva" @bind-Value="_editTillg" Label="Tillgänglighet" Variant="Variant.Outlined">
+                        @foreach (var n in _nivaer) { <MudSelectItem Value="n">@KlassaText.Niva(n)</MudSelectItem> }
+                    </MudSelect>
+                    <MudTextField @bind-Value="_editTillgMot" Label="Motivering" Variant="Variant.Outlined" Lines="2" Class="mt-2" />
+                </MudItem>
+            </MudGrid>
+
+            @{
+                var kravForhandsvisning = KlassaRegler.RekommenderatKrav(_editKategori);
+                var uppfyllerForhandsvisning = KlassaRegler.UppfyllerKrav(_editKategori, _editKonf, _editRikt, _editTillg);
+            }
+            <MudAlert Severity="@(uppfyllerForhandsvisning ? Severity.Success : Severity.Warning)" Variant="Variant.Text" Dense="true" Class="my-2">
+                Rekommenderad miniminivå för @KlassaText.Kategori(_editKategori):
+                K@((int)kravForhandsvisning.MinKonfidentialitet) R@((int)kravForhandsvisning.MinRiktighet) T@((int)kravForhandsvisning.MinTillganglighet).
+                @(uppfyllerForhandsvisning ? "Vald klassning uppfyller kravet." : "Vald klassning understiger rekommendationen.")
+                @if (KlassaRegler.ArKansligPersonuppgift(_editKategori)) { <text> Känslig personuppgift enligt GDPR art. 9.</text> }
+            </MudAlert>
+
+            <MudTextField @bind-Value="_editSkydd" Label="Skyddsåtgärder (en per rad)" Variant="Variant.Outlined" Lines="4" Class="mb-3" />
+            <MudTextField @bind-Value="_editLagrum" Label="Lagrum" Variant="Variant.Outlined" Class="mb-3" />
+            <MudTextField @bind-Value="_editGranskadAv" Label="Granskad av (signatur)" Variant="Variant.Outlined" Class="mb-3" />
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Spara"
+                       Disabled="@(string.IsNullOrWhiteSpace(_editNamn) || _saving)">Spara</MudButton>
+            <MudButton Variant="Variant.Text" OnClick="Avbryt" Class="ml-2">Avbryt</MudButton>
+        </MudPaper>
+    }
+
+    @* ── Register ── *@
+    <MudSimpleTable Hover="true" Elevation="2">
+        <thead>
+            <tr>
+                <th>Informationsmängd</th>
+                <th>Kategori</th>
+                <th>K</th><th>R</th><th>T</th>
+                <th>Högsta</th>
+                <th>Status</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var p in _posts)
+            {
+                <tr>
+                    <td>
+                        <strong>@p.Informationsmangd</strong>
+                        @if (p.ArKansligPersonuppgift)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error" Class="ml-1">art. 9</MudChip>
+                        }
+                        <MudText Typo="Typo.caption" Style="display:block; color: var(--mud-palette-text-secondary);">@p.Systemomrade</MudText>
+                    </td>
+                    <td>@KlassaText.Kategori(p.Kategori)</td>
+                    <td><MudChip T="string" Size="Size.Small" Color="@NivaColor(p.Konfidentialitet)">@((int)p.Konfidentialitet)</MudChip></td>
+                    <td><MudChip T="string" Size="Size.Small" Color="@NivaColor(p.Riktighet)">@((int)p.Riktighet)</MudChip></td>
+                    <td><MudChip T="string" Size="Size.Small" Color="@NivaColor(p.Tillganglighet)">@((int)p.Tillganglighet)</MudChip></td>
+                    <td><MudChip T="string" Size="Size.Small" Color="@NivaColor(p.HogstaKonsekvens)">@KlassaText.Niva(p.HogstaKonsekvens)</MudChip></td>
+                    <td>
+                        @if (p.UppfyllerRekommenderatKrav)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">OK</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">Under nivå</MudChip>
+                        }
+                    </td>
+                    <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Redigera(p))">Redigera</MudButton></td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+}
+
+@code {
+    private List<InformationsklassPost> _posts = [];
+    private bool _loading = true;
+    private bool _saving;
+    private string? _error;
+    private string? _saveError;
+    private string? _success;
+
+    private static readonly KonsekvensNiva[] _nivaer =
+        [KonsekvensNiva.Forsumbar, KonsekvensNiva.Mattlig, KonsekvensNiva.Betydande, KonsekvensNiva.Allvarlig];
+    private static readonly InformationsKategori[] _kategorier = Enum.GetValues<InformationsKategori>();
+
+    // Formulärfält
+    private bool _showForm;
+    private bool _isNy;
+    private Guid? _editId;
+    private string _editNamn = "";
+    private string _editBeskrivning = "";
+    private InformationsKategori _editKategori = InformationsKategori.Grunddata;
+    private string _editSystemomrade = "";
+    private KonsekvensNiva _editKonf = KonsekvensNiva.Mattlig;
+    private KonsekvensNiva _editRikt = KonsekvensNiva.Mattlig;
+    private KonsekvensNiva _editTillg = KonsekvensNiva.Mattlig;
+    private string _editKonfMot = "";
+    private string _editRiktMot = "";
+    private string _editTillgMot = "";
+    private string _editSkydd = "";
+    private string _editLagrum = "";
+    private string _editGranskadAv = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var set = db.Set<InformationsklassPost>();
+
+            if (!await set.AnyAsync())
+            {
+                try
+                {
+                    set.AddRange(KlassaSeed.Fordefinierade());
+                    await db.SaveChangesAsync();
+                }
+                catch (DbUpdateException)
+                {
+                    // En parallell laddning kan ha seedat samtidigt (unikt index på namn) — ignorera.
+                }
+            }
+
+            _posts = await LaddaAsync(db);
+        }
+        catch (Exception ex) { _error = $"Kunde inte läsa klassningsregistret: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private static async Task<List<InformationsklassPost>> LaddaAsync(RegionHRDbContext db)
+    {
+        // Konsekvensnivåerna lagras som strängar (HasConversion<string>); sortera i minnet
+        // på numeriskt värde i stället för i SQL. Registret är litet.
+        var lista = await db.Set<InformationsklassPost>().ToListAsync();
+        return lista
+            .OrderByDescending(p => (int)p.Konfidentialitet + (int)p.Riktighet + (int)p.Tillganglighet)
+            .ThenBy(p => p.Informationsmangd, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private void NyPost()
+    {
+        _isNy = true;
+        _editId = null;
+        _editNamn = "";
+        _editBeskrivning = "";
+        _editKategori = InformationsKategori.Grunddata;
+        _editSystemomrade = "";
+        _editKonf = KonsekvensNiva.Mattlig;
+        _editRikt = KonsekvensNiva.Mattlig;
+        _editTillg = KonsekvensNiva.Mattlig;
+        _editKonfMot = "";
+        _editRiktMot = "";
+        _editTillgMot = "";
+        _editSkydd = "";
+        _editLagrum = "";
+        _editGranskadAv = "";
+        _success = null;
+        _saveError = null;
+        _showForm = true;
+    }
+
+    private void Redigera(InformationsklassPost p)
+    {
+        _isNy = false;
+        _editId = p.Id;
+        _editNamn = p.Informationsmangd;
+        _editBeskrivning = p.Beskrivning;
+        _editKategori = p.Kategori;
+        _editSystemomrade = p.Systemomrade;
+        _editKonf = p.Konfidentialitet;
+        _editRikt = p.Riktighet;
+        _editTillg = p.Tillganglighet;
+        _editKonfMot = p.KonfidentialitetMotivering;
+        _editRiktMot = p.RiktighetMotivering;
+        _editTillgMot = p.TillganglighetMotivering;
+        _editSkydd = p.Skyddsatgarder;
+        _editLagrum = p.Lagrum;
+        _editGranskadAv = p.GranskadAv ?? "";
+        _success = null;
+        _saveError = null;
+        _showForm = true;
+    }
+
+    private void Avbryt() => _showForm = false;
+
+    private async Task Spara()
+    {
+        if (string.IsNullOrWhiteSpace(_editNamn)) return;
+        _saving = true;
+        _saveError = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var set = db.Set<InformationsklassPost>();
+            var granskadAv = string.IsNullOrWhiteSpace(_editGranskadAv) ? null : _editGranskadAv.Trim();
+
+            if (_isNy)
+            {
+                var ny = InformationsklassPost.Skapa(
+                    _editNamn, _editBeskrivning, _editKategori, _editSystemomrade,
+                    _editKonf, _editRikt, _editTillg,
+                    _editKonfMot, _editRiktMot, _editTillgMot, _editSkydd, _editLagrum);
+                if (granskadAv != null)
+                    ny.Uppdatera(_editBeskrivning, _editKategori, _editSystemomrade, _editKonf, _editRikt, _editTillg,
+                        _editKonfMot, _editRiktMot, _editTillgMot, _editSkydd, _editLagrum, granskadAv);
+                set.Add(ny);
+            }
+            else
+            {
+                var befintlig = await set.FirstOrDefaultAsync(x => x.Id == _editId);
+                if (befintlig is null) { _saveError = "Posten kunde inte hittas."; return; }
+                befintlig.Uppdatera(_editBeskrivning, _editKategori, _editSystemomrade,
+                    _editKonf, _editRikt, _editTillg,
+                    _editKonfMot, _editRiktMot, _editTillgMot, _editSkydd, _editLagrum, granskadAv);
+            }
+
+            await db.SaveChangesAsync();
+            _posts = await LaddaAsync(db);
+            _success = _isNy ? "Informationsmängd tillagd." : "Klassning uppdaterad.";
+            _showForm = false;
+        }
+        catch (DbUpdateException)
+        {
+            _saveError = "Namnet på informationsmängden finns redan. Välj ett unikt namn.";
+        }
+        catch (Exception ex)
+        {
+            _saveError = $"Kunde inte spara: {ex.Message}";
+        }
+        finally { _saving = false; }
+    }
+
+    private async Task ExporteraCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Informationsmängd;Kategori;Systemområde;Konfidentialitet;Riktighet;Tillgänglighet;Högsta;Känslig (art.9);Uppfyller krav;Lagrum;Senast granskad");
+        foreach (var p in _posts)
+        {
+            sb.Append(Csv(p.Informationsmangd)).Append(';')
+              .Append(Csv(KlassaText.Kategori(p.Kategori))).Append(';')
+              .Append(Csv(p.Systemomrade)).Append(';')
+              .Append((int)p.Konfidentialitet).Append(';')
+              .Append((int)p.Riktighet).Append(';')
+              .Append((int)p.Tillganglighet).Append(';')
+              .Append((int)p.HogstaKonsekvens).Append(';')
+              .Append(p.ArKansligPersonuppgift ? "Ja" : "Nej").Append(';')
+              .Append(p.UppfyllerRekommenderatKrav ? "Ja" : "Nej").Append(';')
+              .Append(Csv(p.Lagrum)).Append(';')
+              .Append(p.SenastGranskad.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture))
+              .Append('\n');
+        }
+
+        // UTF-8 med BOM så svenska tecken visas korrekt i Excel.
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+        var base64 = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("downloadFile", "informationsklassning_klassa.csv", base64, "text/csv");
+    }
+
+    private static string Csv(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return "";
+        if (value.Contains(';') || value.Contains('"') || value.Contains('\n'))
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        return value;
+    }
+
+    private static Color NivaColor(KonsekvensNiva niva) => niva switch
+    {
+        KonsekvensNiva.Forsumbar => Color.Success,
+        KonsekvensNiva.Mattlig => Color.Info,
+        KonsekvensNiva.Betydande => Color.Warning,
+        KonsekvensNiva.Allvarlig => Color.Error,
+        _ => Color.Default
+    };
+}

@@ -1,0 +1,285 @@
+@page "/lon/facktillhorighet"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Payroll.Domain
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Core.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - Facktillhörighet</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Facktillhörighet</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Register över anställdas fackförbunds-medlemskap (facktillhörighet) — vilket förbund den anställde tillhör
+    och i vilken roll. Detta är själva medlemskapet, till skillnad från fackavgiften som är löneavdraget.
+    Härifrån genereras även uppdateringsfilen som skickas till respektive fackförbund.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else
+{
+    @if (_success != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+    }
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <div class="d-flex justify-space-between align-center mb-3">
+            <MudText Typo="Typo.h6" Style="font-weight: 600;">Registrerade medlemskap</MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="@(() => _showForm = !_showForm)">Registrera medlemskap</MudButton>
+        </div>
+
+        @if (_showForm)
+        {
+            <MudPaper Class="pa-4 mb-4" Elevation="1" Style="border-left: 4px solid var(--mud-palette-primary);">
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" sm="6">
+                        <MudSelect T="Guid?" @bind-Value="_anstalld" Label="Anställd" Variant="Variant.Outlined">
+                            @foreach (var e in _employees) { <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.FulltNamn</MudSelectItem> }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="6"><MudTextField @bind-Value="_forbund" Label="Fackförbund" Variant="Variant.Outlined" HelperText="t.ex. Kommunal, Vision, Vårdförbundet" /></MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudSelect T="FacktillhorighetRoll" @bind-Value="_roll" Label="Roll" Variant="Variant.Outlined">
+                            <MudSelectItem T="FacktillhorighetRoll" Value="FacktillhorighetRoll.Medlem">Medlem</MudSelectItem>
+                            <MudSelectItem T="FacktillhorighetRoll" Value="FacktillhorighetRoll.Fortroendevald">Förtroendevald</MudSelectItem>
+                            <MudSelectItem T="FacktillhorighetRoll" Value="FacktillhorighetRoll.Skyddsombud">Skyddsombud</MudSelectItem>
+                            <MudSelectItem T="FacktillhorighetRoll" Value="FacktillhorighetRoll.Huvudskyddsombud">Huvudskyddsombud</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4"><MudTextField @bind-Value="_forbundKod" Label="Förbundskod (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudTextField @bind-Value="_medlemsnr" Label="Medlemsnummer (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudTextField @bind-Value="_avtalsomrade" Label="Avtalsområde (valfritt)" Variant="Variant.Outlined" HelperText="t.ex. AB, HÖK, PAN" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudDatePicker @bind-Date="_start" Label="Startdatum" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudDatePicker @bind-Date="_slut" Label="Slutdatum (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                </MudGrid>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="Spara"
+                           Disabled="@(_saving || _anstalld == null || string.IsNullOrWhiteSpace(_forbund) || _start == null)">
+                    @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                    Spara
+                </MudButton>
+            </MudPaper>
+        }
+
+        @if (_poster.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga medlemskap registrerade.</MudAlert>
+        }
+        else
+        {
+            <MudSimpleTable Hover="true" Elevation="1">
+                <thead><tr><th>Anställd</th><th>Förbund</th><th>Roll</th><th>Medlemsnr</th><th>Period</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var p in _poster)
+                    {
+                        var aktiv = ArAktiv(p.Startdatum, p.Slutdatum);
+                        <tr>
+                            <td><strong>@NamnFor(p.AnstallId)</strong></td>
+                            <td>@p.Fackforbund</td>
+                            <td>@RollText(p.Roll)</td>
+                            <td>@(p.Medlemsnummer ?? "—")</td>
+                            <td>@Period(p.Startdatum, p.Slutdatum)</td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@(aktiv ? Color.Success : Color.Default)">@(aktiv ? "Aktiv" : "Avslutad")</MudChip></td>
+                            <td>
+                                @if (aktiv)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => Avsluta(p.Id))">Avsluta</MudButton>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">Uppdateringsfil till fackförbund</MudText>
+        <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+            Genererar en semikolonseparerad fil (ISO-8859-1) med aktuell medlemsstock som skickas till förbundet
+            för uppdatering av deras medlemsregister. Välj ett specifikt förbund eller ta med samtliga.
+        </MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="4">
+                <MudSelect T="string" @bind-Value="_filForbund" Label="Förbund" Variant="Variant.Outlined">
+                    <MudSelectItem T="string" Value="@AllaForbund">Samtliga förbund</MudSelectItem>
+                    @foreach (var f in _forbundLista) { <MudSelectItem T="string" Value="@f">@f</MudSelectItem> }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudSwitch T="bool" @bind-Value="_endastAktiva" Color="Color.Primary" Label="Endast aktiva medlemskap" />
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudTextField @bind-Value="_orgnr" Label="Arbetsgivarens organisationsnummer" Variant="Variant.Outlined" />
+            </MudItem>
+        </MudGrid>
+        <MudButton Variant="Variant.Filled" Color="Color.Secondary" Class="mt-3" StartIcon="@Icons.Material.Filled.Download"
+                   Disabled="@(_saving || _poster.Count == 0 || string.IsNullOrWhiteSpace(_orgnr))" OnClick="GeneraFil">
+            Ladda ner uppdateringsfil
+        </MudButton>
+    </MudPaper>
+}
+
+@code {
+    private const string AllaForbund = "*";
+
+    private List<Employee> _employees = [];
+    private List<RegionHR.Payroll.Domain.Facktillhorighet> _poster = [];
+    private Dictionary<Guid, Employee> _empById = [];
+    private List<string> _forbundLista = [];
+    private bool _loading = true, _saving, _showForm, _endastAktiva = true;
+    private string? _error, _success;
+
+    // Formulär
+    private Guid? _anstalld;
+    private string _forbund = "";
+    private string _forbundKod = "";
+    private string _medlemsnr = "";
+    private string _avtalsomrade = "";
+    private FacktillhorighetRoll _roll = FacktillhorighetRoll.Medlem;
+    private DateTime? _start = DateTime.Today;
+    private DateTime? _slut;
+
+    // Filgenerering
+    private string _filForbund = AllaForbund;
+    private string _orgnr = "232100000164";
+
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _employees = await db.Employees.OrderBy(e => e.Efternamn).ThenBy(e => e.Fornamn).ToListAsync();
+            _empById = _employees.ToDictionary(e => e.Id.Value);
+            _poster = await db.Set<RegionHR.Payroll.Domain.Facktillhorighet>().OrderByDescending(p => p.Registrerad).ToListAsync();
+            _forbundLista = _poster.Select(p => p.Fackforbund).Distinct().OrderBy(f => f).ToList();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta register: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task Spara()
+    {
+        if (_anstalld is null || _start is null) return;
+        _saving = true; _error = null;
+        try
+        {
+            var start = DateOnly.FromDateTime(_start.Value);
+            DateOnly? slut = _slut is { } s ? DateOnly.FromDateTime(s) : null;
+
+            var post = RegionHR.Payroll.Domain.Facktillhorighet.Skapa(
+                EmployeeId.From(_anstalld.Value), _forbund, start, _roll,
+                fackforbundKod: _forbundKod, medlemsnummer: _medlemsnr,
+                avtalsomrade: _avtalsomrade, slutdatum: slut, registreradAv: "HR");
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Set<RegionHR.Payroll.Domain.Facktillhorighet>().Add(post);
+            await db.SaveChangesAsync();
+
+            _success = "Facktillhörighet registrerad.";
+            _showForm = false;
+            ResetForm();
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte spara: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task Avsluta(Guid id)
+    {
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var post = await db.Set<RegionHR.Payroll.Domain.Facktillhorighet>().FirstOrDefaultAsync(p => p.Id == id);
+            if (post is null) return;
+            post.Avsluta(DateOnly.FromDateTime(DateTime.Today));
+            await db.SaveChangesAsync();
+            _success = "Medlemskap avslutat.";
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte avsluta: {ex.Message}"; }
+    }
+
+    private async Task GeneraFil()
+    {
+        _saving = true; _error = null; _success = null;
+        try
+        {
+            var urval = _poster.Where(p => _filForbund == AllaForbund || p.Fackforbund == _filForbund);
+            if (_endastAktiva)
+            {
+                var idag = DateOnly.FromDateTime(DateTime.Today);
+                urval = urval.Where(p => p.ArAktivPer(idag));
+            }
+
+            var rader = urval
+                .Where(p => _empById.ContainsKey(p.AnstallId.Value))
+                .Select(p =>
+                {
+                    var e = _empById[p.AnstallId.Value];
+                    var aktiv = p.ArAktivPer(DateOnly.FromDateTime(DateTime.Today));
+                    return new FacktillhorighetRad(
+                        (string)e.Personnummer, e.FulltNamn, p.Fackforbund, p.FackforbundKod,
+                        p.Medlemsnummer, p.Roll, aktiv, p.Startdatum, p.Slutdatum);
+                })
+                .ToList();
+
+            if (rader.Count == 0)
+            {
+                _error = "Inga medlemskap matchar urvalet — ingen fil skapades.";
+                return;
+            }
+
+            var input = new FacktillhorighetFilInput(
+                _orgnr.Trim(), "Region Örebro län", DateOnly.FromDateTime(DateTime.Today), rader);
+            var fil = new FacktillhorighetFilGenerator().Generera(input);
+
+            var base64 = Convert.ToBase64String(fil.Content);
+            await JS.InvokeVoidAsync("downloadFile", fil.FileName, base64, fil.MimeType);
+
+            _success = $"Uppdateringsfil genererad med {rader.Count} medlemskap.";
+        }
+        catch (Exception ex) { _error = $"Kunde inte skapa filen: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private void ResetForm()
+    {
+        _anstalld = null; _forbund = ""; _forbundKod = ""; _medlemsnr = "";
+        _avtalsomrade = ""; _roll = FacktillhorighetRoll.Medlem; _start = DateTime.Today; _slut = null;
+    }
+
+    private string NamnFor(EmployeeId id) => _empById.TryGetValue(id.Value, out var e) ? e.FulltNamn : "Okänd";
+
+    private static bool ArAktiv(DateOnly start, DateOnly? slut)
+    {
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+        return start <= idag && (slut is null || slut >= idag);
+    }
+
+    private static string Period(DateOnly start, DateOnly? slut) =>
+        $"{start:yyyy-MM-dd} – {(slut is { } s ? s.ToString("yyyy-MM-dd") : "tills vidare")}";
+
+    private static string RollText(FacktillhorighetRoll roll) => roll switch
+    {
+        FacktillhorighetRoll.Medlem => "Medlem",
+        FacktillhorighetRoll.Fortroendevald => "Förtroendevald",
+        FacktillhorighetRoll.Skyddsombud => "Skyddsombud",
+        FacktillhorighetRoll.Huvudskyddsombud => "Huvudskyddsombud",
+        _ => "Medlem"
+    };
+}

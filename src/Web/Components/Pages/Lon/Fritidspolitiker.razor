@@ -1,0 +1,275 @@
+@page "/lon/fritidspolitiker"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Payroll.Domain
+@using RegionHR.SharedKernel.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - Ersättning förtroendevalda</PageTitle>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Ersättning till förtroendevalda</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Arvoden och ersättningar till förtroendevalda/fritidspolitiker — ett eget ersättningsflöde skilt från
+    anställdas lön. Består av sammanträdesarvode, ersättning för förlorad arbetsinkomst och reseersättning.
+    Reseersättningen är skattefri upp till Skatteverkets schablon (@Schablon kr/km); överskjutande del beskattas.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else
+{
+    @if (_success != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+    }
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <div class="d-flex justify-space-between align-center mb-3">
+            <MudText Typo="Typo.h6" Style="font-weight: 600;">Registrerade ersättningar</MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add"
+                       OnClick="@(() => _showForm = !_showForm)">Registrera ersättning</MudButton>
+        </div>
+
+        @if (_showForm)
+        {
+            <MudPaper Class="pa-4 mb-4" Elevation="1" Style="border-left: 4px solid var(--mud-palette-primary);">
+                <MudGrid Spacing="3">
+                    <MudItem xs="12" sm="6"><MudTextField @bind-Value="_namn" Label="Namn" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="3"><MudTextField @bind-Value="_personnr" Label="Personnummer" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="3"><MudDatePicker @bind-Date="_datum" Label="Sammanträdesdatum" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="6"><MudTextField @bind-Value="_uppdrag" Label="Uppdrag" Variant="Variant.Outlined" HelperText="t.ex. Ledamot regionfullmäktige" /></MudItem>
+                    <MudItem xs="12" sm="6"><MudTextField @bind-Value="_organ" Label="Organ/nämnd (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_arvode" Label="Sammanträdesarvode (kr)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_forlorad" Label="Förlorad arbetsinkomst (kr)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                    <MudItem xs="12" sm="4"></MudItem>
+                    <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_km" Label="Antal km (egen bil)" Variant="Variant.Outlined" Min="0" /></MudItem>
+                    <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_kmErsattning" Label="Kilometersättning (kr/km)" Variant="Variant.Outlined" Min="0" HelperText="@($"Skattefri schablon: {Schablon} kr/km")" /></MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudText Typo="Typo.caption">Beräknad bruttoersättning</MudText>
+                        <MudText Typo="Typo.h6" Style="font-weight:700;">@Kr(Forhandsbrutto())</MudText>
+                    </MudItem>
+                </MudGrid>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="Spara"
+                           Disabled="@(_saving || string.IsNullOrWhiteSpace(_namn) || string.IsNullOrWhiteSpace(_personnr) || string.IsNullOrWhiteSpace(_uppdrag) || _datum == null)">
+                    @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                    Spara
+                </MudButton>
+            </MudPaper>
+        }
+
+        @if (_poster.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga ersättningar registrerade.</MudAlert>
+        }
+        else
+        {
+            <MudSimpleTable Hover="true" Elevation="1">
+                <thead><tr><th>Datum</th><th>Namn</th><th>Uppdrag</th><th>Arvode</th><th>Förlorad ink.</th><th>Resa</th><th>Skatt</th><th>Netto</th><th>Status</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var p in _poster)
+                    {
+                        <tr>
+                            <td>@p.Sammantradesdatum.ToString("yyyy-MM-dd")</td>
+                            <td><strong>@p.Namn</strong></td>
+                            <td>@p.Uppdrag</td>
+                            <td>@Kr(p.Sammantradesarvode.Amount)</td>
+                            <td>@Kr(p.ForloradArbetsinkomst.Amount)</td>
+                            <td>@Kr(p.BeraknaReseersattning().Amount)</td>
+                            <td>@Kr(p.BeraknaSkatt().Amount)</td>
+                            <td>@Kr(p.BeraknaNetto().Amount)</td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@StatusColor(p.Status)">@StatusText(p.Status)</MudChip></td>
+                            <td>
+                                @if (p.Status == FortroendevaldStatus.Registrerad)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Godkann(p.Id))">Godkänn</MudButton>
+                                }
+                                else if (p.Status == FortroendevaldStatus.Godkand)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Success" OnClick="@(() => MarkeraUtbetald(p.Id))">Markera utbetald</MudButton>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">Utbetalningsunderlag</MudText>
+        <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+            Skapar ett utbetalningsunderlag (CSV, ISO-8859-1) för samtliga <strong>godkända</strong> ersättningar.
+            Särredovisar arvode, förlorad arbetsinkomst, skattefri/skattepliktig reseersättning, skatt och netto.
+        </MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="4"><MudTextField @bind-Value="_period" Label="Period (ÅÅÅÅ-MM)" Variant="Variant.Outlined" /></MudItem>
+            <MudItem xs="12" sm="4"><MudTextField @bind-Value="_orgnr" Label="Organisationsnummer" Variant="Variant.Outlined" /></MudItem>
+            <MudItem xs="12" sm="4"><MudDatePicker @bind-Date="_utbetalning" Label="Utbetalningsdatum" Variant="Variant.Outlined" /></MudItem>
+        </MudGrid>
+        <MudText Typo="Typo.body2" Class="mt-2">Godkända ersättningar i underlaget: <strong>@_poster.Count(p => p.Status == FortroendevaldStatus.Godkand) st</strong></MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Secondary" Class="mt-3" StartIcon="@Icons.Material.Filled.Download"
+                   Disabled="@(_saving || _poster.Count(p => p.Status == FortroendevaldStatus.Godkand) == 0 || string.IsNullOrWhiteSpace(_orgnr))"
+                   OnClick="GeneraUnderlag">
+            Ladda ner underlag
+        </MudButton>
+    </MudPaper>
+}
+
+@code {
+    private static readonly string Schablon = FortroendevaldErsattning.SkattefriKmSchablon.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private List<FortroendevaldErsattning> _poster = [];
+    private bool _loading = true, _saving, _showForm;
+    private string? _error, _success;
+
+    // Formulär
+    private string _namn = "";
+    private string _personnr = "";
+    private string _uppdrag = "";
+    private string _organ = "";
+    private DateTime? _datum = DateTime.Today;
+    private decimal _arvode;
+    private decimal _forlorad;
+    private decimal _km;
+    private decimal _kmErsattning = FortroendevaldErsattning.SkattefriKmSchablon;
+
+    // Underlag
+    private string _period = DateTime.Today.ToString("yyyy-MM");
+    private string _orgnr = "232100000164";
+    private DateTime? _utbetalning = DateTime.Today;
+
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _poster = await db.Set<FortroendevaldErsattning>().OrderByDescending(p => p.Sammantradesdatum).ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta ersättningar: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private decimal Forhandsbrutto() =>
+        _arvode + _forlorad + Math.Round(_km * _kmErsattning, 2, MidpointRounding.ToEven);
+
+    private async Task Spara()
+    {
+        if (_datum is null) return;
+        _saving = true; _error = null;
+        try
+        {
+            var post = FortroendevaldErsattning.Skapa(
+                _namn, _personnr, _uppdrag, DateOnly.FromDateTime(_datum.Value),
+                sammantradesarvode: Money.SEK(_arvode),
+                forloradArbetsinkomst: Money.SEK(_forlorad),
+                antalKm: _km,
+                kmErsattning: _kmErsattning,
+                organ: _organ,
+                registreradAv: "HR");
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Set<FortroendevaldErsattning>().Add(post);
+            await db.SaveChangesAsync();
+
+            _success = "Ersättning registrerad.";
+            _showForm = false;
+            ResetForm();
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte spara ersättning: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task Godkann(Guid id)
+    {
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var post = await db.Set<FortroendevaldErsattning>().FirstOrDefaultAsync(p => p.Id == id);
+            if (post is null) return;
+            post.Godkann();
+            await db.SaveChangesAsync();
+            _success = "Ersättningen godkänd för utbetalning.";
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte godkänna: {ex.Message}"; }
+    }
+
+    private async Task MarkeraUtbetald(Guid id)
+    {
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var post = await db.Set<FortroendevaldErsattning>().FirstOrDefaultAsync(p => p.Id == id);
+            if (post is null) return;
+            post.MarkeraUtbetald();
+            await db.SaveChangesAsync();
+            _success = "Ersättningen markerad som utbetald.";
+            await LaddaAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte markera utbetald: {ex.Message}"; }
+    }
+
+    private async Task GeneraUnderlag()
+    {
+        _saving = true; _error = null; _success = null;
+        try
+        {
+            var godkanda = _poster.Where(p => p.Status == FortroendevaldStatus.Godkand).ToList();
+            if (godkanda.Count == 0)
+            {
+                _error = "Inga godkända ersättningar att ta med i underlaget.";
+                return;
+            }
+
+            var input = new FortroendevaldUnderlagInput(
+                _orgnr.Trim(), "Region Örebro län", _period,
+                DateOnly.FromDateTime(_utbetalning ?? DateTime.Today), godkanda);
+            var fil = new FortroendevaldUnderlagGenerator().Generera(input);
+
+            var base64 = Convert.ToBase64String(fil.Content);
+            await JS.InvokeVoidAsync("downloadFile", fil.FileName, base64, fil.MimeType);
+
+            _success = $"Underlag genererat med {godkanda.Count} ersättningar.";
+        }
+        catch (Exception ex) { _error = $"Kunde inte skapa underlaget: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private void ResetForm()
+    {
+        _namn = ""; _personnr = ""; _uppdrag = ""; _organ = ""; _datum = DateTime.Today;
+        _arvode = 0; _forlorad = 0; _km = 0; _kmErsattning = FortroendevaldErsattning.SkattefriKmSchablon;
+    }
+
+    private static string Kr(decimal amount) => $"{amount:N0} kr";
+
+    private static string StatusText(FortroendevaldStatus status) => status switch
+    {
+        FortroendevaldStatus.Registrerad => "Registrerad",
+        FortroendevaldStatus.Godkand => "Godkänd",
+        FortroendevaldStatus.Utbetald => "Utbetald",
+        _ => status.ToString()
+    };
+
+    private static Color StatusColor(FortroendevaldStatus status) => status switch
+    {
+        FortroendevaldStatus.Registrerad => Color.Default,
+        FortroendevaldStatus.Godkand => Color.Primary,
+        FortroendevaldStatus.Utbetald => Color.Success,
+        _ => Color.Default
+    };
+}

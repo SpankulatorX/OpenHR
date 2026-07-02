@@ -1,0 +1,382 @@
+@page "/rapporter/statistik"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Leave.Domain
+@using RegionHR.IntegrationHub.Adapters.SCB
+@using RegionHR.IntegrationHub.Adapters.SKR
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
+
+<PageTitle>OpenHR - Statistik (SCB &amp; SKR)</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/rapporter" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Lagstadgad statistik — SCB &amp; SKR</MudText>
+<MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+    Genererar tre aggregerade statistikfiler ur personal- och lönedata: SCB:s lönestrukturstatistik
+    (yrke × kön), SCB:s sjuklönestatistik (KSju) och SKR:s novemberstatistik (mättidpunkt 1 november).
+    Filerna är avidentifierade aggregat. Skarp inlämning sker via SCB:s respektive SKR:s portal och
+    <strong>kräver inloggning</strong> — det steget är avsiktligt frånkopplat; här byggs filerna.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else
+{
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">1. Period &amp; uppgiftslämnare</MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="6" sm="3">
+                <MudSelect T="int" Value="_ar" ValueChanged="OnArVald" Label="Statistikår" Variant="Variant.Outlined">
+                    @foreach (var y in _tillgangligaAr)
+                    {
+                        <MudSelectItem T="int" Value="y">@y</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudSelect T="int" Value="_kvartal" ValueChanged="OnKvartalValt" Label="Kvartal (sjuklön)" Variant="Variant.Outlined">
+                    @for (var q = 1; q <= 4; q++)
+                    {
+                        var qq = q;
+                        <MudSelectItem T="int" Value="qq">Kvartal @qq</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="3">
+                <MudTextField @bind-Value="_orgNamn" Label="Organisationsnamn" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" sm="3">
+                <MudTextField @bind-Value="_orgNr" Label="Organisationsnummer" Variant="Variant.Outlined" />
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">Underlag (mättidpunkt @_mattidpunkt.ToString("yyyy-MM-dd"))</MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Anställda i underlaget</MudText>
+                <MudText Typo="Typo.h6" Style="font-weight:700;">@_antalAnstallda st</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Årsarbetare</MudText>
+                <MudText Typo="Typo.h6" Style="font-weight:700;">@_arsarbetare.ToString("N1")</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Yrkes-/könsgrupper (SCB)</MudText>
+                <MudText Typo="Typo.h6" Style="font-weight:700;">@_antalGrupper st</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Kvinnors löneandel</MudText>
+                <MudText Typo="Typo.h6" Style="font-weight:700;">@(_kvinnorLoneandel is { } a ? $"{a:N1} %" : "—")</MudText>
+            </MudItem>
+        </MudGrid>
+        @if (_antalAnstallda == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mt-3">
+                Inga aktiva anställningar vid mättidpunkten. Välj ett annat år eller registrera anställda först.
+            </MudAlert>
+        }
+    </MudPaper>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">2. Ladda ner filer</MudText>
+        <MudStack Row="true" Spacing="3" Wrap="Wrap.Wrap">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       Disabled="@(_genererar || _antalAnstallda == 0)"
+                       OnClick="LaddaNerLonestatistik">
+                SCB lönestatistik
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary" Size="Size.Large"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       Disabled="@(_genererar || _antalAnstallda == 0)"
+                       OnClick="LaddaNerSjuklonestatistik">
+                SCB sjuklönestatistik (K@(_kvartal))
+            </MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Tertiary" Size="Size.Large"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       Disabled="@(_genererar || _antalAnstallda == 0)"
+                       OnClick="LaddaNerNovemberstatistik">
+                SKR novemberstatistik
+            </MudButton>
+        </MudStack>
+        @if (_status is not null)
+        {
+            <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-3">@_status</MudAlert>
+        }
+        @if (_fel is not null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Text" Class="mt-3">@_fel</MudAlert>
+        }
+        <MudText Typo="Typo.caption" Class="mt-3" Style="display:block;color:var(--mud-palette-text-secondary);">
+            Filerna är semikolon-separerade, kodade i ISO-8859-1 och stämplade med status
+            <code>EJ_INLAMNAD_KRAVER_..._INLOGGNING</code>.
+        </MudText>
+    </MudPaper>
+}
+
+@code {
+    // Fulltidsarbetsdagar per år (schablon) för sjukfrånvaroprocent.
+    private const decimal ArbetsdagarPerAr = 252m;
+    private const decimal ArbetsdagarPerManad = 21m;
+    private const decimal SjuklonAndel = 0.8m;      // sjuklön = 80 % av lönen
+    private const int SjuklonePeriodDagar = 14;     // sjukdag 1–14
+
+    private bool _loading = true;
+    private bool _genererar;
+    private string? _status;
+    private string? _fel;
+
+    private int _ar = DateTime.Today.Year;
+    private int _kvartal = Math.Clamp((DateTime.Today.Month - 1) / 3 + 1, 1, 4);
+    private int[] _tillgangligaAr = [];
+    private string _orgNamn = "Region Örebro län";
+    private string _orgNr = "232100-0016";
+
+    private DateOnly _mattidpunkt;
+    private int _antalAnstallda;
+    private int _antalGrupper;
+    private decimal _arsarbetare;
+    private decimal? _kvinnorLoneandel;
+
+    private SCBLonestatistikInput _lonInput = new();
+    private SCBSjuklonestatistikInput _sjukInput = new();
+    private SKRNovemberstatistikInput _novInput = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var iar = DateTime.Today.Year;
+        _tillgangligaAr = Enumerable.Range(0, 6).Select(i => iar - i).ToArray();
+        await LaddaUnderlag();
+    }
+
+    private async Task OnArVald(int ar)
+    {
+        _ar = ar;
+        await LaddaUnderlag();
+    }
+
+    private void OnKvartalValt(int kv)
+    {
+        _kvartal = kv;
+        ByggSjuklonUnderlag();
+    }
+
+    private async Task LaddaUnderlag()
+    {
+        _loading = true;
+        _status = null;
+        _fel = null;
+        _mattidpunkt = new DateOnly(_ar, 11, 1);
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+
+            var employees = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
+
+            var yearStart = new DateOnly(_ar, 1, 1);
+            var yearEnd = new DateOnly(_ar, 12, 31);
+            var sjukfranvaro = await db.LeaveRequests
+                .Where(r => r.Typ == LeaveType.Sjukfranvaro
+                    && r.TillDatum >= yearStart && r.FranDatum <= yearEnd
+                    && (r.Status == LeaveRequestStatus.Godkand || r.Status == LeaveRequestStatus.Inskickad))
+                .ToListAsync();
+            var sjukPerAnstalld = sjukfranvaro
+                .GroupBy(r => r.AnstallId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+            var loneIndivider = new List<SCBLoneIndivid>();
+            var novIndivider = new List<SKRNovemberIndivid>();
+            var sjukKallor = new List<AnstalldSjukKalla>();
+
+            foreach (var e in employees)
+            {
+                var a = e.AktivAnstallning(_mattidpunkt);
+                if (a is null) continue;
+
+                var kon = e.Personnummer.LegalGender;                 // "Man"/"Kvinna"
+                var sysgrad = a.Sysselsattningsgrad.Value;
+                var manadslon = a.Manadslon.Amount;
+                var yrkeskod = string.IsNullOrWhiteSpace(a.AIDKod) ? "OKÄND" : a.AIDKod!;
+                var yrke = a.Befattningstitel ?? (string.IsNullOrWhiteSpace(a.AIDKod) ? "Ospecificerad" : a.AIDKod!);
+
+                // Årets sjukdagar (arbetsdagar) för denna anställd.
+                var arsSjukdagar = 0;
+                var kvartalSjukdagar = 0;
+                if (sjukPerAnstalld.TryGetValue(e.Id.Value, out var reqs))
+                {
+                    var (kvStart, kvEnd) = KvartalIntervall(_ar, _kvartal);
+                    foreach (var r in reqs)
+                    {
+                        var fFran = r.FranDatum < yearStart ? yearStart : r.FranDatum;
+                        var fTill = r.TillDatum > yearEnd ? yearEnd : r.TillDatum;
+                        arsSjukdagar += RaknaArbetsdagar(fFran, fTill);
+
+                        var kFran = r.FranDatum < kvStart ? kvStart : r.FranDatum;
+                        var kTill = r.TillDatum > kvEnd ? kvEnd : r.TillDatum;
+                        kvartalSjukdagar += Math.Min(RaknaArbetsdagar(kFran, kTill), SjuklonePeriodDagar);
+                    }
+                }
+
+                loneIndivider.Add(new SCBLoneIndivid
+                {
+                    Yrkeskod = yrkeskod,
+                    Yrkesbenamning = yrke,
+                    Kon = kon,
+                    Manadslon = manadslon,
+                    Sysselsattningsgrad = sysgrad
+                });
+
+                var franvaroProcent = arsSjukdagar > 0
+                    ? Math.Round(Math.Min(arsSjukdagar / ArbetsdagarPerAr * 100m, 100m), 2, MidpointRounding.AwayFromZero)
+                    : (decimal?)null;
+
+                novIndivider.Add(new SKRNovemberIndivid
+                {
+                    Personalgrupp = yrke,
+                    Kon = kon,
+                    ArTillsvidare = a.ArTillsvidareanstallning,
+                    Sysselsattningsgrad = sysgrad,
+                    Alder = Alder(e.Personnummer.BirthDate, _mattidpunkt),
+                    Franvaroprocent = franvaroProcent
+                });
+
+                sjukKallor.Add(new AnstalldSjukKalla(kon, kvartalSjukdagar, manadslon));
+            }
+
+            _orgNamn = string.IsNullOrWhiteSpace(_orgNamn) ? "Region Örebro län" : _orgNamn;
+
+            _lonInput = new SCBLonestatistikInput
+            {
+                Ar = _ar,
+                Manad = 11,
+                Organisationsnamn = _orgNamn,
+                Organisationsnummer = _orgNr,
+                Individer = loneIndivider
+            };
+
+            _novInput = new SKRNovemberstatistikInput
+            {
+                Ar = _ar,
+                Organisationsnamn = _orgNamn,
+                Organisationsnummer = _orgNr,
+                Individer = novIndivider
+            };
+
+            _sjukKallor = sjukKallor;
+            ByggSjuklonUnderlag();
+
+            // Sammanfattning via SCB-generatorn (samma aggregering som filen).
+            var forhands = new SCBLonestatistikGenerator().Generera(_lonInput);
+            _antalAnstallda = loneIndivider.Count;
+            _antalGrupper = forhands.Grupper.Count;
+            _arsarbetare = novIndivider.Sum(i => Math.Clamp(i.Sysselsattningsgrad, 0m, 100m) / 100m);
+            _kvinnorLoneandel = forhands.KvinnorLoneandelProcent;
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte bygga statistikunderlaget: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private List<AnstalldSjukKalla> _sjukKallor = [];
+
+    private void ByggSjuklonUnderlag()
+    {
+        var (kvStart, kvEnd) = KvartalIntervall(_ar, _kvartal);
+        var mojligaArbetsdagar = (decimal)RaknaArbetsdagar(kvStart, kvEnd);
+
+        _sjukInput = new SCBSjuklonestatistikInput
+        {
+            Ar = _ar,
+            Kvartal = _kvartal,
+            Organisationsnamn = _orgNamn,
+            Organisationsnummer = _orgNr,
+            Individer = _sjukKallor.Select(s => new SCBSjuklonIndivid
+            {
+                Kon = s.Kon,
+                SjukdagarISjuklonePeriod = s.KvartalSjukdagar,
+                UtbetaldSjuklon = Math.Round(s.Manadslon / ArbetsdagarPerManad * SjuklonAndel * s.KvartalSjukdagar, 2, MidpointRounding.AwayFromZero),
+                MojligaArbetsdagar = mojligaArbetsdagar
+            }).ToList()
+        };
+    }
+
+    private async Task LaddaNerLonestatistik()
+    {
+        var r = new SCBLonestatistikGenerator().Generera(_lonInput);
+        await LaddaNer(r.Filnamn, r.Bytes, "SCB-lönestatistik");
+    }
+
+    private async Task LaddaNerSjuklonestatistik()
+    {
+        var r = new SCBSjuklonestatistikGenerator().Generera(_sjukInput);
+        await LaddaNer(r.Filnamn, r.Bytes, "SCB-sjuklönestatistik");
+    }
+
+    private async Task LaddaNerNovemberstatistik()
+    {
+        var r = new SKRNovemberstatistikGenerator().Generera(_novInput);
+        await LaddaNer(r.Filnamn, r.Bytes, "SKR-novemberstatistik");
+    }
+
+    private async Task LaddaNer(string filnamn, byte[] bytes, string etikett)
+    {
+        _genererar = true;
+        _status = null;
+        _fel = null;
+        try
+        {
+            var base64 = Convert.ToBase64String(bytes);
+            await JS.InvokeVoidAsync("downloadFile", filnamn, base64, "text/csv;charset=ISO-8859-1");
+            _status = $"{etikett} genererad: {filnamn} ({bytes.Length} byte).";
+        }
+        catch (Exception ex)
+        {
+            _fel = $"Kunde inte skapa {etikett}: {ex.Message}";
+        }
+        finally
+        {
+            _genererar = false;
+        }
+    }
+
+    private static (DateOnly Start, DateOnly End) KvartalIntervall(int ar, int kvartal)
+    {
+        var startManad = (Math.Clamp(kvartal, 1, 4) - 1) * 3 + 1;
+        var start = new DateOnly(ar, startManad, 1);
+        return (start, start.AddMonths(3).AddDays(-1));
+    }
+
+    private static int RaknaArbetsdagar(DateOnly fran, DateOnly till)
+    {
+        if (till < fran) return 0;
+        var dagar = 0;
+        for (var d = fran; d <= till; d = d.AddDays(1))
+        {
+            if (d.DayOfWeek != DayOfWeek.Saturday && d.DayOfWeek != DayOfWeek.Sunday)
+                dagar++;
+        }
+        return dagar;
+    }
+
+    private static int Alder(DateOnly fodelse, DateOnly vid)
+    {
+        var alder = vid.Year - fodelse.Year;
+        if (fodelse.AddYears(alder) > vid) alder--;
+        return Math.Max(0, alder);
+    }
+
+    private sealed record AnstalldSjukKalla(string Kon, int KvartalSjukdagar, decimal Manadslon);
+}
