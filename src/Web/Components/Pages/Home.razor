@@ -124,20 +124,29 @@ else if (_showBemanning && _bemanningPerEnhet.Count == 0 && !_loading)
         {
             var idag = DateOnly.FromDateTime(DateTime.Today);
 
-            // Headcount: anställda med aktiv anställning
-            var employees = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
-            _headcount = employees.Count(e => e.AktivAnstallning(idag) != null);
+            // Headcount: anställda med aktiv anställning — SQL COUNT + EXISTS, inga entiteter
+            // materialiseras (skalar till tiotusentals anställda).
+            _headcount = await db.Employees.CountAsync(e => e.Anstallningar.Any(a =>
+                a.Giltighetsperiod.Start <= idag &&
+                (a.Giltighetsperiod.End == null || a.Giltighetsperiod.End >= idag)));
 
             // LAS-alarm
             _lasAlarm = await db.LASAccumulations
                 .CountAsync(l => l.Status == LASStatus.NaraGrans || l.Status == LASStatus.KritiskNara);
 
-            // Positioner — en fråga, gruppera status i minnet
-            var positions = await db.Positions_Table.ToListAsync();
-            var statusCounts = positions.GroupBy(p => p.Status)
-                .ToDictionary(g => g.Key, g => g.Count());
-            var aktiva = statusCounts.GetValueOrDefault(PositionStatus.Aktiv);
-            var vakanta = statusCounts.GetValueOrDefault(PositionStatus.Vakant);
+            // Positioner per enhet — aggregeras i databasen (GROUP BY), inte i minnet.
+            var perEnhetRaw = await db.Positions_Table
+                .GroupBy(p => p.EnhetId)
+                .Select(g => new
+                {
+                    EnhetId = g.Key,
+                    Aktiva = g.Sum(p => p.Status == PositionStatus.Aktiv ? 1 : 0),
+                    Vakanta = g.Sum(p => p.Status == PositionStatus.Vakant ? 1 : 0)
+                })
+                .ToListAsync();
+
+            var aktiva = perEnhetRaw.Sum(x => x.Aktiva);
+            var vakanta = perEnhetRaw.Sum(x => x.Vakanta);
             _vakantaPositioner = vakanta;
 
             // Väntande godkännanden
@@ -148,16 +157,14 @@ else if (_showBemanning && _bemanningPerEnhet.Count == 0 && !_loading)
             var total = aktiva + vakanta;
             _bemanningsgrad = total > 0 ? (int)Math.Round(100.0 * aktiva / total) : 0;
 
-            // Bemanning per enhet
-            var enheter = await db.OrganizationUnits.ToListAsync();
-            var enhetNamn = enheter.ToDictionary(e => e.Id.Value, e => e.Namn);
+            // Bemanning per enhet — enhetsnamn (liten tabell) slås upp för de grupperade raderna.
+            var enhetNamn = await db.OrganizationUnits.ToDictionaryAsync(e => e.Id.Value, e => e.Namn);
 
-            _bemanningPerEnhet = positions
-                .GroupBy(p => p.EnhetId)
+            _bemanningPerEnhet = perEnhetRaw
                 .Select(g => new EnhetBemanningVm(
-                    enhetNamn.TryGetValue(g.Key, out var namn) ? namn : L["UnknownUnit"].Value,
-                    g.Count(p => p.Status == PositionStatus.Aktiv),
-                    g.Count(p => p.Status == PositionStatus.Vakant)))
+                    enhetNamn.TryGetValue(g.EnhetId, out var namn) ? namn : L["UnknownUnit"].Value,
+                    g.Aktiva,
+                    g.Vakanta))
                 .OrderByDescending(e => e.Vakanta)
                 .ToList();
         }

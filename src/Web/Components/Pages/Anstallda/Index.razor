@@ -1,6 +1,7 @@
 @page "/anstallda"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Export
+@using RegionHR.Web.Services
 @using Microsoft.Extensions.Localization
 @inject RegionHR.Web.Services.AnstallningService Service
 @inject RegionHR.Web.Services.UnitScopeService Scope
@@ -16,12 +17,12 @@
     <div class="d-flex gap-2">
         <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
                    StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="ExporteraCsv"
-                   Style="min-height: 48px;">
+                   Disabled="_exporterar" Style="min-height: 48px;">
             CSV
         </MudButton>
         <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Small"
                    StartIcon="@Icons.Material.Filled.Download" OnClick="ExporteraExcel"
-                   Style="min-height: 48px;">
+                   Disabled="_exporterar" Style="min-height: 48px;">
             @L["ExportExcel"]
         </MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
@@ -31,48 +32,58 @@
     </div>
 </div>
 
-<MudTextField @bind-Value="_sokterm" Label="@L["SearchName"]" Variant="Variant.Outlined"
-              Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
-              Immediate="true" DebounceInterval="300"
-              @bind-Value:after="@(() => Sok(_sokterm))" Class="mb-4" />
-
-@if (_anstallda.Count == 0 && !_loading)
-{
-    <MudAlert Severity="Severity.Info">@L["NoEmployeesFound"]</MudAlert>
-}
-else
-{
-    <MudSimpleTable Hover="true" Elevation="2">
-        <thead>
-            <tr>
-                <th>@L["Name"]</th>
-                <th>@L["PersonalNumber"]</th>
-                <th>@L["JobTitle"]</th>
-                <th>@L["EmploymentForm"]</th>
-                <th>@L["EmploymentRate"]</th>
-                <th></th>
-            </tr>
-        </thead>
-        <tbody>
-            @foreach (var a in _anstallda)
-            {
-                <tr style="cursor: pointer;" @onclick="@(() => Nav.NavigateTo($"/anstallda/{a.Id.Value}"))">
-                    <td><strong>@a.Fornamn @a.Efternamn</strong></td>
-                    <td>@a.PersonnummerMaskerat</td>
-                    <td>@a.Befattning</td>
-                    <td>@a.Anstallningsform</td>
-                    <td>@a.Sysselsattningsgrad%</td>
-                    <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Nav.NavigateTo($"/anstallda/{a.Id.Value}"))">@L["Open"]</MudButton></td>
-                </tr>
-            }
-        </tbody>
-    </MudSimpleTable>
-}
-
-@if (_loading)
-{
-    <MudProgressLinear Color="Color.Primary" Indeterminate="true" Class="mt-2" />
-}
+<MudTable @ref="_table" T="EmployeeListItem" ServerData="LaddaData" Hover="true" Elevation="2"
+          Dense="false" OnRowClick="OppnaRad" RowStyle="cursor: pointer;" Class="mb-2">
+    <ToolBarContent>
+        <MudTextField T="string" @bind-Value="_sokterm" Label="@L["SearchName"]"
+                      Variant="Variant.Outlined" Margin="Margin.Dense"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true" DebounceInterval="300"
+                      @bind-Value:after="ReloadTable" Style="max-width: 360px;" />
+        @if (!Scope.IsUnitScoped && _enheter.Count > 0)
+        {
+            <MudSelect T="Guid?" @bind-Value="_valdEnhet" Label="@L["Unit"]"
+                       Variant="Variant.Outlined" Margin="Margin.Dense" Clearable="true"
+                       @bind-Value:after="ReloadTable" Class="ml-3" Style="max-width: 280px;">
+                @foreach (var e in _enheter)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Namn (@e.Kostnadsstalle)</MudSelectItem>
+                }
+            </MudSelect>
+        }
+        <MudSpacer />
+    </ToolBarContent>
+    <HeaderContent>
+        <MudTh>@L["Name"]</MudTh>
+        <MudTh>@L["PersonalNumber"]</MudTh>
+        <MudTh>@L["JobTitle"]</MudTh>
+        <MudTh>@L["Unit"]</MudTh>
+        <MudTh>@L["EmploymentForm"]</MudTh>
+        <MudTh>@L["EmploymentRate"]</MudTh>
+        <MudTh></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="@L["Name"]"><strong>@context.Fornamn @context.Efternamn</strong></MudTd>
+        <MudTd DataLabel="@L["PersonalNumber"]">@context.PersonnummerMaskerat</MudTd>
+        <MudTd DataLabel="@L["JobTitle"]">@context.Befattning</MudTd>
+        <MudTd DataLabel="@L["Unit"]">@context.Enhet</MudTd>
+        <MudTd DataLabel="@L["EmploymentForm"]">@context.Anstallningsform</MudTd>
+        <MudTd DataLabel="@L["EmploymentRate"]">@context.Sysselsattningsgrad%</MudTd>
+        <MudTd>
+            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                       OnClick="@(() => Nav.NavigateTo($"/anstallda/{context.Id.Value}"))">@L["Open"]</MudButton>
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudAlert Severity="Severity.Info" Class="my-2">@L["NoEmployeesFound"]</MudAlert>
+    </NoRecordsContent>
+    <LoadingContent>
+        <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+    </LoadingContent>
+    <PagerContent>
+        <MudTablePager PageSizeOptions="new int[] { 25, 50, 100 }" />
+    </PagerContent>
+</MudTable>
 
 @if (_visarCsv)
 {
@@ -95,62 +106,98 @@ else
 }
 
 @code {
+    private MudTable<EmployeeListItem> _table = null!;
     private string _sokterm = "";
-    private bool _loading;
-    private List<RegionHR.Web.Services.EmployeeListItem> _anstallda = [];
+    private Guid? _valdEnhet;
+    private bool _exporterar;
+    private List<EnhetVal> _enheter = [];
 
     protected override async Task OnInitializedAsync()
     {
-        await LaddaAnstallda();
+        // Enhetsväljaren visas bara för HR/Admin (chef är låst till sin egen enhet).
+        if (!Scope.IsUnitScoped)
+        {
+            try { _enheter = await Service.HamtaEnheterAsync(); }
+            catch { _enheter = []; }
+        }
     }
 
-    private async Task Sok(string term)
-    {
-        _sokterm = term;
-        await LaddaAnstallda();
-    }
+    private Task ReloadTable() => _table.ReloadServerData();
 
-    private async Task LaddaAnstallda()
+    /// <summary>
+    /// ServerData-callback för MudTable: laddar EN sida ur DB (Skip/Take + totalantal).
+    /// En chef scopas till sin enhet direkt i SQL-frågan; kan enheten inte härledas
+    /// visas ingenting (fail-closed) i stället för hela organisationen.
+    /// </summary>
+    private async Task<TableData<EmployeeListItem>> LaddaData(TableState state, CancellationToken token)
     {
-        _loading = true;
+        var (visa, enhet) = await BestamEnhetsfilterAsync();
+        if (!visa)
+            return new TableData<EmployeeListItem> { Items = [], TotalItems = 0 };
+
         try
         {
-            var alla = await Service.HamtaAllaAsync(string.IsNullOrWhiteSpace(_sokterm) ? null : _sokterm);
-
-            // Enhets-scoping (samma mönster som Chef/Index.razor): en chef ser
-            // bara sin egen enhets medarbetare; HR/Admin ser allt. Fail-closed:
-            // kan enheten inte härledas för en chef visas INGET i stället för
-            // hela organisationen.
-            if (Scope.IsUnitScoped)
-            {
-                var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
-                alla = scopeIds is null
-                    ? []
-                    : alla.Where(a => scopeIds.Contains(a.Id.Value)).ToList();
-            }
-
-            _anstallda = alla;
+            var sida = await Service.HamtaSidaAsync(
+                state.Page * state.PageSize,
+                state.PageSize,
+                string.IsNullOrWhiteSpace(_sokterm) ? null : _sokterm,
+                enhet,
+                token);
+            return new TableData<EmployeeListItem> { Items = sida.Items, TotalItems = sida.TotalAntal };
         }
         catch
         {
-            _anstallda = [];
+            return new TableData<EmployeeListItem> { Items = [], TotalItems = 0 };
         }
-        _loading = false;
+    }
+
+    /// <summary>
+    /// Löser det effektiva enhetsfiltret. Returnerar (visa, enhet):
+    /// visa=false innebär fail-closed (chef utan härledbar enhet → visa inget).
+    /// </summary>
+    private async Task<(bool Visa, Guid? Enhet)> BestamEnhetsfilterAsync()
+    {
+        if (Scope.IsUnitScoped)
+        {
+            var unit = await Scope.GetCurrentUnitIdAsync();
+            return unit is null ? (false, (Guid?)null) : (true, unit);
+        }
+        return (true, _valdEnhet);
+    }
+
+    private void OppnaRad(TableRowClickEventArgs<EmployeeListItem> args)
+    {
+        if (args.Item is { } rad)
+            Nav.NavigateTo($"/anstallda/{rad.Id.Value}");
     }
 
     private bool _visarCsv;
     private string _csvInnehall = "";
     private bool _kopierad;
 
-    private void ExporteraCsv()
+    private async Task<List<EmployeeListItem>> HamtaExportdataAsync()
     {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"{L["FirstName"]};{L["LastName"]};{L["PersonalNumber"]};{L["JobTitle"]};{L["EmploymentForm"]};{L["EmploymentRate"]} (%)");
-        foreach (var a in _anstallda)
-            sb.AppendLine($"{a.Fornamn};{a.Efternamn};{a.PersonnummerMaskerat};{a.Befattning};{a.Anstallningsform};{a.Sysselsattningsgrad}");
-        _csvInnehall = sb.ToString();
-        _visarCsv = true;
-        _kopierad = false;
+        var (visa, enhet) = await BestamEnhetsfilterAsync();
+        if (!visa) return [];
+        return await Service.HamtaForExportAsync(
+            string.IsNullOrWhiteSpace(_sokterm) ? null : _sokterm, enhet);
+    }
+
+    private async Task ExporteraCsv()
+    {
+        _exporterar = true;
+        try
+        {
+            var rader = await HamtaExportdataAsync();
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"{L["FirstName"]};{L["LastName"]};{L["PersonalNumber"]};{L["JobTitle"]};{L["Unit"]};{L["EmploymentForm"]};{L["EmploymentRate"]} (%)");
+            foreach (var a in rader)
+                sb.AppendLine($"{a.Fornamn};{a.Efternamn};{a.PersonnummerMaskerat};{a.Befattning};{a.Enhet};{a.Anstallningsform};{a.Sysselsattningsgrad}");
+            _csvInnehall = sb.ToString();
+            _visarCsv = true;
+            _kopierad = false;
+        }
+        finally { _exporterar = false; }
     }
 
     private async Task KopieraCsv()
@@ -168,27 +215,34 @@ else
 
     private async Task ExporteraExcel()
     {
-        var headers = new[] { L["FirstName"].Value, L["LastName"].Value, L["PersonalNumber"].Value, L["JobTitle"].Value, L["EmploymentForm"].Value, $"{L["EmploymentRate"]} (%)" };
+        _exporterar = true;
+        try
+        {
+            var rader = await HamtaExportdataAsync();
+            var headers = new[] { L["FirstName"].Value, L["LastName"].Value, L["PersonalNumber"].Value, L["JobTitle"].Value, L["Unit"].Value, L["EmploymentForm"].Value, $"{L["EmploymentRate"]} (%)" };
 
-        var excelBytes = Export.ToExcel(
-            _anstallda,
-            L["Employees"].Value,
-            headers,
-            a => new object[]
-            {
-                a.Fornamn,
-                a.Efternamn,
-                a.PersonnummerMaskerat,
-                a.Befattning,
-                a.Anstallningsform,
-                a.Sysselsattningsgrad
-            });
+            var excelBytes = Export.ToExcel(
+                rader,
+                L["Employees"].Value,
+                headers,
+                a => new object[]
+                {
+                    a.Fornamn,
+                    a.Efternamn,
+                    a.PersonnummerMaskerat,
+                    a.Befattning,
+                    a.Enhet,
+                    a.Anstallningsform,
+                    a.Sysselsattningsgrad
+                });
 
-        var base64 = Convert.ToBase64String(excelBytes);
-        var timestamp = DateTime.Now.ToString("yyyy-MM-dd");
-        await JS.InvokeVoidAsync("downloadFile",
-            $"anstallda-{timestamp}.xlsx",
-            base64,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+            var base64 = Convert.ToBase64String(excelBytes);
+            var timestamp = DateTime.Now.ToString("yyyy-MM-dd");
+            await JS.InvokeVoidAsync("downloadFile",
+                $"anstallda-{timestamp}.xlsx",
+                base64,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        }
+        finally { _exporterar = false; }
     }
 }

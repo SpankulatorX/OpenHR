@@ -2203,5 +2203,20 @@ Lön betalas ut den **25:e varje månad**. Om den 25:e infaller på helg sker ut
         db.DevelopmentPlans.Add(utvPlanAnna);
 
         await db.SaveChangesAsync();
+
+        // === Procedurell demo-befolkning: ~11 000 anställda över hela Region Örebro län ===
+        // Bygger ut organisationsträdet (förvaltningar, sjukhus + kliniker, vårdcentraler,
+        // folktandvård, service, kultur, kollektivtrafik) och befolkar det. Körs EFTER all
+        // handplockad demo-data ovan — de namngivna demo-användarna (Anna Svensson,
+        // Eva Nilsson, Karl Berg m.fl.) och deras rika data lämnas helt orörda. Generatorn
+        // sköter sina egna batchade SaveChanges; guarden överst (tom DB) håller idempotensen.
+        await Demo.DemoBefolkningsGenerator.GenereraAsync(
+            db,
+            regionId: region.Id,
+            usoId: sjukhus.Id,
+            abAvtalsId: ab.Id,
+            // Reservera de FAKTISKT lagrade numren (CreateValidated kan ha räknat om
+            // kontrollsiffran) så generatorn garanterat inte krockar med demo-användarna.
+            reserveradePersonnummer: seedEmployees.Select(e => (string)Personnummer.CreateValidated(e.Pnr)));
     }
 }
