@@ -196,13 +196,200 @@ public class AnstallningService
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<List<OrganizationUnit>> HamtaOrganisationAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Hämtar HELA organisationsträdet i EN platt fråga och bygger parent→barn-hierarkin
+    /// i minnet (via <see cref="OrganizationUnit.OverordnadEnhetId"/>). Den gamla varianten
+    /// laddade bara roten + en nivå barn med <c>.Include(o =&gt; o.Underenheter)</c>, så nivå
+    /// 3–4 (kliniker/vårdcentraler/underenheter) blev osynliga. Nu returneras rot-noderna
+    /// med fullt påfyllda barn i alla nivåer — alla enheter är nåbara. Varje nod bär även
+    /// antal aktiva anställda (direkt + rullat upp över subträdet) för att kunna visas i UI.
+    /// </summary>
+    public async Task<List<OrgTreeNode>> HamtaOrganisationAsync(CancellationToken ct = default)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
-        return await db.OrganizationUnits
-            .Include(o => o.Underenheter)
-            .Where(o => o.OverordnadEnhetId == null)
+
+        // En platt fråga över hela (lilla) enhetstabellen, ordnad på namn.
+        var enheter = await db.OrganizationUnits
+            .AsNoTracking()
+            .OrderBy(o => o.Namn)
             .ToListAsync(ct);
+
+        var antalPerEnhet = await HamtaAntalAnstalldaPerEnhetAsync(db, ct);
+
+        var platta = enheter.Select(o => new OrgTreeNode(
+            o.Id,
+            o.Namn,
+            o.Typ,
+            o.Kostnadsstalle,
+            o.OverordnadEnhetId is { } p ? p.Value : (Guid?)null,
+            antalPerEnhet.TryGetValue(o.Id.Value, out var n) ? n : 0));
+
+        return ByggHierarki(platta);
+    }
+
+    /// <summary>
+    /// Rent in-minne-trädbygge: kopplar en platt lista av noder till en parent→barn-hierarki
+    /// via <see cref="OrgTreeNode.OverordnadId"/> och returnerar rot-noderna. Barnens ordning
+    /// bevaras från inlistan (kalla med namnsorterad lista för namnsorterat träd). En nod utan
+    /// förälder — ELLER med en förälder som inte finns i urvalet (dinglande FK) — behandlas som
+    /// rot, så att ingen enhet någonsin blir onåbar. Antal anställda rullas upp per subträd.
+    /// Ren funktion utan DB-beroende → enhetstestbar.
+    /// </summary>
+    public static List<OrgTreeNode> ByggHierarki(IEnumerable<OrgTreeNode> platta)
+    {
+        var noder = platta as IList<OrgTreeNode> ?? platta.ToList();
+
+        var perId = new Dictionary<Guid, OrgTreeNode>(noder.Count);
+        foreach (var n in noder)
+        {
+            n.Barn.Clear();
+            perId[n.Id.Value] = n; // vid ev. dubbletter vinner den sista
+        }
+
+        var rotter = new List<OrgTreeNode>();
+        foreach (var n in noder)
+        {
+            if (n.OverordnadId is { } pid
+                && perId.TryGetValue(pid, out var parent)
+                && !ReferenceEquals(parent, n))
+            {
+                parent.Barn.Add(n);
+            }
+            else
+            {
+                rotter.Add(n);
+            }
+        }
+
+        foreach (var rot in rotter)
+            BeraknaTotaltAntal(rot);
+
+        return rotter;
+    }
+
+    private static int BeraknaTotaltAntal(OrgTreeNode nod)
+    {
+        var summa = nod.AntalAnstalldaDirekt;
+        foreach (var barn in nod.Barn)
+            summa += BeraknaTotaltAntal(barn);
+        nod.AntalAnstalldaTotalt = summa;
+        return summa;
+    }
+
+    /// <summary>
+    /// Antal AKTIVA anställda per enhet (nyckel = enhetens Guid). Hämtar bara enhets-id-kolumnen
+    /// för aktiva anställningar i en fråga och grupperar i minnet — undviker att materialisera
+    /// hela anställningsraderna och är oberoende av GroupBy-översättning för värde-konverterade
+    /// nycklar. Enhetsurvalet är litet; anställningarna filtreras på giltighetsperioden i SQL.
+    /// </summary>
+    /// <param name="begransaTill">
+    /// Om satt: räkna bara dessa enheter (IN-filter i SQL) i stället för hela registret. Används
+    /// av enhetsdetaljen som bara behöver enheten själv + dess direkta barn — då transporteras
+    /// bara de matchande radernas enhets-id, inte alla ~11 000. Trädvyn kallar utan filter.
+    /// </param>
+    private static async Task<Dictionary<Guid, int>> HamtaAntalAnstalldaPerEnhetAsync(
+        RegionHRDbContext db, CancellationToken ct, IReadOnlyCollection<OrganizationId>? begransaTill = null)
+    {
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+        var query = db.Employments
+            .Where(a => a.Giltighetsperiod.Start <= idag
+                        && (a.Giltighetsperiod.End == null || a.Giltighetsperiod.End >= idag));
+
+        if (begransaTill is { Count: > 0 })
+            query = query.Where(a => begransaTill.Contains(a.EnhetId));
+
+        var enhetsIds = await query
+            .Select(a => a.EnhetId)
+            .ToListAsync(ct);
+
+        return enhetsIds
+            .GroupBy(id => id.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+    }
+
+    /// <summary>
+    /// Detaljdata för EN organisationsenhet: enhetens egna fält, dess överordnade enhet
+    /// (för länk tillbaka) och dess DIREKTA underenheter (med antal aktiva anställda per barn).
+    /// Antal anställda i själva enheten räknas i DB. Laddar aldrig anställningsrader hit — den
+    /// paginerade anställdlistan hämtas separat via <see cref="HamtaSidaAsync"/>.
+    /// </summary>
+    public async Task<OrgEnhetDetalj?> HamtaEnhetDetaljAsync(Guid id, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var oid = OrganizationId.From(id);
+
+        var enhet = await db.OrganizationUnits
+            .AsNoTracking()
+            .FirstOrDefaultAsync(o => o.Id == oid, ct);
+        if (enhet is null)
+            return null;
+
+        string? overordnadNamn = null;
+        if (enhet.OverordnadEnhetId is { } pid)
+        {
+            overordnadNamn = await db.OrganizationUnits
+                .AsNoTracking()
+                .Where(o => o.Id == pid)
+                .Select(o => o.Namn)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        var barn = await db.OrganizationUnits
+            .AsNoTracking()
+            .Where(o => o.OverordnadEnhetId == oid)
+            .OrderBy(o => o.Namn)
+            .ToListAsync(ct);
+
+        // Räkna anställda bara för enheten själv + dess direkta barn (inte hela registret).
+        var relevanta = new List<OrganizationId>(barn.Count + 1) { enhet.Id };
+        relevanta.AddRange(barn.Select(b => b.Id));
+        var antalPerEnhet = await HamtaAntalAnstalldaPerEnhetAsync(db, ct, relevanta);
+        int Antal(OrganizationId x) => antalPerEnhet.TryGetValue(x.Value, out var n) ? n : 0;
+
+        var barnDto = barn
+            .Select(b => new OrgEnhetBarn(b.Id, b.Namn, b.Typ, Antal(b.Id)))
+            .ToList();
+
+        return new OrgEnhetDetalj(
+            enhet.Id,
+            enhet.Namn,
+            enhet.Typ,
+            enhet.Kostnadsstalle,
+            enhet.CFARKod,
+            enhet.HsaId,
+            enhet.Giltighet.Start,
+            enhet.Giltighet.End,
+            enhet.OverordnadEnhetId is { } op ? op : (OrganizationId?)null,
+            overordnadNamn,
+            barnDto,
+            Antal(enhet.Id));
+    }
+
+    /// <summary>
+    /// Sammanfattning "antal aktiva anställda per befattning" för en enhet. Aggregeras i DB
+    /// (bara befattning + antal transporteras) och filtreras på enhet + aktiv giltighetsperiod.
+    /// </summary>
+    public async Task<List<BefattningsAntal>> HamtaBefattningsfordelningAsync(
+        Guid enhetId, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var oid = OrganizationId.From(enhetId);
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+
+        // Hämtar bara befattningskolumnen för enhetens aktiva anställningar; grupperar i minnet.
+        var titlar = await db.Employments
+            .Where(a => a.EnhetId == oid
+                        && a.Giltighetsperiod.Start <= idag
+                        && (a.Giltighetsperiod.End == null || a.Giltighetsperiod.End >= idag))
+            .Select(a => a.Befattningstitel)
+            .ToListAsync(ct);
+
+        return titlar
+            .GroupBy(t => string.IsNullOrWhiteSpace(t) ? "Ej angiven" : t!.Trim())
+            .Select(g => new BefattningsAntal(g.Key, g.Count()))
+            .OrderByDescending(r => r.Antal)
+            .ThenBy(r => r.Befattning, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
     }
 
     /// <summary>Platt lista över alla enheter för val i anställningsformulär.</summary>
@@ -348,3 +535,68 @@ public record PagedResult<T>(IReadOnlyList<T> Items, int TotalAntal);
 
 public record EnhetVal(OrganizationId Id, string Namn, string Kostnadsstalle);
 public record AvtalVal(CollectiveAgreementId Id, string Namn);
+
+/// <summary>
+/// En nod i organisationsträdet (vy-modell). Bär enhetens visningsfält, förälder-id (för
+/// hierarkibygget), antal aktiva anställda direkt i enheten och — efter <see
+/// cref="AnstallningService.ByggHierarki"/> — det totala antalet i hela subträdet samt
+/// barnnoderna. Muterbar där det behövs (Barn/summor fylls under trädbygget); allt annat är
+/// oföränderligt efter konstruktion.
+/// </summary>
+public sealed class OrgTreeNode
+{
+    public OrganizationId Id { get; }
+    public string Namn { get; }
+    public OrganizationUnitType Typ { get; }
+    public string Kostnadsstalle { get; }
+    public Guid? OverordnadId { get; }
+
+    /// <summary>Antal aktiva anställda direkt i denna enhet (exkl. underenheter).</summary>
+    public int AntalAnstalldaDirekt { get; set; }
+
+    /// <summary>Antal aktiva anställda i hela subträdet (inkl. denna enhet). Sätts av trädbygget.</summary>
+    public int AntalAnstalldaTotalt { get; set; }
+
+    public List<OrgTreeNode> Barn { get; } = [];
+
+    /// <summary>Antal direkta underenheter.</summary>
+    public int AntalUnderenheter => Barn.Count;
+
+    public OrgTreeNode(
+        OrganizationId id,
+        string namn,
+        OrganizationUnitType typ,
+        string kostnadsstalle,
+        Guid? overordnadId,
+        int antalAnstalldaDirekt = 0)
+    {
+        Id = id;
+        Namn = namn;
+        Typ = typ;
+        Kostnadsstalle = kostnadsstalle;
+        OverordnadId = overordnadId;
+        AntalAnstalldaDirekt = antalAnstalldaDirekt;
+        AntalAnstalldaTotalt = antalAnstalldaDirekt;
+    }
+}
+
+/// <summary>Detaljvy för en organisationsenhet (enhetsfält + förälder + direkta barn).</summary>
+public record OrgEnhetDetalj(
+    OrganizationId Id,
+    string Namn,
+    OrganizationUnitType Typ,
+    string Kostnadsstalle,
+    string? CFARKod,
+    string? HsaId,
+    DateOnly GiltigFran,
+    DateOnly? GiltigTill,
+    OrganizationId? OverordnadId,
+    string? OverordnadNamn,
+    IReadOnlyList<OrgEnhetBarn> DirektaUnderenheter,
+    int AntalAnstallda);
+
+/// <summary>En direkt underenhet i detaljvyn (klickbar, med antal anställda).</summary>
+public record OrgEnhetBarn(OrganizationId Id, string Namn, OrganizationUnitType Typ, int AntalAnstallda);
+
+/// <summary>Rad i sammanfattningen "antal anställda per befattning".</summary>
+public record BefattningsAntal(string Befattning, int Antal);

@@ -1,26 +1,81 @@
-@using RegionHR.Core.Domain
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Web.Services
+@inject NavigationManager Nav
 
-<div style="margin-left: @(Level * 24)px; padding: 0.5rem 0; border-left: @(Level > 0 ? "2px solid var(--rhr-border)" : "none"); padding-left: @(Level > 0 ? "1rem" : "0");">
-    <div style="display: flex; align-items: center; gap: 0.5rem;">
-        <RhrBadge Text="@Enhet.Typ.ToString()" Variant="@TypVariant" />
-        <strong>@Enhet.Namn</strong>
-        <span style="color: var(--rhr-text-muted); font-size: 0.85rem;">(@Enhet.Kostnadsstalle)</span>
+<div style="margin-left: @(Level * 20)px; border-left: @(Level > 0 ? "2px solid var(--rhr-border)" : "none"); padding-left: @(Level > 0 ? "0.75rem" : "0");">
+    <div class="org-node-row" style="display: flex; align-items: center; gap: 0.5rem; padding: 0.3rem 0.25rem; border-radius: 6px;">
+        @if (Nod.AntalUnderenheter > 0)
+        {
+            <MudIconButton Icon="@(_expanded ? Icons.Material.Filled.ExpandMore : Icons.Material.Filled.ChevronRight)"
+                           Size="Size.Small" Class="pa-0"
+                           aria-label="@(_expanded ? "Fäll ihop" : "Fäll ut")"
+                           OnClick="Toggle" />
+        }
+        else
+        {
+            <span style="display: inline-block; width: 30px;"></span>
+        }
+
+        <RhrBadge Text="@TypNamn(Nod.Typ)" Variant="@TypVariant(Nod.Typ)" />
+
+        <span role="link" tabindex="0" style="cursor: pointer; font-weight: 600; color: var(--mud-palette-primary);"
+              @onclick="Oppna" @onkeydown="OppnaViaTangent">@Nod.Namn</span>
+
+        <span style="color: var(--rhr-text-muted); font-size: 0.85rem;">(@Nod.Kostnadsstalle)</span>
+
+        @if (Nod.AntalUnderenheter > 0)
+        {
+            <span style="color: var(--rhr-text-muted); font-size: 0.8rem;"
+                  title="Antal direkta underenheter">· @Nod.AntalUnderenheter @(Nod.AntalUnderenheter == 1 ? "underenhet" : "underenheter")</span>
+        }
+        @if (Nod.AntalAnstalldaTotalt > 0)
+        {
+            <span style="color: var(--rhr-text-muted); font-size: 0.8rem;"
+                  title="Antal aktiva anställda i enheten inkl. underenheter (direkt: @Nod.AntalAnstalldaDirekt)">· @Nod.AntalAnstalldaTotalt anställda</span>
+        }
     </div>
 
-    @if (Enhet.Underenheter.Count > 0)
+    @if (_expanded && Nod.Barn.Count > 0)
     {
-        @foreach (var child in Enhet.Underenheter)
+        @foreach (var barn in Nod.Barn)
         {
-            <OrgNode Enhet="child" Level="Level + 1" />
+            <OrgNode Nod="barn" Level="Level + 1" />
         }
     }
 </div>
 
 @code {
-    [Parameter] public OrganizationUnit Enhet { get; set; } = default!;
+    [Parameter] public OrgTreeNode Nod { get; set; } = default!;
     [Parameter] public int Level { get; set; }
 
-    private string TypVariant => Enhet.Typ switch
+    private bool _expanded;
+
+    // Region (0) och förvaltning (1) fälls ut som standard, så de ~110 verksamhetsnivå-
+    // enheterna syns direkt; djupare nivåer expanderas på klick.
+    protected override void OnInitialized() => _expanded = Level <= 1;
+
+    private void Toggle() => _expanded = !_expanded;
+
+    private void Oppna() => Nav.NavigateTo($"/organisation/{Nod.Id.Value}");
+
+    private void OppnaViaTangent(KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or " ")
+            Oppna();
+    }
+
+    private static string TypNamn(OrganizationUnitType t) => t switch
+    {
+        OrganizationUnitType.Region => "Region",
+        OrganizationUnitType.Forvaltning => "Förvaltning",
+        OrganizationUnitType.Verksamhet => "Verksamhet",
+        OrganizationUnitType.Enhet => "Enhet",
+        OrganizationUnitType.Avdelning => "Avdelning",
+        OrganizationUnitType.Sektion => "Sektion",
+        _ => t.ToString()
+    };
+
+    private static string TypVariant(OrganizationUnitType t) => t switch
     {
         OrganizationUnitType.Region => "info",
         OrganizationUnitType.Forvaltning => "info",
