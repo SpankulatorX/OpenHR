@@ -1,0 +1,235 @@
+@page "/organisation/{Id:guid}"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Web.Services
+@inject RegionHR.Web.Services.AnstallningService Service
+@inject NavigationManager Nav
+
+<PageTitle>Organisationsenhet - RegionHR</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text"
+           Color="Color.Primary" Href="/organisation" Style="margin-bottom: 1rem;">
+    Tillbaka till organisationen
+</MudButton>
+
+@if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_detalj is null)
+{
+    <MudAlert Severity="Severity.Error">Enheten hittades inte.</MudAlert>
+}
+else
+{
+    <div class="d-flex align-center gap-3 mb-1" style="flex-wrap: wrap;">
+        <MudText Typo="Typo.h4" Style="font-weight: 700;">@_detalj.Namn</MudText>
+        <RhrBadge Text="@TypNamn(_detalj.Typ)" Variant="@TypVariant(_detalj.Typ)" />
+    </div>
+    @if (_detalj.OverordnadId is { } pid)
+    {
+        <MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">
+            Tillhör
+            <MudLink Href="@($"/organisation/{pid.Value}")">@(_detalj.OverordnadNamn ?? "överordnad enhet")</MudLink>
+        </MudText>
+    }
+    else
+    {
+        <MudText Typo="Typo.body2" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">Rotenhet (ingen överordnad enhet)</MudText>
+    }
+
+    <MudGrid Spacing="3" Class="mb-2">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="2" Style="height: 100%;">
+                <MudText Typo="Typo.h6" Class="mb-3">Enhetsuppgifter</MudText>
+                <MudSimpleTable Dense="true">
+                    <tbody>
+                        <tr><td><strong>Typ</strong></td><td>@TypNamn(_detalj.Typ)</td></tr>
+                        <tr><td><strong>Kostnadsställe</strong></td><td>@_detalj.Kostnadsstalle</td></tr>
+                        <tr><td><strong>CFAR-kod</strong></td><td>@(_detalj.CFARKod ?? "—")</td></tr>
+                        <tr><td><strong>HSA-id</strong></td><td>@(_detalj.HsaId ?? "—")</td></tr>
+                        <tr>
+                            <td><strong>Giltighet</strong></td>
+                            <td>@_detalj.GiltigFran.ToString("yyyy-MM-dd") – @(_detalj.GiltigTill?.ToString("yyyy-MM-dd") ?? "tillsvidare")</td>
+                        </tr>
+                        <tr><td><strong>Direkta underenheter</strong></td><td>@_detalj.DirektaUnderenheter.Count</td></tr>
+                        <tr><td><strong>Antal aktiva anställda</strong></td><td>@_detalj.AntalAnstallda</td></tr>
+                    </tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-4" Elevation="2" Style="height: 100%;">
+                <MudText Typo="Typo.h6" Class="mb-3">Anställda per befattning</MudText>
+                @if (_befattningar.Count == 0)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga aktiva anställda direkt i denna enhet.</MudAlert>
+                }
+                else
+                {
+                    <div class="d-flex flex-column gap-1">
+                        @foreach (var b in _befattningar)
+                        {
+                            <div class="d-flex justify-space-between align-center">
+                                <span>@b.Befattning</span>
+                                <MudChip T="string" Size="Size.Small" Color="Color.Primary" Variant="Variant.Text">@b.Antal</MudChip>
+                            </div>
+                        }
+                    </div>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    @if (_detalj.DirektaUnderenheter.Count > 0)
+    {
+        <MudPaper Class="pa-4 mb-2" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-3">Underenheter (@_detalj.DirektaUnderenheter.Count)</MudText>
+            <MudSimpleTable Hover="true" Style="cursor: pointer;">
+                <thead>
+                    <tr><th>Namn</th><th>Typ</th><th>Antal anställda</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var barn in _detalj.DirektaUnderenheter)
+                    {
+                        <tr @onclick="@(() => Oppna(barn.Id.Value))">
+                            <td><strong>@barn.Namn</strong></td>
+                            <td>@TypNamn(barn.Typ)</td>
+                            <td>@barn.AntalAnstallda</td>
+                            <td>
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                                           OnClick="@(() => Oppna(barn.Id.Value))">Öppna</MudButton>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        </MudPaper>
+    }
+
+    <MudPaper Class="pa-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">Anställda i enheten</MudText>
+        <MudText Typo="Typo.body2" Class="mb-2" Style="color: var(--mud-palette-text-secondary);">
+            Visar personer med en aktiv anställning direkt i @_detalj.Namn. Klicka på en rad för att öppna den anställde.
+        </MudText>
+        <MudTable @ref="_table" T="EmployeeListItem" ServerData="LaddaAnstallda" Hover="true" Elevation="0"
+                  OnRowClick="OppnaRad" RowStyle="cursor: pointer;">
+            <HeaderContent>
+                <MudTh>Namn</MudTh>
+                <MudTh>Befattning</MudTh>
+                <MudTh>Sysselsättningsgrad</MudTh>
+                <MudTh>Anställningsform</MudTh>
+                <MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Namn"><strong>@context.Fornamn @context.Efternamn</strong></MudTd>
+                <MudTd DataLabel="Befattning">@context.Befattning</MudTd>
+                <MudTd DataLabel="Sysselsättningsgrad">@context.Sysselsattningsgrad%</MudTd>
+                <MudTd DataLabel="Anställningsform">@context.Anstallningsform</MudTd>
+                <MudTd>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary"
+                               OnClick="@(() => Nav.NavigateTo($"/anstallda/{context.Id.Value}"))">Öppna</MudButton>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudAlert Severity="Severity.Info" Class="my-2">Inga anställda i denna enhet.</MudAlert>
+            </NoRecordsContent>
+            <LoadingContent>
+                <MudProgressLinear Color="Color.Primary" Indeterminate="true" />
+            </LoadingContent>
+            <PagerContent>
+                <MudTablePager PageSizeOptions="new int[] { 25, 50, 100 }" />
+            </PagerContent>
+        </MudTable>
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private OrgEnhetDetalj? _detalj;
+    private List<BefattningsAntal> _befattningar = [];
+    private MudTable<EmployeeListItem> _table = null!;
+    private bool _loading = true;
+    private string? _error;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _error = null;
+        try
+        {
+            _detalj = await Service.HamtaEnhetDetaljAsync(Id);
+            _befattningar = _detalj is null ? [] : await Service.HamtaBefattningsfordelningAsync(Id);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte hämta enheten: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+        }
+
+        // Om användaren navigerar mellan enheter (samma sidkomponent) ska tabellen läsas om.
+        if (_table is not null)
+            await _table.ReloadServerData();
+    }
+
+    /// <summary>
+    /// Serversidig paginering av enhetens anställda: filtrerar på EnhetId i SQL och räknar
+    /// totalen med CountAsync i DB (via <see cref="AnstallningService.HamtaSidaAsync"/>) — laddar
+    /// aldrig hela registret, bara en sida (25/50/100).
+    /// </summary>
+    private async Task<TableData<EmployeeListItem>> LaddaAnstallda(TableState state, CancellationToken token)
+    {
+        try
+        {
+            var sida = await Service.HamtaSidaAsync(
+                state.Page * state.PageSize,
+                state.PageSize,
+                sokterm: null,
+                enhetId: Id,
+                ct: token);
+            return new TableData<EmployeeListItem> { Items = sida.Items, TotalItems = sida.TotalAntal };
+        }
+        catch
+        {
+            return new TableData<EmployeeListItem> { Items = [], TotalItems = 0 };
+        }
+    }
+
+    private void OppnaRad(TableRowClickEventArgs<EmployeeListItem> args)
+    {
+        if (args.Item is { } rad)
+            Nav.NavigateTo($"/anstallda/{rad.Id.Value}");
+    }
+
+    private void Oppna(Guid enhetId) => Nav.NavigateTo($"/organisation/{enhetId}");
+
+    private static string TypNamn(OrganizationUnitType t) => t switch
+    {
+        OrganizationUnitType.Region => "Region",
+        OrganizationUnitType.Forvaltning => "Förvaltning",
+        OrganizationUnitType.Verksamhet => "Verksamhet",
+        OrganizationUnitType.Enhet => "Enhet",
+        OrganizationUnitType.Avdelning => "Avdelning",
+        OrganizationUnitType.Sektion => "Sektion",
+        _ => t.ToString()
+    };
+
+    private static string TypVariant(OrganizationUnitType t) => t switch
+    {
+        OrganizationUnitType.Region => "info",
+        OrganizationUnitType.Forvaltning => "info",
+        OrganizationUnitType.Verksamhet => "warning",
+        OrganizationUnitType.Enhet or OrganizationUnitType.Avdelning => "success",
+        _ => "info"
+    };
+}

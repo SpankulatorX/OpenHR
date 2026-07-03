@@ -81,16 +81,20 @@
         }
         else
         {
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                @_antalEnheter enheter i @_rotenheter.Count @(_rotenheter.Count == 1 ? "rot" : "rötter"). Klicka på ett namn för att öppna enheten, eller på pilen för att fälla ut.
+            </MudText>
             @foreach (var enhet in _rotenheter)
             {
-                <OrgNode Enhet="enhet" Level="0" />
+                <OrgNode Nod="enhet" Level="0" />
             }
         }
     </ChildContent>
 </RhrCard>
 
 @code {
-    private List<RegionHR.Core.Domain.OrganizationUnit> _rotenheter = [];
+    private List<OrgTreeNode> _rotenheter = [];
+    private int _antalEnheter;
     private List<EnhetVal> _plattaEnheter = [];
     private bool _loading = true;
     private bool _visarForm;
@@ -113,6 +117,7 @@
         try
         {
             _rotenheter = await Service.HamtaOrganisationAsync();
+            _antalEnheter = RaknaNoder(_rotenheter);
             _plattaEnheter = await Service.HamtaEnheterAsync();
         }
         catch (Exception ex)
@@ -152,6 +157,14 @@
         {
             _sparar = false;
         }
+    }
+
+    private static int RaknaNoder(IEnumerable<OrgTreeNode> noder)
+    {
+        var summa = 0;
+        foreach (var n in noder)
+            summa += 1 + RaknaNoder(n.Barn);
+        return summa;
     }
 
     private static string TypNamn(OrganizationUnitType t) => t switch
