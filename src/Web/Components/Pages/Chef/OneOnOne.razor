@@ -197,6 +197,8 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            // meeting laddades i init-contexten — attacha före mutation för persistens.
+            db.Attach(meeting);
             meeting.Genomfor("Möte genomfört.");
             await db.SaveChangesAsync();
             Snackbar.Add("Möte markerat som genomfört!", Severity.Success);
@@ -210,6 +212,7 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            db.Attach(meeting);
             meeting.Avboka();
             await db.SaveChangesAsync();
             Snackbar.Add("Möte avbokat.", Severity.Warning);
@@ -223,6 +226,7 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            db.Attach(item);
             item.Paborja();
             await db.SaveChangesAsync();
             await LaddaData();
@@ -235,6 +239,7 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            db.Attach(item);
             item.Slutfor();
             await db.SaveChangesAsync();
             Snackbar.Add("Åtgärd slutförd!", Severity.Success);

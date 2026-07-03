@@ -1,0 +1,299 @@
+@page "/positioner/{Id:guid}"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Positions.Domain
+@using RegionHR.SharedKernel.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>OpenHR - Position</PageTitle>
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary" Href="/positioner" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_position is null)
+{
+    <MudAlert Severity="Severity.Error">Positionen hittades inte.</MudAlert>
+}
+else
+{
+    <div class="d-flex justify-space-between align-center mb-4">
+        <div>
+            <MudText Typo="Typo.h4" Style="font-weight: 700;">@_position.Titel</MudText>
+            <MudText Typo="Typo.body1" Style="color: var(--mud-palette-text-secondary);">@_enhetNamn</MudText>
+        </div>
+        <MudChip T="string" Size="Size.Medium" Color="@StatusColor(_position.Status)">@StatusText(_position.Status)</MudChip>
+    </div>
+
+    @if (_success != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+    }
+    @if (_error != null)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+    }
+
+    <MudGrid Spacing="4">
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-5" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">Uppgifter</MudText>
+                <MudSimpleTable Dense="true">
+                    <tbody>
+                        <tr><td><strong>Befattning</strong></td><td>@_position.Titel</td></tr>
+                        <tr><td><strong>Enhet</strong></td><td>@_enhetNamn</td></tr>
+                        <tr><td><strong>Status</strong></td><td>@StatusText(_position.Status)</td></tr>
+                        <tr><td><strong>Innehavare</strong></td><td>@InnehavareNamn</td></tr>
+                        <tr><td><strong>Budgeterad månadslön</strong></td><td>@_position.BudgeteradManadslon.ToString("N0") kr</td></tr>
+                        <tr><td><strong>Sysselsättningsgrad</strong></td><td>@($"{_position.Sysselsattningsgrad:0.##}") %</td></tr>
+                        <tr><td><strong>BESTA-kod</strong></td><td>@(_position.BESTAKod ?? "—")</td></tr>
+                        <tr><td><strong>AID-kod</strong></td><td>@(_position.AIDKod ?? "—")</td></tr>
+                        <tr><td><strong>Planerad efterträdare</strong></td><td>@EftertradareNamn</td></tr>
+                        <tr><td><strong>Skapad</strong></td><td>@_position.SkapadVid.ToLocalTime().ToString("yyyy-MM-dd")</td></tr>
+                        @if (_position.AvveckladVid.HasValue)
+                        {
+                            <tr><td><strong>Avvecklad</strong></td><td>@_position.AvveckladVid.Value.ToLocalTime().ToString("yyyy-MM-dd")</td></tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="6">
+            <MudPaper Class="pa-5" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">Åtgärder</MudText>
+
+                @if (_position.Status == PositionStatus.Avvecklad)
+                {
+                    <MudAlert Severity="Severity.Info" Variant="Variant.Text">
+                        Positionen är avvecklad och kan inte längre ändras.
+                    </MudAlert>
+                }
+                else
+                {
+                    @* Tillsätt — endast när positionen inte redan är tillsatt *@
+                    @if (_position.Status != PositionStatus.Aktiv)
+                    {
+                        <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600;">Tillsätt position</MudText>
+                        <div class="d-flex gap-2 align-center mb-4" style="flex-wrap: wrap;">
+                            <MudSelect T="Guid?" @bind-Value="_valdAnstallId" Label="Anställd" Variant="Variant.Outlined" Dense="true" Style="min-width: 240px;">
+                                @foreach (var e in _employees)
+                                {
+                                    <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Fornamn @e.Efternamn</MudSelectItem>
+                                }
+                            </MudSelect>
+                            <MudButton Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.HowToReg"
+                                       Style="min-height: 48px;" Disabled="@(_valdAnstallId == null || _saving)" OnClick="Tillsatt">
+                                Tillsätt
+                            </MudButton>
+                        </div>
+                    }
+
+                    @* Vakanssätt — endast när positionen är tillsatt *@
+                    @if (_position.Status == PositionStatus.Aktiv)
+                    {
+                        <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600;">Vakanssätt position</MudText>
+                        <div class="mb-4">
+                            <MudTextField @bind-Value="_vakansAnledning" Label="Anledning (valfritt)" Variant="Variant.Outlined" Margin="Margin.Dense" Class="mb-2" />
+                            <MudButton Variant="Variant.Filled" Color="Color.Warning" StartIcon="@Icons.Material.Filled.PersonOff"
+                                       Style="min-height: 48px;" Disabled="@_saving" OnClick="Vakansatt">
+                                Vakanssätt
+                            </MudButton>
+                        </div>
+                    }
+
+                    <MudDivider Class="my-3" />
+
+                    <div class="d-flex gap-2 mb-4" style="flex-wrap: wrap;">
+                        @if (_position.Status != PositionStatus.Frysta)
+                        {
+                            <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.AcUnit"
+                                       Style="min-height: 48px;" Disabled="@_saving" OnClick="Frys">
+                                Frys
+                            </MudButton>
+                        }
+                        <MudButton Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.RemoveCircleOutline"
+                                   Style="min-height: 48px;" Disabled="@_saving" OnClick="Avveckla">
+                            Avveckla
+                        </MudButton>
+                    </div>
+
+                    <MudDivider Class="my-3" />
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600;">Planera efterträdare</MudText>
+                    <div class="d-flex gap-2 align-center mb-4" style="flex-wrap: wrap;">
+                        <MudSelect T="Guid?" @bind-Value="_valdEftertradareId" Label="Efterträdare" Variant="Variant.Outlined" Dense="true" Style="min-width: 240px;">
+                            @foreach (var e in _employees)
+                            {
+                                <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Fornamn @e.Efternamn</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Groups"
+                                   Style="min-height: 48px;" Disabled="@(_valdEftertradareId == null || _saving)" OnClick="SattEftertradare">
+                            Spara
+                        </MudButton>
+                    </div>
+
+                    <MudDivider Class="my-3" />
+
+                    <MudText Typo="Typo.subtitle2" Class="mb-1" Style="font-weight: 600;">Uppdatera budget</MudText>
+                    <div class="d-flex gap-2 align-center" style="flex-wrap: wrap;">
+                        <MudNumericField T="decimal" @bind-Value="_nyBudget" Label="Budgeterad månadslön (kr)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0m" Step="500m" Style="min-width: 240px;" />
+                        <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Savings"
+                                   Style="min-height: 48px;" Disabled="@_saving" OnClick="UppdateraBudget">
+                            Spara
+                        </MudButton>
+                    </div>
+                }
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+
+    <MudPaper Class="pa-5 mt-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">Tillsättningshistorik</MudText>
+        @if (_position.Historik.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text">Ingen historik registrerad för denna position.</MudAlert>
+        }
+        else
+        {
+            <MudSimpleTable Hover="true" Dense="true">
+                <thead><tr><th>Datum</th><th>Tidigare innehavare</th><th>Ny innehavare</th><th>Anledning</th></tr></thead>
+                <tbody>
+                    @foreach (var h in _position.Historik.OrderByDescending(x => x.AndradVid))
+                    {
+                        <tr>
+                            <td>@h.AndradVid.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            <td>@NamnForGuid(h.TidigareInnehavare)</td>
+                            <td>@NamnForGuid(h.NyInnehavare)</td>
+                            <td>@(h.Anledning ?? "—")</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private RegionHR.Positions.Domain.Position? _position;
+    private bool _loading = true, _saving;
+    private string? _error, _success;
+    private string _enhetNamn = "—";
+    private List<RegionHR.Core.Domain.Employee> _employees = [];
+    private Dictionary<Guid, string> _empNamn = new();
+
+    private Guid? _valdAnstallId;
+    private Guid? _valdEftertradareId;
+    private string _vakansAnledning = "";
+    private decimal _nyBudget;
+
+    private string InnehavareNamn => _position?.InnehavareAnstallId is { } g ? NamnForGuid(g) : "— (vakant)";
+    private string EftertradareNamn => _position?.EftertradarePlanerad is { } g ? NamnForGuid(g) : "—";
+
+    private string NamnForGuid(Guid? g) =>
+        g.HasValue ? _empNamn.GetValueOrDefault(g.Value, "Okänd") : "—";
+
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _position = await db.Positions_Table
+                .Include(p => p.Historik)
+                .FirstOrDefaultAsync(p => p.Id == Id);
+
+            if (_position is null) { _loading = false; return; }
+
+            var enhet = await db.OrganizationUnits.FirstOrDefaultAsync(o => o.Id == OrganizationId.From(_position.EnhetId));
+            _enhetNamn = enhet?.Namn ?? "Okänd enhet";
+
+            _employees = await db.Employees.OrderBy(e => e.Efternamn).ToListAsync();
+            _empNamn = _employees.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
+
+            _nyBudget = _position.BudgeteradManadslon;
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta position: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task UtforAsync(Action<RegionHR.Positions.Domain.Position> mutate, string ok)
+    {
+        if (_position is null) return;
+        _saving = true; _error = null; _success = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var pos = await db.Positions_Table.FirstOrDefaultAsync(p => p.Id == Id);
+            if (pos is null) { _error = "Positionen hittades inte längre."; return; }
+            mutate(pos);
+            await db.SaveChangesAsync();
+            _success = ok;
+            await LaddaAsync();
+        }
+        catch (InvalidOperationException ex) { _error = ex.Message; }
+        catch (Exception ex) { _error = $"Åtgärden kunde inte genomföras: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task Tillsatt()
+    {
+        if (_valdAnstallId is null) return;
+        var namn = NamnForGuid(_valdAnstallId);
+        var anstId = _valdAnstallId.Value;
+        await UtforAsync(p => p.Tillsatt(anstId), $"Positionen tillsattes med {namn}.");
+        _valdAnstallId = null;
+    }
+
+    private async Task Vakansatt()
+    {
+        var anledning = string.IsNullOrWhiteSpace(_vakansAnledning) ? null : _vakansAnledning.Trim();
+        await UtforAsync(p => p.Vakansatt(anledning), "Positionen är vakanssatt.");
+        _vakansAnledning = "";
+    }
+
+    private async Task Frys() => await UtforAsync(p => p.Frys(), "Positionen är frusen.");
+
+    private async Task Avveckla() => await UtforAsync(p => p.Avveckla(), "Positionen är avvecklad.");
+
+    private async Task SattEftertradare()
+    {
+        if (_valdEftertradareId is null) return;
+        var namn = NamnForGuid(_valdEftertradareId);
+        var eftId = _valdEftertradareId.Value;
+        await UtforAsync(p => p.SattEftertrardare(eftId), $"{namn} är planerad som efterträdare.");
+        _valdEftertradareId = null;
+    }
+
+    private async Task UppdateraBudget()
+    {
+        var budget = _nyBudget;
+        await UtforAsync(p => p.UppdateraBudget(budget), $"Budgeterad månadslön uppdaterad till {budget:N0} kr.");
+    }
+
+    private static Color StatusColor(PositionStatus s) => s switch
+    {
+        PositionStatus.Aktiv => Color.Success,
+        PositionStatus.Vakant => Color.Warning,
+        PositionStatus.Frysta => Color.Default,
+        PositionStatus.Avvecklad => Color.Error,
+        _ => Color.Default
+    };
+
+    private static string StatusText(PositionStatus s) => s switch
+    {
+        PositionStatus.Aktiv => "Tillsatt",
+        PositionStatus.Vakant => "Vakant",
+        PositionStatus.Frysta => "Frusen",
+        PositionStatus.Avvecklad => "Avvecklad",
+        _ => s.ToString()
+    };
+}

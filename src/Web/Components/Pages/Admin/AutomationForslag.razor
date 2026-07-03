@@ -126,6 +126,8 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            // forslag laddades i en annan (disposad) context — attacha före mutation.
+            db.Attach(forslag);
             forslag.Acceptera();
             await db.SaveChangesAsync();
             _success = "Forslag accepterat.";
@@ -139,6 +141,7 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            db.Attach(forslag);
             forslag.Avvisa();
             await db.SaveChangesAsync();
             _success = "Forslag avvisat.";

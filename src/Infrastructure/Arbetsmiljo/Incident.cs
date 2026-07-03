@@ -48,4 +48,34 @@ public class Incident
             CreatedAt = DateTime.UtcNow
         };
     }
+
+    /// <summary>
+    /// Nästa status i incidentens livscykel
+    /// (Rapporterad → Under utredning → Åtgärd vidtagen → Avslutad),
+    /// eller null om ärendet redan är avslutat.
+    /// </summary>
+    public IncidentStatus? NastaStatus => Status switch
+    {
+        IncidentStatus.Rapporterad => IncidentStatus.UnderUtredning,
+        IncidentStatus.UnderUtredning => IncidentStatus.AtgardVidtagen,
+        IncidentStatus.AtgardVidtagen => IncidentStatus.Avslutad,
+        _ => null
+    };
+
+    /// <summary>
+    /// Flyttar incidenten ett steg framåt i livscykeln. Ett avslutat ärende
+    /// påverkas inte (använd <see cref="Ateroppna"/> för att öppna igen).
+    /// </summary>
+    public void FlyttaFram()
+    {
+        if (NastaStatus is { } nasta)
+            Status = nasta;
+    }
+
+    /// <summary>Återöppnar ett avslutat ärende för fortsatt utredning.</summary>
+    public void Ateroppna()
+    {
+        if (Status == IncidentStatus.Avslutad)
+            Status = IncidentStatus.UnderUtredning;
+    }
 }

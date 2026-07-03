@@ -177,14 +177,22 @@ else
 
     private async Task AvbrytForman(Benefit benefit)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) return;
-        var enrollment = _myEnrollments.FirstOrDefault(e => e.BenefitId == benefit.Id && e.Status is "Active" or "Pending");
-        if (enrollment is null) return;
+        var local = _myEnrollments.FirstOrDefault(e => e.BenefitId == benefit.Id && e.Status is "Active" or "Pending");
+        if (local is null) return;
+        _error = null; _success = null;
+        // Hämta entiteten i samma context som SaveChanges — den lokala instansen kommer
+        // från OnInitialized-contextet (disposat) och trackas inte här, så Avbryt() på
+        // den skulle inte persisteras.
+        await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            var enrollment = await db.BenefitEnrollments.FirstOrDefaultAsync(e => e.Id == local.Id);
+            if (enrollment is null) { _error = "Förmånsvalet hittades inte."; return; }
             enrollment.Avbryt();
             await db.SaveChangesAsync();
+            var idx = _myEnrollments.IndexOf(local);
+            if (idx >= 0) _myEnrollments[idx] = enrollment;
             _success = $"Förmånsval för {benefit.Namn} avbrutet.";
         }
         catch (Exception ex) { _error = $"Kunde inte avbryta: {ex.Message}"; }

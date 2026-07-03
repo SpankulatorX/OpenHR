@@ -192,6 +192,8 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            // b laddades i init-contexten — attacha före mutation för att persistera.
+            db.Attach(b);
             if (b.ArAktiv) b.Inaktivera(); else b.Aktivera();
             await db.SaveChangesAsync();
             _success = $"Status för '{b.Namn}' uppdaterad.";

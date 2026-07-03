@@ -38,8 +38,23 @@ public sealed class Vacancy : AggregateRoot<Guid>
         };
     }
 
+    /// <summary>
+    /// Sätter (eller rensar) vakansens lönespann. Ett angivet minimum får inte överstiga maximum.
+    /// </summary>
+    public void SattLonespann(Money? min, Money? max)
+    {
+        if (min is not null && max is not null && min.Value.Amount > max.Value.Amount)
+            throw new ArgumentException("Lägsta lön kan inte vara högre än högsta lön.");
+
+        Lonespann_Min = min;
+        Lonespann_Max = max;
+    }
+
     public void Publicera(bool externt = true, bool platsbanken = false)
     {
+        if (Status == VacancyStatus.Tillsatt)
+            throw new InvalidOperationException("En tillsatt vakans kan inte publiceras om.");
+
         Status = VacancyStatus.Publicerad;
         PubliceradExternt = externt;
         PubliceradPlatsbanken = platsbanken;

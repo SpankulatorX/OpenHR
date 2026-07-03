@@ -172,31 +172,51 @@ else
         finally { _loading = false; }
     }
 
+    // Laddar ärendet spårat i den angivna context:en. _request kommer annars från en
+    // disposad context och mutationer på den skulle inte persisteras vid SaveChanges.
+    private async Task<ServiceRequest?> LaddaSparadAsync(RegionHRDbContext db)
+    {
+        if (_request is null) return null;
+        return await db.ServiceRequests
+            .Include(r => r.Kommentarer)
+            .Include(r => r.SLAMilestones)
+            .FirstOrDefaultAsync(r => r.Id == _request.Id);
+    }
+
     private async Task AddComment()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (_request is null || string.IsNullOrWhiteSpace(_newComment)) return;
-        _request.LaggTillKommentar(null, _newComment, false);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var req = await LaddaSparadAsync(db);
+        if (req is null) return;
+        req.LaggTillKommentar(null, _newComment, false);
         await db.SaveChangesAsync();
+        _request = req;
         _newComment = "";
     }
 
     private async Task CloseRequest()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (_request is null) return;
-        _request.Stang();
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var req = await LaddaSparadAsync(db);
+        if (req is null) return;
+        req.Stang();
         await db.SaveChangesAsync();
+        _request = req;
     }
 
     private async Task SubmitSatisfaction()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (_request is null || _satisfactionRating < 1) return;
-        _request.SattNojdhet(_satisfactionRating);
-        var satisfaction = CaseSatisfaction.Skapa(_request.Id, _satisfactionRating, _satisfactionComment);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var req = await LaddaSparadAsync(db);
+        if (req is null) return;
+        req.SattNojdhet(_satisfactionRating);
+        var satisfaction = CaseSatisfaction.Skapa(req.Id, _satisfactionRating, _satisfactionComment);
         await db.CaseSatisfactions.AddAsync(satisfaction);
         await db.SaveChangesAsync();
+        _request = req;
     }
 
     private Color GetStatusColor(ServiceRequestStatus status) => status switch

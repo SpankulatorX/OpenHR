@@ -6,12 +6,50 @@
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 
 <PageTitle>OpenHR - Referenskontroller</PageTitle>
-<MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Referenskontroller</MudText>
+<div class="d-flex justify-space-between align-center mb-4">
+    <MudText Typo="Typo.h4" Style="font-weight: 700;">Referenskontroller</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+               StartIcon="@Icons.Material.Filled.AddTask" Style="min-height: 48px;"
+               OnClick="@(() => _visaForm = !_visaForm)">Begär referenskontroll</MudButton>
+</div>
 
 @if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
 else if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert> }
 else
 {
+    @if (_flash != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _flash = null)">@_flash</MudAlert>
+    }
+
+    @if (_visaForm)
+    {
+        <MudPaper Class="pa-5 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-primary);">
+            <div class="d-flex justify-space-between align-center mb-3">
+                <MudText Typo="Typo.h6" Style="font-weight: 600;">Begär referenskontroll</MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _visaForm = false)" />
+            </div>
+            @if (_formFel != null)
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-3">@_formFel</MudAlert>
+            }
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="Guid?" @bind-Value="_formVakansId" Label="Vakans" Variant="Variant.Outlined" Required="true">
+                        @foreach (var v in _vakanser)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)v.Id)">@v.Titel</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_formKandidat" Label="Kandidat" Variant="Variant.Outlined" Required="true" /></MudItem>
+                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_formReferens" Label="Referensperson" Variant="Variant.Outlined" Required="true" /></MudItem>
+                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_formRelation" Label="Relation" Placeholder="T.ex. Tidigare chef, Kollega" Variant="Variant.Outlined" /></MudItem>
+            </MudGrid>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" Disabled="@_sparar" OnClick="Begar">Registrera begäran</MudButton>
+        </MudPaper>
+    }
+
     <MudGrid Spacing="3" Class="mb-4">
         <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Primary" Style="font-weight: 700;">@_checks.Count</MudText><MudText Typo="Typo.body2">Totalt</MudText></MudPaper></MudItem>
         <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Success" Style="font-weight: 700;">@_checks.Count(c => c.Status == ReferenceCheckStatus.Godkand)</MudText><MudText Typo="Typo.body2">Godkända</MudText></MudPaper></MudItem>
@@ -23,17 +61,47 @@ else
     else
     {
         <MudSimpleTable Hover="true" Elevation="2">
-            <thead><tr><th>Kandidat</th><th>Referens</th><th>Relation</th><th>Status</th><th>Kommentar</th></tr></thead>
+            <thead><tr><th>Kandidat</th><th>Vakans</th><th>Referens</th><th>Relation</th><th>Status</th><th>Kommentar</th><th></th></tr></thead>
             <tbody>
                 @foreach (var c in _checks)
                 {
                     <tr>
                         <td><strong>@c.KandidatNamn</strong></td>
+                        <td>@VakansTitel(c.VacancyId)</td>
                         <td>@c.ReferensNamn</td>
                         <td>@c.ReferensRelation</td>
                         <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(c.Status)">@StatusText(c.Status)</MudChip></td>
                         <td>@(c.Kommentar ?? "—")</td>
+                        <td>
+                            @if (c.Status == ReferenceCheckStatus.Begard)
+                            {
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => OppnaGenomfor(c))">Genomför</MudButton>
+                            }
+                        </td>
                     </tr>
+                    @if (_genomforId == c.Id)
+                    {
+                        <tr>
+                            <td colspan="7" style="padding: 0;">
+                                <MudPaper Class="pa-4" Elevation="0" Style="border-top: 2px solid var(--mud-palette-primary); background: var(--mud-palette-background-grey);">
+                                    <MudText Typo="Typo.subtitle2" Class="mb-2">Genomför referenskontroll — @c.ReferensNamn (@c.ReferensRelation)</MudText>
+                                    @if (_genomforFel != null)
+                                    {
+                                        <MudAlert Severity="Severity.Error" Class="mb-2">@_genomforFel</MudAlert>
+                                    }
+                                    <MudTextField @bind-Value="_genomforKommentar" Label="Sammanfattning av referenssamtalet" Lines="3" Variant="Variant.Outlined" Class="mb-2" />
+                                    <MudRadioGroup T="bool" @bind-Value="_genomforGodkand">
+                                        <MudRadio T="bool" Value="@true" Color="Color.Success">Godkänd — referensen stödjer anställning</MudRadio>
+                                        <MudRadio T="bool" Value="@false" Color="Color.Error">Avvikelse — referensen väcker frågetecken</MudRadio>
+                                    </MudRadioGroup>
+                                    <div class="mt-2 d-flex" style="gap: 0.5rem;">
+                                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@_sparar" OnClick="@(() => Genomfor(c))">Spara resultat</MudButton>
+                                        <MudButton Variant="Variant.Text" OnClick="@(() => _genomforId = null)">Avbryt</MudButton>
+                                    </div>
+                                </MudPaper>
+                            </td>
+                        </tr>
+                    }
                 }
             </tbody>
         </MudSimpleTable>
@@ -42,18 +110,103 @@ else
 
 @code {
     private List<ReferenceCheck> _checks = [];
-    private bool _loading = true;
-    private string? _error;
+    private List<VakansVm> _vakanser = [];
+    private Dictionary<Guid, string> _vakansTitlar = [];
+    private bool _loading = true, _sparar, _visaForm;
+    private string? _error, _flash;
 
-    protected override async Task OnInitializedAsync()
+    // Begär-form
+    private Guid? _formVakansId;
+    private string _formKandidat = "", _formReferens = "", _formRelation = "";
+    private string? _formFel;
+
+    // Genomför-form
+    private Guid? _genomforId;
+    private string _genomforKommentar = "";
+    private bool _genomforGodkand = true;
+    private string? _genomforFel;
+
+    protected override async Task OnInitializedAsync() => await Ladda();
+
+    private async Task Ladda()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
-        try { _checks = await db.ReferenceChecks.OrderByDescending(c => c.SkapadVid).ToListAsync(); }
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _checks = await db.ReferenceChecks.OrderByDescending(c => c.SkapadVid).ToListAsync();
+            _vakanser = await db.Vacancies
+                .OrderByDescending(v => v.SistaAnsokningsDag)
+                .Select(v => new VakansVm(v.Id, v.Titel))
+                .ToListAsync();
+            _vakansTitlar = _vakanser.ToDictionary(v => v.Id, v => v.Titel);
+            _error = null;
+        }
         catch (Exception ex) { _error = $"Kunde inte hämta referenskontroller: {ex.Message}"; }
         finally { _loading = false; }
     }
 
+    private async Task Begar()
+    {
+        _formFel = null;
+        if (_formVakansId is null) { _formFel = "Välj en vakans."; return; }
+        if (string.IsNullOrWhiteSpace(_formKandidat)) { _formFel = "Ange kandidatens namn."; return; }
+        if (string.IsNullOrWhiteSpace(_formReferens)) { _formFel = "Ange referenspersonens namn."; return; }
+
+        _sparar = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var check = ReferenceCheck.Skapa(
+                _formVakansId.Value, _formKandidat.Trim(), _formReferens.Trim(),
+                string.IsNullOrWhiteSpace(_formRelation) ? "—" : _formRelation.Trim());
+            db.ReferenceChecks.Add(check);
+            await db.SaveChangesAsync();
+            _flash = $"Referenskontroll begärd för {_formKandidat.Trim()}.";
+            _visaForm = false;
+            _formKandidat = ""; _formReferens = ""; _formRelation = ""; _formVakansId = null;
+            await Ladda();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { _formFel = ex.Message; }
+        catch (Exception ex) { _formFel = $"Kunde inte spara: {ex.Message}"; }
+        finally { _sparar = false; }
+    }
+
+    private void OppnaGenomfor(ReferenceCheck c)
+    {
+        _genomforId = c.Id;
+        _genomforKommentar = "";
+        _genomforGodkand = true;
+        _genomforFel = null;
+    }
+
+    private async Task Genomfor(ReferenceCheck c)
+    {
+        _genomforFel = null;
+        if (string.IsNullOrWhiteSpace(_genomforKommentar)) { _genomforFel = "Skriv en sammanfattning av samtalet."; return; }
+
+        _sparar = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var check = await db.ReferenceChecks.FirstOrDefaultAsync(x => x.Id == c.Id)
+                ?? throw new InvalidOperationException("Referenskontrollen hittades inte.");
+            check.Genomfor(_genomforKommentar.Trim(), _genomforGodkand);
+            await db.SaveChangesAsync();
+            _flash = _genomforGodkand
+                ? $"Referenskontroll för {c.KandidatNamn} godkänd."
+                : $"Avvikelse noterad för {c.KandidatNamn}.";
+            _genomforId = null;
+            await Ladda();
+        }
+        catch (Exception ex) { _genomforFel = $"Kunde inte spara resultat: {ex.Message}"; }
+        finally { _sparar = false; }
+    }
+
+    private string VakansTitel(Guid vacancyId) => _vakansTitlar.GetValueOrDefault(vacancyId, "—");
+
     private static string StatusText(ReferenceCheckStatus s) => s switch { ReferenceCheckStatus.Begard => "Begärd", ReferenceCheckStatus.Genomford => "Genomförd", ReferenceCheckStatus.Godkand => "Godkänd", ReferenceCheckStatus.Avvikelse => "Avvikelse", _ => s.ToString() };
     private static Color StatusFarg(ReferenceCheckStatus s) => s switch { ReferenceCheckStatus.Godkand => Color.Success, ReferenceCheckStatus.Begard => Color.Warning, ReferenceCheckStatus.Avvikelse => Color.Error, _ => Color.Default };
-}
 
+    private sealed record VakansVm(Guid Id, string Titel);
+}

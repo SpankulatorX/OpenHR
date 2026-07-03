@@ -1,0 +1,352 @@
+@page "/halsosam/{Id:guid}"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.HalsoSAM.Domain
+@using RegionHR.Infrastructure.Persistence
+@using Microsoft.EntityFrameworkCore
+@using SK = RegionHR.SharedKernel.Domain
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.AuthService Auth
+
+<PageTitle>OpenHR — Rehabärende</PageTitle>
+
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary"
+           Href="/halsosam" Style="margin-bottom: 1rem;">Tillbaka till översikt</MudButton>
+
+<MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Rehabärende</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else if (_case == null)
+{
+    <MudAlert Severity="Severity.Warning">Rehabärendet hittades inte.</MudAlert>
+}
+else
+{
+    @if (_success != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+    }
+
+    @* === Översikt === *@
+    <MudPaper Class="pa-5 mb-4" Elevation="2">
+        <div class="d-flex justify-space-between align-center mb-2">
+            <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@_empNamn</MudText>
+            <MudChip T="string" Color="@StatusFarg(_case.Status)">@StatusText(_case.Status)</MudChip>
+        </div>
+        <MudGrid Spacing="3">
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Trigger</MudText>
+                <MudText Style="font-weight: 600;">@TriggerText(_case.Trigger)</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Sjukfall dag 1</MudText>
+                <MudText Style="font-weight: 600;">@(_case.SjukfallDag1?.ToString("yyyy-MM-dd") ?? "Ej angiven")</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Ärendeägare (HR)</MudText>
+                <MudText Style="font-weight: 600;">@(_case.ArendeagareHR != null ? GetEmployeeName(_case.ArendeagareHR.Value) : "Ej tilldelad")</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Skapad</MudText>
+                <MudText Style="font-weight: 600;">@_case.SkapadVid.ToLocalTime().ToString("yyyy-MM-dd")</MudText>
+            </MudItem>
+        </MudGrid>
+
+        <div class="d-flex gap-2 mt-4">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       Href="@($"/halsosam/{_case.Id}/uppfoljning")" StartIcon="@Icons.Material.Filled.EventAvailable">
+                Registrera uppföljning
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Secondary" Size="Size.Small"
+                       Href="@($"/halsosam/{_case.Id}/fk-anmalan")" StartIcon="@Icons.Material.Filled.Description">
+                FK-anmälan
+            </MudButton>
+        </div>
+    </MudPaper>
+
+    @if (_arAvslutad)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Filled" Class="mb-4" Icon="@Icons.Material.Filled.CheckCircle">
+            Ärendet är avslutat.
+            @if (_case.GallringsDatum.HasValue)
+            {
+                <text> Gallras enligt GDPR den @_case.GallringsDatum.Value.ToLocalTime().ToString("yyyy-MM-dd").</text>
+            }
+        </MudAlert>
+    }
+
+    @* === Ärendeägare === *@
+    @if (!_arAvslutad)
+    {
+        <MudPaper Class="pa-5 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-1" Style="font-weight: 600;">Ärendeägare</MudText>
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                Tilldela en HR-handläggare. När ärendeägare tilldelas flyttas ärendet till <em>Under utredning</em>.
+            </MudText>
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="8">
+                    <MudSelect T="Guid?" @bind-Value="_agareId" Label="HR-handläggare" Variant="Variant.Outlined">
+                        @foreach (var e in _employees)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Fornamn @e.Efternamn</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="4" Class="d-flex align-center">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="TilldelaArendeagare"
+                               Disabled="@(_agareId == null || _saving)" StartIcon="@Icons.Material.Filled.PersonAdd">
+                        Tilldela ärendeägare
+                    </MudButton>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        @* === Rehabplan === *@
+        <MudPaper Class="pa-5 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-1" Style="font-weight: 600;">Rehabiliteringsplan</MudText>
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                Plan för återgång i arbete. När en plan sparas flyttas ärendet till <em>Aktiv rehab</em>.
+                (Lagkrav: plan senast dag 30 om sjukfrånvaron antas pågå &gt; 60 dagar.)
+            </MudText>
+            <MudTextField @bind-Value="_planText" Label="Rehabiliteringsplan" Variant="Variant.Outlined" Lines="4"
+                          Placeholder="T.ex. Gradvis återgång 50 % i 4 veckor, därefter upptrappning. Anpassade arbetsuppgifter." />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaRehabplan"
+                       Disabled="@(string.IsNullOrWhiteSpace(_planText) || _saving)" StartIcon="@Icons.Material.Filled.Save">
+                @(string.IsNullOrEmpty(_case.RehabPlan) ? "Upprätta rehabplan" : "Uppdatera rehabplan")
+            </MudButton>
+        </MudPaper>
+    }
+    else if (!string.IsNullOrEmpty(_case.RehabPlan))
+    {
+        <MudPaper Class="pa-5 mb-4" Elevation="2">
+            <MudText Typo="Typo.h6" Class="mb-2" Style="font-weight: 600;">Rehabiliteringsplan</MudText>
+            <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@_case.RehabPlan</MudText>
+        </MudPaper>
+    }
+
+    @* === Anteckningar === *@
+    <MudPaper Class="pa-5 mb-4" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">Anteckningar (@_case.Anteckningar.Count)</MudText>
+        @if (_case.Anteckningar.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mb-3">Inga anteckningar ännu.</MudAlert>
+        }
+        else
+        {
+            <MudList T="string" Dense="true" Class="mb-3">
+                @foreach (var n in _case.Anteckningar.OrderByDescending(a => a.SkapadVid))
+                {
+                    <MudListItem T="string" Icon="@Icons.Material.Filled.StickyNote2">
+                        <MudText Typo="Typo.body2">@n.Text</MudText>
+                        <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">
+                            @GetEmployeeName(n.ForfattareId) · @n.SkapadVid.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                        </MudText>
+                    </MudListItem>
+                }
+            </MudList>
+        }
+
+        @if (!_arAvslutad)
+        {
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="Guid?" @bind-Value="_noteAuthorId" Label="Författare" Variant="Variant.Outlined">
+                        @foreach (var e in _employees)
+                        {
+                            <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Fornamn @e.Efternamn</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="8">
+                    <MudTextField @bind-Value="_noteText" Label="Ny anteckning" Variant="Variant.Outlined" Lines="2" />
+                </MudItem>
+            </MudGrid>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" Class="mt-3" OnClick="LaggTillAnteckning"
+                       Disabled="@(_noteAuthorId == null || string.IsNullOrWhiteSpace(_noteText) || _saving)"
+                       StartIcon="@Icons.Material.Filled.AddComment">
+                Lägg till anteckning
+            </MudButton>
+        }
+    </MudPaper>
+
+    @* === Avsluta === *@
+    @if (!_arAvslutad)
+    {
+        <MudPaper Class="pa-5" Elevation="2" Style="border-left: 4px solid var(--mud-palette-error);">
+            <MudText Typo="Typo.h6" Class="mb-1" Style="font-weight: 600;">Avsluta ärende</MudText>
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                Anger en slutsats, sätter status till <em>Avslutad</em> och registrerar GDPR-gallringsdatum (2 år).
+            </MudText>
+            <MudTextField @bind-Value="_slutsats" Label="Slutsats / utfall" Variant="Variant.Outlined" Lines="2"
+                          Placeholder="T.ex. Medarbetaren åter i arbete på heltid. Rehabilitering avslutad." />
+            <MudButton Variant="Variant.Filled" Color="Color.Error" Class="mt-3" OnClick="AvslutaArende"
+                       Disabled="@(string.IsNullOrWhiteSpace(_slutsats) || _saving)" StartIcon="@Icons.Material.Filled.CheckCircle">
+                Avsluta ärende
+            </MudButton>
+        </MudPaper>
+    }
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private RehabCase? _case;
+    private List<RegionHR.Core.Domain.Employee> _employees = [];
+    private Dictionary<SK.EmployeeId, string> _empNames = new();
+    private string _empNamn = "Okänd";
+    private bool _loading = true, _saving;
+    private string? _error, _success;
+
+    private Guid? _agareId;
+    private Guid? _noteAuthorId;
+    private string _noteText = "";
+    private string _planText = "";
+    private string _slutsats = "";
+
+    private bool _arAvslutad => _case?.Status == RehabStatus.Avslutad;
+
+    protected override async Task OnInitializedAsync() => await Ladda();
+
+    private async Task Ladda()
+    {
+        _loading = true;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            _case = await db.RehabCases
+                .Include(c => c.Uppfoljningar)
+                .Include(c => c.Anteckningar)
+                .FirstOrDefaultAsync(c => c.Id == Id);
+
+            _employees = await db.Employees.OrderBy(e => e.Efternamn).ToListAsync();
+            _empNames = _employees.ToDictionary(e => e.Id, e => $"{e.Fornamn} {e.Efternamn}");
+
+            if (_case != null)
+            {
+                _empNamn = GetEmployeeName(_case.AnstallId);
+                _planText = _case.RehabPlan ?? "";
+                _agareId ??= _case.ArendeagareHR?.Value;
+                _noteAuthorId ??= _case.ArendeagareHR?.Value ?? Auth.EmployeeId;
+            }
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta data: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private string GetEmployeeName(SK.EmployeeId id) =>
+        _empNames.TryGetValue(id, out var namn) ? namn : "Okänd";
+
+    private async Task TilldelaArendeagare()
+    {
+        if (_agareId == null) return;
+        _saving = true; _error = null; _success = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var arende = await db.RehabCases.FirstOrDefaultAsync(c => c.Id == Id);
+            if (arende == null) { _error = "Ärendet hittades inte."; return; }
+            arende.TilldelaArendeagare(SK.EmployeeId.From(_agareId.Value));
+            await db.SaveChangesAsync();
+            _success = "Ärendeägare tilldelad.";
+            await Ladda();
+        }
+        catch (Exception ex) { _error = $"Kunde inte tilldela: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task SparaRehabplan()
+    {
+        if (string.IsNullOrWhiteSpace(_planText)) return;
+        _saving = true; _error = null; _success = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var arende = await db.RehabCases.FirstOrDefaultAsync(c => c.Id == Id);
+            if (arende == null) { _error = "Ärendet hittades inte."; return; }
+            arende.SattRehabPlan(_planText.Trim());
+            await db.SaveChangesAsync();
+            _success = "Rehabiliteringsplan sparad.";
+            await Ladda();
+        }
+        catch (Exception ex) { _error = $"Kunde inte spara plan: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task LaggTillAnteckning()
+    {
+        if (_noteAuthorId == null || string.IsNullOrWhiteSpace(_noteText)) return;
+        _saving = true; _error = null; _success = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var arende = await db.RehabCases
+                .Include(c => c.Anteckningar)
+                .FirstOrDefaultAsync(c => c.Id == Id);
+            if (arende == null) { _error = "Ärendet hittades inte."; return; }
+            arende.LaggTillAnteckning(_noteText.Trim(), SK.EmployeeId.From(_noteAuthorId.Value));
+            await db.SaveChangesAsync();
+            _noteText = "";
+            _success = "Anteckning tillagd.";
+            await Ladda();
+        }
+        catch (Exception ex) { _error = $"Kunde inte lägga till anteckning: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task AvslutaArende()
+    {
+        if (string.IsNullOrWhiteSpace(_slutsats)) return;
+        _saving = true; _error = null; _success = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var arende = await db.RehabCases
+                .Include(c => c.Anteckningar)
+                .FirstOrDefaultAsync(c => c.Id == Id);
+            if (arende == null) { _error = "Ärendet hittades inte."; return; }
+            arende.Avsluta(_slutsats.Trim());
+            await db.SaveChangesAsync();
+            _slutsats = "";
+            _success = "Ärendet är avslutat.";
+            await Ladda();
+        }
+        catch (Exception ex) { _error = $"Kunde inte avsluta: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private static string TriggerText(RehabTrigger t) => t switch
+    {
+        RehabTrigger.SexTillfallenTolvManader => "6+ sjuktillfällen/12 mån",
+        RehabTrigger.FjortonSammanhangandeDagar => "14+ sammanhängande dagar",
+        RehabTrigger.MonsterDetekterat => "Mönster detekterat",
+        RehabTrigger.ChefInitierat => "Chef initierat",
+        RehabTrigger.MedarbetareInitierat => "Medarbetare initierat",
+        _ => t.ToString()
+    };
+
+    private static string StatusText(RehabStatus s) => s switch
+    {
+        RehabStatus.Signal => "Signal",
+        RehabStatus.UnderUtredning => "Under utredning",
+        RehabStatus.AktivRehab => "Aktiv rehab",
+        RehabStatus.Uppfoljning => "Uppföljning",
+        RehabStatus.Avslutad => "Avslutad",
+        _ => s.ToString()
+    };
+
+    private static Color StatusFarg(RehabStatus s) => s switch
+    {
+        RehabStatus.Signal => Color.Warning,
+        RehabStatus.UnderUtredning => Color.Info,
+        RehabStatus.AktivRehab => Color.Primary,
+        RehabStatus.Uppfoljning => Color.Success,
+        RehabStatus.Avslutad => Color.Default,
+        _ => Color.Default
+    };
+}

@@ -1,6 +1,8 @@
 @page "/admin/konfiguration"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
+@using RegionHR.Payroll.Domain
+@using RegionHR.Configuration.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 
@@ -24,21 +26,40 @@ else
         </tbody>
     </MudSimpleTable>
 
-    <MudText Typo="Typo.h6" Class="mb-3">Systemparametrar</MudText>
-    <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-4">Systeminställningar lagras i TenantConfiguration. Ändring kräver admin-behörighet.</MudAlert>
+    @if (_tenant is not null)
+    {
+        <MudText Typo="Typo.h6" Class="mb-3">Organisation</MudText>
+        <MudSimpleTable Hover="true" Elevation="1" Class="mb-6">
+            <thead><tr><th>Inställning</th><th>Värde</th></tr></thead>
+            <tbody>
+                <tr><td><strong>Organisation</strong></td><td>@_tenant.TenantNamn</td></tr>
+                <tr><td><strong>Organisationsnummer</strong></td><td>@_tenant.Organisationsnummer</td></tr>
+                <tr><td><strong>Land</strong></td><td>@_tenant.Land</td></tr>
+                <tr><td><strong>Språk</strong></td><td>@_tenant.Sprak</td></tr>
+                <tr><td><strong>Valuta</strong></td><td>@_tenant.Valuta</td></tr>
+            </tbody>
+        </MudSimpleTable>
+    }
+
+    <MudText Typo="Typo.h6" Class="mb-3">Löne- och avtalsgrundvärden</MudText>
+    <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-4">
+        Värdena nedan hämtas direkt ur skattemotorn och de årsversionerade kollektivavtalstabellerna (AB/HOK)
+        för @KommunSkattesatser.DefaultKommun / Region Örebro län @DateTime.Now.Year. De är beräkningsgrund, inte fritt redigerbara här.
+    </MudAlert>
     <MudSimpleTable Hover="true" Elevation="1">
         <thead><tr><th>Inställning</th><th>Värde</th><th>Beskrivning</th></tr></thead>
         <tbody>
             <tr><td><strong>Kollektivavtal</strong></td><td>AB + HOK</td><td>Primära avtal för löneberäkning</td></tr>
             <tr><td><strong>Löneperiod</strong></td><td>Månad (25:e)</td><td>Utbetalningsdatum</td></tr>
-            <tr><td><strong>AG-avgift</strong></td><td>31,42%</td><td>Standard arbetsgivaravgift</td></tr>
-            <tr><td><strong>Kommunalskatt</strong></td><td>32,13%</td><td>Standard kommunalskatt Göteborg</td></tr>
+            <tr><td><strong>Arbetsgivaravgift</strong></td><td>@FormatProcent(Arbetsgivaravgift.FullSats2026)</td><td>Full arbetsgivaravgift @DateTime.Now.Year</td></tr>
+            <tr><td><strong>Kommunalskatt (@KommunSkattesatser.DefaultKommun)</strong></td><td>@FormatProcent(KommunSkattesatser.OrebroTotal2026)</td><td>Kommun 21,35 % + regionskatt @FormatProcent(KommunSkattesatser.RegionOrebroLan2026)</td></tr>
         </tbody>
     </MudSimpleTable>
 }
 
 @code {
     private int _antalAnstallda, _antalEnheter, _antalPositioner, _antalKorningar, _antalLonearter, _antalPolicyer;
+    private TenantConfiguration? _tenant;
     private bool _loading = true;
     private string? _error;
 
@@ -53,9 +74,15 @@ else
             _antalKorningar = await db.PayrollRuns.CountAsync();
             _antalLonearter = await db.SalaryCodes.CountAsync();
             _antalPolicyer = await db.Policies.CountAsync();
+            _tenant = await db.TenantConfigurations
+                .OrderByDescending(t => t.ArAktiv)
+                .FirstOrDefaultAsync();
         }
         catch (Exception ex) { _error = $"Kunde inte hämta systemstatus: {ex.Message}"; }
         finally { _loading = false; }
     }
+
+    private static string FormatProcent(decimal andel) =>
+        (andel * 100m).ToString("0.00", System.Globalization.CultureInfo.GetCultureInfo("sv-SE")) + " %";
 }
 

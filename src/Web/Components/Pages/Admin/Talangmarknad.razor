@@ -168,6 +168,8 @@ else
     private async Task PubliceraMojlighet(InternalOpportunity opp)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        // opp laddades i init-contexten — attacha före mutation för att persistera.
+        db.Attach(opp);
         opp.Publicera();
         await db.SaveChangesAsync();
     }
@@ -175,6 +177,7 @@ else
     private async Task StangMojlighet(InternalOpportunity opp)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        db.Attach(opp);
         opp.Stang();
         await db.SaveChangesAsync();
     }
@@ -182,6 +185,7 @@ else
     private async Task TillsattMojlighet(InternalOpportunity opp)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        db.Attach(opp);
         opp.Tillsatt();
         await db.SaveChangesAsync();
     }

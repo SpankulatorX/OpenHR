@@ -51,4 +51,25 @@ public class RiskAssessment
             CreatedAt = DateTime.UtcNow
         };
     }
+
+    /// <summary>
+    /// Nästa status i riskbedömningens livscykel
+    /// (Identifierad → Under behandling → Åtgärdad), eller null om redan åtgärdad.
+    /// </summary>
+    public RiskStatus? NastaStatus => Status switch
+    {
+        RiskStatus.Identifierad => RiskStatus.UnderBehandling,
+        RiskStatus.UnderBehandling => RiskStatus.Atgardad,
+        _ => null
+    };
+
+    /// <summary>Flyttar riskbedömningen ett steg framåt i åtgärdskedjan.</summary>
+    public void FlyttaFram()
+    {
+        if (NastaStatus is { } nasta)
+            Status = nasta;
+    }
+
+    /// <summary>Sätter eller uppdaterar deadline för åtgärden.</summary>
+    public void SattDeadline(DateOnly? deadline) => Deadline = deadline;
 }

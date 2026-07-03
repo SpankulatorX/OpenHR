@@ -2,8 +2,12 @@
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Web.Services
 @using RegionHR.SharedKernel.Domain
+@using RegionHR.Core.Domain
+@using RegionHR.Infrastructure.Persistence
+@using Microsoft.EntityFrameworkCore
 @inject SelfServiceApiClient SelfService
 @inject AuthService Auth
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
 
 <PageTitle>OpenHR - Om mig</PageTitle>
 
@@ -70,15 +74,29 @@
             <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
                 Vem ska vi kontakta om något händer dig på jobbet?
             </MudText>
-            <MudSimpleTable Hover="true">
-                <thead>
-                    <tr><th>Namn</th><th>Relation</th><th>Telefon</th></tr>
-                </thead>
-                <tbody>
-                    <tr><td>Karl Svensson</td><td>Make</td><td>070-987 65 43</td></tr>
-                    <tr><td>Maria Lindgren</td><td>Mor</td><td>070-111 22 33</td></tr>
-                </tbody>
-            </MudSimpleTable>
+            @if (_nodkontakter.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Variant="Variant.Text">Du har inga registrerade nödkontakter ännu.</MudAlert>
+            }
+            else
+            {
+                <MudSimpleTable Hover="true">
+                    <thead>
+                        <tr><th>Namn</th><th>Relation</th><th>Telefon</th><th>E-post</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var nk in _nodkontakter)
+                        {
+                            <tr>
+                                <td>@nk.Namn @if (nk.ArPrimar) { <MudChip T="string" Size="Size.Small" Color="Color.Primary">Primär</MudChip> }</td>
+                                <td>@nk.Relation</td>
+                                <td>@nk.Telefon</td>
+                                <td>@(nk.Epost ?? "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
             <MudButton Variant="Variant.Outlined" Color="Color.Primary" Class="mt-3"
                        StartIcon="@Icons.Material.Filled.Add" Size="Size.Large"
                        Style="min-height: 48px;" OnClick="@(() => _visaNodkontaktForm = true)">
@@ -91,9 +109,14 @@
                         <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">Ny nödkontakt</MudText>
                         <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _visaNodkontaktForm = false)" />
                     </div>
-                    <MudTextField @bind-Value="_nodkontaktNamn" Label="Namn" Variant="Variant.Outlined" Class="mb-3" />
-                    <MudTextField @bind-Value="_nodkontaktRelation" Label="Relation" Variant="Variant.Outlined" Class="mb-3" />
-                    <MudTextField @bind-Value="_nodkontaktTelefon" Label="Telefon" Variant="Variant.Outlined" Class="mb-3" />
+                    <MudTextField @bind-Value="_nodkontaktNamn" Label="Namn" Variant="Variant.Outlined" Class="mb-3" Required="true" />
+                    <MudTextField @bind-Value="_nodkontaktRelation" Label="Relation" Variant="Variant.Outlined" Class="mb-3" Required="true" />
+                    <MudTextField @bind-Value="_nodkontaktTelefon" Label="Telefon" Variant="Variant.Outlined" Class="mb-3" Required="true" />
+                    <MudTextField @bind-Value="_nodkontaktEpost" Label="E-post (valfritt)" Variant="Variant.Outlined" Class="mb-3" />
+                    @if (_nodkontaktFel != null)
+                    {
+                        <MudAlert Severity="Severity.Error" Class="mb-3" Dense="true">@_nodkontaktFel</MudAlert>
+                    }
                     <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LaggTillNodkontakt">Spara</MudButton>
                 </MudPaper>
             }
@@ -144,6 +167,8 @@
                 _postnummer = profil.Postnummer;
                 _ort = profil.Ort;
             }
+
+            await LaddaNodkontakter();
         }
         catch (Exception ex)
         {
@@ -156,14 +181,59 @@
     private string _nodkontaktNamn = "";
     private string _nodkontaktRelation = "";
     private string _nodkontaktTelefon = "";
+    private string _nodkontaktEpost = "";
+    private string? _nodkontaktFel;
+    private List<EmergencyContact> _nodkontakter = [];
 
-    private void LaggTillNodkontakt()
+    private async Task LaddaNodkontakter()
     {
-        _visaNodkontaktForm = false;
-        _nodkontaktSparad = true;
-        _nodkontaktNamn = "";
-        _nodkontaktRelation = "";
-        _nodkontaktTelefon = "";
+        if (Auth.EmployeeId == null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _nodkontakter = await db.EmergencyContacts
+            .Where(k => k.AnstallId == Auth.EmployeeId.Value)
+            .OrderByDescending(k => k.ArPrimar)
+            .ToListAsync();
+    }
+
+    private async Task LaggTillNodkontakt()
+    {
+        _nodkontaktFel = null;
+        if (Auth.EmployeeId == null) { _nodkontaktFel = "Ingen anställd kopplad — kan inte spara."; return; }
+        if (string.IsNullOrWhiteSpace(_nodkontaktNamn) ||
+            string.IsNullOrWhiteSpace(_nodkontaktRelation) ||
+            string.IsNullOrWhiteSpace(_nodkontaktTelefon))
+        {
+            _nodkontaktFel = "Fyll i namn, relation och telefon.";
+            return;
+        }
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            // Första kontakten blir primär (den vi ringer först).
+            var primar = !await db.EmergencyContacts.AnyAsync(k => k.AnstallId == Auth.EmployeeId.Value);
+            var kontakt = EmergencyContact.Skapa(
+                Auth.EmployeeId.Value,
+                _nodkontaktNamn.Trim(),
+                _nodkontaktRelation.Trim(),
+                _nodkontaktTelefon.Trim(),
+                string.IsNullOrWhiteSpace(_nodkontaktEpost) ? null : _nodkontaktEpost.Trim(),
+                primar);
+            db.EmergencyContacts.Add(kontakt);
+            await db.SaveChangesAsync();
+
+            await LaddaNodkontakter();
+            _visaNodkontaktForm = false;
+            _nodkontaktSparad = true;
+            _nodkontaktNamn = "";
+            _nodkontaktRelation = "";
+            _nodkontaktTelefon = "";
+            _nodkontaktEpost = "";
+        }
+        catch (Exception ex)
+        {
+            _nodkontaktFel = $"Kunde inte spara: {ex.Message}";
+        }
     }
 
     private async Task SparaKontaktuppgifter()

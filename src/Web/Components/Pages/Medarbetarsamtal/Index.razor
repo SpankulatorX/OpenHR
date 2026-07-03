@@ -31,7 +31,7 @@
         @foreach (var r in _reviews)
         {
             <tr>
-                <td>@r.AnstallId.ToString()[..8]...</td>
+                <td>@NamnFor(r.AnstallId)</td>
                 <td>@r.Ar</td>
                 <td>@(r.OverallRating.HasValue ? $"{r.OverallRating}/5" : "—")</td>
                 <td>@(r.GenomfordVid?.ToString("yyyy-MM-dd") ?? r.SkapadVid.ToString("yyyy-MM-dd"))</td>
@@ -47,7 +47,7 @@
                     <td colspan="6">
                         <MudPaper Class="pa-4" Elevation="0" Style="background: var(--mud-palette-background-grey);">
                             <MudText Typo="Typo.subtitle1" Class="mb-2"><strong>Medarbetarsamtal @r.Ar</strong></MudText>
-                            <MudText Typo="Typo.body2"><strong>Anställd-ID:</strong> @r.AnstallId</MudText>
+                            <MudText Typo="Typo.body2"><strong>Anställd:</strong> @NamnFor(r.AnstallId)</MudText>
                             <MudText Typo="Typo.body2"><strong>Betyg:</strong> @(r.OverallRating.HasValue ? $"{r.OverallRating}/5" : "Ej satt")</MudText>
                             <MudText Typo="Typo.body2"><strong>Status:</strong> @StatusText(r.Status)</MudText>
                             <MudText Typo="Typo.body2"><strong>Skapad:</strong> @r.SkapadVid.ToString("yyyy-MM-dd")</MudText>
@@ -66,6 +66,7 @@
 
 @code {
     private List<PerformanceReview> _reviews = [];
+    private Dictionary<Guid, string> _namn = new();
     private PerformanceReview? _valdSamtal;
 
     private void ValjSamtal(PerformanceReview r) => _valdSamtal = _valdSamtal == r ? null : r;
@@ -81,9 +82,14 @@
                 .OrderByDescending(x => x.SkapadVid)
                 .Take(50)
                 .ToListAsync();
+
+            _namn = (await db.Employees.ToListAsync())
+                .ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
         }
         catch (Exception ex) { _error = $"Kunde inte hämta medarbetarsamtal: {ex.Message}"; }
     }
+
+    private string NamnFor(Guid id) => _namn.TryGetValue(id, out var n) ? n : id.ToString()[..8] + "…";
 
     private static Color StatusFarg(ReviewStatus s) => s switch
     {

@@ -6,6 +6,7 @@
 @using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.AuthService Auth
 
 <PageTitle>OpenHR - Lönekörning</PageTitle>
 
@@ -65,7 +66,8 @@ else
             <OhrSuggestionCard Title="@($"{a.Namn} — {a.Belopp}")"
                                Explanation="@a.Forklaring"
                                Level="OhrSuggestionCard.SuggestionLevel.Warning"
-                               Actions="@(new Dictionary<string, string> { ["ok"] = "OK, stämmer", ["andra"] = "Ändra" })" />
+                               Actions="@_anomaliActions"
+                               OnActionClicked="@(_ => KvitteraAnomali(a))" />
         }
     }
 
@@ -129,14 +131,58 @@ else
         </ChildRowContent>
     </MudTable>
 
-    <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Large" FullWidth="true"
-               Style="min-height: 64px; font-size: 1.25rem;" Class="mt-4">
-        Godkänn och skicka till utbetalning
-    </MudButton>
+    @if (_actionError != null)
+    {
+        <MudAlert Severity="Severity.Error" Variant="Variant.Text" Class="mt-4" ShowCloseIcon="true"
+                  CloseIconClicked="@(() => _actionError = null)">@_actionError</MudAlert>
+    }
+    @if (_actionSuccess != null)
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-4">@_actionSuccess</MudAlert>
+    }
 
-    <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mt-3">
-        Nästa steg: AGI-filen till Skatteverket skapas automatiskt den 12:e.
-    </MudAlert>
+    @if (_status is PayrollRunStatus.Beraknad or PayrollRunStatus.Granskad)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Large" FullWidth="true"
+                   Style="min-height: 64px; font-size: 1.25rem;" Class="mt-4"
+                   Disabled="@_saving" OnClick="GodkannKorning">
+            @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+            Godkänn lönekörning
+        </MudButton>
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mt-3">
+            Efter godkännande skapas betalfil (pain.001) och AGI till Skatteverket under
+            <MudLink Href="/lon/export">Export</MudLink>.
+        </MudAlert>
+    }
+    else if (_status == PayrollRunStatus.Godkand)
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-4">
+            Lönekörningen är godkänd@(string.IsNullOrWhiteSpace(_godkandAv) ? "" : $" av {_godkandAv}").
+        </MudAlert>
+        <MudStack Row="true" Spacing="3" Class="mt-3" Style="flex-wrap: wrap;">
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                       StartIcon="@Icons.Material.Filled.Download" Href="/lon/export">
+                Skapa betalfil &amp; AGI
+            </MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Success" Size="Size.Large"
+                       Disabled="@_saving" OnClick="MarkeraUtbetald">
+                @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" /> }
+                Markera som utbetald
+            </MudButton>
+        </MudStack>
+    }
+    else if (_status == PayrollRunStatus.Utbetald)
+    {
+        <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-4">
+            Lönekörningen är utbetald@(string.IsNullOrWhiteSpace(_godkandAv) ? "" : $" (godkänd av {_godkandAv})").
+        </MudAlert>
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mt-4">
+            Körningen har status <strong>@_status</strong>. Den kan godkännas när den är beräknad.
+        </MudAlert>
+    }
 }
 
 @code {
@@ -152,8 +198,11 @@ else
     private List<Anomali> _anomalier = [];
     private List<LonRad> _loner = [];
     private readonly HashSet<int> _expanded = [];
-    private bool _loading = true, _found;
+    private bool _loading = true, _found, _saving;
     private string? _error;
+    private PayrollRunStatus _status;
+    private string? _godkandAv;
+    private string? _actionError, _actionSuccess;
 
     protected override async Task OnInitializedAsync()
     {
@@ -172,6 +221,8 @@ else
             }
 
             _found = true;
+            _status = run.Status;
+            _godkandAv = run.GodkandAv;
             _rubrik = FormatPeriod(run.Year, run.Month);
             _retroaktiv = run.ArRetroaktiv;
             _retroPeriod = run.RetroaktivtForPeriod;
@@ -226,10 +277,62 @@ else
         finally { _loading = false; }
     }
 
+    private static readonly Dictionary<string, string> _anomaliActions = new()
+    {
+        ["kvittera"] = "Kvittera – kontrollerad"
+    };
+
     private void ToggleRad(int index)
     {
         if (!_expanded.Add(index))
             _expanded.Remove(index);
+    }
+
+    private void KvitteraAnomali(Anomali a) => _anomalier.Remove(a);
+
+    private async Task GodkannKorning()
+    {
+        _saving = true;
+        _actionError = null;
+        _actionSuccess = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var run = await db.PayrollRuns.FirstOrDefaultAsync(r => r.Id == PayrollRunId.From(Id));
+            if (run is null) { _actionError = "Lönekörningen hittades inte."; return; }
+
+            run.Godkann(Auth.UserName ?? "HR");
+            await db.SaveChangesAsync();
+
+            _status = run.Status;
+            _godkandAv = run.GodkandAv;
+            _actionSuccess = "Lönekörningen är godkänd. Nästa steg: skapa betalfil och AGI under Export.";
+        }
+        catch (InvalidOperationException ex) { _actionError = ex.Message; }
+        catch (Exception ex) { _actionError = $"Kunde inte godkänna körningen: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task MarkeraUtbetald()
+    {
+        _saving = true;
+        _actionError = null;
+        _actionSuccess = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var run = await db.PayrollRuns.FirstOrDefaultAsync(r => r.Id == PayrollRunId.From(Id));
+            if (run is null) { _actionError = "Lönekörningen hittades inte."; return; }
+
+            run.MarkeraSomUtbetald();
+            await db.SaveChangesAsync();
+
+            _status = run.Status;
+            _actionSuccess = "Lönekörningen är markerad som utbetald.";
+        }
+        catch (InvalidOperationException ex) { _actionError = ex.Message; }
+        catch (Exception ex) { _actionError = $"Kunde inte markera som utbetald: {ex.Message}"; }
+        finally { _saving = false; }
     }
 
     private void BuildAnomalies(PayrollRun run, Dictionary<Guid, string> empNames, Dictionary<Guid, decimal> foregaendeBrutto)

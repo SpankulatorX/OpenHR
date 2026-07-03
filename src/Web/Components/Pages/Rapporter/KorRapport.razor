@@ -1,8 +1,11 @@
 @page "/rapporter/kor/{Namn}"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Export
+@using RegionHR.Reporting.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject ExportService Export
 @inject IJSRuntime JS
 
 <PageTitle>OpenHR - @Namn</PageTitle>
@@ -187,6 +190,31 @@ else if (_result != null)
         _running = false;
     }
 
+    private bool _loggad;
+
+    // Logga körningen EN gång i den interaktiva renderingen (OnAfterRender kallas inte under
+    // prerender) så att rapportbibliotekets "Körda senaste 30 d" speglar verkliga körningar —
+    // parity med REST-API:ts /kor-endpoint. Icke-kritiskt: får aldrig störa visningen.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _loggad) return;
+        _loggad = true;
+
+        string[] kandaRapporter = ["Personalförteckning", "Löneregister", "Frånvarostatistik", "LAS-status", "Bemanningsanalys"];
+        if (_running || _error != null || !kandaRapporter.Contains(Namn)) return;
+
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var def = await db.ReportDefinitions.FirstOrDefaultAsync(r => r.Namn == Namn);
+            var exec = ReportExecution.Starta(def?.Id ?? Guid.Empty, Namn);
+            exec.Slutfor($"web://rapporter/kor/{Namn}");
+            db.ReportExecutions.Add(exec);
+            await db.SaveChangesAsync();
+        }
+        catch { /* loggning är icke-kritisk */ }
+    }
+
     private bool _visarCsv;
     private string _csvInnehall = "";
     private bool _kopierad;
@@ -222,10 +250,15 @@ else if (_result != null)
 
     private async Task ExporteraExcel()
     {
-        var csv = GenereraCsv();
-        var bytes = System.Text.Encoding.UTF8.GetBytes(csv);
+        // Riktig .xlsx via ClosedXML (ExportService) — inte en omdöpt CSV.
+        // Excel-fliknamn får inte innehålla \ / ? * [ ] : och max 31 tecken.
+        var rensat = new string(Namn.Where(c => !"\\/?*[]:".Contains(c)).ToArray());
+        if (string.IsNullOrWhiteSpace(rensat)) rensat = "Rapport";
+        var sheetName = rensat.Length > 31 ? rensat[..31] : rensat;
+        var bytes = Export.ToExcel(_result, sheetName, _headers.ToArray(), row => row.Cast<object>().ToArray());
         var base64 = Convert.ToBase64String(bytes);
-        await JS.InvokeVoidAsync("downloadFile", $"{Namn}.csv", base64, "text/csv");
+        await JS.InvokeVoidAsync("downloadFile", $"{Namn}.xlsx", base64,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     }
 }
 

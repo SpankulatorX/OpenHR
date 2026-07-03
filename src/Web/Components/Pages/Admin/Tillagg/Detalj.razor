@@ -171,6 +171,8 @@ else if (_extension != null)
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            // _installation laddades i init-contexten — attacha före mutation för persistens.
+            db.Attach(_installation!);
             if (_installation!.Status == InstallationStatus.Active)
             {
                 _installation.Inaktivera();

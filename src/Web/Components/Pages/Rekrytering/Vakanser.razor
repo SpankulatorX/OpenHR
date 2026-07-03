@@ -9,6 +9,9 @@
 <PageTitle>OpenHR - Rekrytering</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
     <MudText Typo="Typo.h4" Style="font-weight: 700;">Rekrytering</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+               StartIcon="@Icons.Material.Filled.PostAdd" Style="min-height: 48px;"
+               OnClick="@(() => _visaSkapa = !_visaSkapa)">Ny vakans</MudButton>
 </div>
 
 @if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
@@ -18,6 +21,47 @@ else
     @if (_flashMeddelande is not null)
     {
         <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _flashMeddelande = null)">@_flashMeddelande</MudAlert>
+    }
+
+    @if (_visaSkapa)
+    {
+        <MudPaper Class="pa-5 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-primary);">
+            <div class="d-flex justify-space-between align-center mb-3">
+                <MudText Typo="Typo.h6" Style="font-weight: 600;">Skapa ny vakans</MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _visaSkapa = false)" />
+            </div>
+            @if (_skapaFel is not null)
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-3">@_skapaFel</MudAlert>
+            }
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="OrganizationId?" @bind-Value="_nyEnhetId" Label="Enhet" Variant="Variant.Outlined" Required="true">
+                        @foreach (var e in _enheter)
+                        {
+                            <MudSelectItem T="OrganizationId?" Value="@((OrganizationId?)e.Id)">@e.Namn</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_nyTitel" Label="Titel" Variant="Variant.Outlined" Required="true" /></MudItem>
+                <MudItem xs="12"><MudTextField @bind-Value="_nyBeskrivning" Label="Beskrivning" Variant="Variant.Outlined" Lines="3" /></MudItem>
+                <MudItem xs="12" sm="4">
+                    <MudSelect T="EmploymentType" @bind-Value="_nyForm" Label="Anställningsform" Variant="Variant.Outlined">
+                        @foreach (var f in Enum.GetValues<EmploymentType>())
+                        {
+                            <MudSelectItem T="EmploymentType" Value="@f">@FormNamn(f)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="4"><MudDatePicker @bind-Date="_nySistaDag" Label="Sista ansökningsdag" Variant="Variant.Outlined" /></MudItem>
+                <MudItem xs="6" sm="2"><MudNumericField @bind-Value="_nyLonMin" Label="Lön min (kr)" Min="0m" Step="500m" Variant="Variant.Outlined" /></MudItem>
+                <MudItem xs="6" sm="2"><MudNumericField @bind-Value="_nyLonMax" Label="Lön max (kr)" Min="0m" Step="500m" Variant="Variant.Outlined" /></MudItem>
+            </MudGrid>
+            <div class="mt-3 d-flex" style="gap: 0.5rem;">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@_sparar" OnClick="SkapaVakans">@(_sparar ? "Skapar..." : "Skapa vakans")</MudButton>
+                <MudButton Variant="Variant.Text" OnClick="@(() => _visaSkapa = false)">Avbryt</MudButton>
+            </div>
+        </MudPaper>
     }
 
     <MudGrid Spacing="3" Class="mb-4">
@@ -47,6 +91,60 @@ else
                     {
                         <tr><td colspan="6">
                             <MudPaper Class="pa-4" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                                @* Vakansåtgärder — publicera, registrera ansökan, stäng *@
+                                <div class="d-flex align-center flex-wrap mb-3" style="gap: 0.5rem;">
+                                    @if (v.Status == VacancyStatus.Utkast)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" StartIcon="@Icons.Material.Filled.Campaign" OnClick="@(() => OppnaVakansLage(v, VakansLage.Publicera))">Publicera vakans</MudButton>
+                                    }
+                                    @if (v.Status == VacancyStatus.Publicerad)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.NoteAdd" OnClick="@(() => OppnaVakansLage(v, VakansLage.Ansokan))">Registrera ansökan</MudButton>
+                                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.DoorFront" OnClick="@(() => StangVakans(v))" Disabled="@_sparar">Stäng vakans</MudButton>
+                                    }
+                                    <MudChip T="string" Size="Size.Small" Color="@StatusFarg(v.Status)">@StatusText(v.Status)</MudChip>
+                                </div>
+
+                                @if (_vakansFel is not null && _oppenVakansId == v.Id && _vakansLage == VakansLage.Ingen)
+                                {
+                                    <MudAlert Severity="Severity.Error" Class="mb-3">@_vakansFel</MudAlert>
+                                }
+
+                                @if (_vakansLage != VakansLage.Ingen && _oppenVakansId == v.Id)
+                                {
+                                    <MudPaper Class="pa-3 mb-3" Elevation="1">
+                                        @if (_vakansFel is not null)
+                                        {
+                                            <MudAlert Severity="Severity.Error" Class="mb-2">@_vakansFel</MudAlert>
+                                        }
+                                        @switch (_vakansLage)
+                                        {
+                                            case VakansLage.Publicera:
+                                                <MudText Typo="Typo.subtitle2" Class="mb-2">Publicera vakans</MudText>
+                                                <div class="d-flex flex-wrap align-center" style="gap: 1rem;">
+                                                    <MudCheckBox @bind-Value="_pubExternt" Label="Externt (webb)" Color="Color.Primary" />
+                                                    <MudCheckBox @bind-Value="_pubPlatsbanken" Label="Platsbanken" Color="Color.Primary" />
+                                                </div>
+                                                <div class="mt-2 d-flex" style="gap: 0.5rem;">
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Success" Disabled="@_sparar" OnClick="@(() => Publicera(v))">Bekräfta publicering</MudButton>
+                                                    <MudButton Variant="Variant.Text" OnClick="AvbrytVakansLage">Avbryt</MudButton>
+                                                </div>
+                                                break;
+                                            case VakansLage.Ansokan:
+                                                <MudText Typo="Typo.subtitle2" Class="mb-2">Registrera inkommen ansökan</MudText>
+                                                <MudGrid Spacing="2">
+                                                    <MudItem xs="12" sm="6"><MudTextField @bind-Value="_ansNamn" Label="Sökandens namn" Variant="Variant.Outlined" Required="true" /></MudItem>
+                                                    <MudItem xs="12" sm="6"><MudTextField @bind-Value="_ansEpost" Label="E-post" Variant="Variant.Outlined" InputType="InputType.Email" Required="true" /></MudItem>
+                                                </MudGrid>
+                                                <div class="mt-2 d-flex" style="gap: 0.5rem;">
+                                                    <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@_sparar" OnClick="@(() => RegistreraAnsokan(v))">Registrera ansökan</MudButton>
+                                                    <MudButton Variant="Variant.Text" OnClick="AvbrytVakansLage">Avbryt</MudButton>
+                                                </div>
+                                                break;
+                                        }
+                                    </MudPaper>
+                                }
+
                                 @if (v.Ansokningar.Count == 0)
                                 {
                                     <MudText Typo="Typo.body2">Inga ansökningar än.</MudText>
@@ -82,6 +180,10 @@ else
                                                     @if (a.Status is not ApplicationStatus.Anstalld and not ApplicationStatus.Avslagen)
                                                     {
                                                         <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Error" OnClick="@(() => OppnaAvsla(a))">Avslå</MudButton>
+                                                    }
+                                                    @if (a.Status == ApplicationStatus.Avslagen)
+                                                    {
+                                                        <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Groups" OnClick="@(() => OppnaTalangpool(a))">Lägg i talangpool</MudButton>
                                                     }
                                                 </div>
                                             </div>
@@ -121,6 +223,17 @@ else
                                                             <MudTextField @bind-Value="_avslagAnledning" Label="Anledning" Variant="Variant.Outlined" />
                                                             <div class="mt-2 d-flex" style="gap: 0.5rem;">
                                                                 <MudButton Variant="Variant.Filled" Color="Color.Error" Disabled="@_sparar" OnClick="@(() => Avsla(v, a))">Bekräfta avslag</MudButton>
+                                                                <MudButton Variant="Variant.Text" OnClick="Avbryt">Avbryt</MudButton>
+                                                            </div>
+                                                            break;
+                                                        case Lage.Talangpool:
+                                                            <MudText Typo="Typo.subtitle2" Class="mb-2">Lägg @a.Namn i talangpoolen</MudText>
+                                                            <MudGrid Spacing="2">
+                                                                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_poolKompetens" Label="Kompetensområde" Placeholder="T.ex. IVA, akutsjukvård" Variant="Variant.Outlined" /></MudItem>
+                                                                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_poolAnteckningar" Label="Anteckningar" Placeholder="Varför är kandidaten intressant framåt?" Variant="Variant.Outlined" /></MudItem>
+                                                            </MudGrid>
+                                                            <div class="mt-2 d-flex" style="gap: 0.5rem;">
+                                                                <MudButton Variant="Variant.Filled" Color="Color.Secondary" Disabled="@_sparar" OnClick="@(() => LaggITalangpool(v, a))">Spara i talangpool</MudButton>
                                                                 <MudButton Variant="Variant.Text" OnClick="Avbryt">Avbryt</MudButton>
                                                             </div>
                                                             break;
@@ -178,17 +291,42 @@ else
 }
 
 @code {
-    private enum Lage { Ingen, Bedom, Intervju, Avsla, Tillsatt }
+    private enum Lage { Ingen, Bedom, Intervju, Avsla, Tillsatt, Talangpool }
+    private enum VakansLage { Ingen, Publicera, Ansokan }
 
     private List<VakansOversikt> _vakanser = [];
     private Guid? _oppenVakansId;
     private Guid? _aktivAnsokanId;
     private Lage _lage = Lage.Ingen;
+    private VakansLage _vakansLage = VakansLage.Ingen;
+    private string? _vakansFel;
     private bool _loading = true;
     private string? _error;
     private string? _flashMeddelande;
     private string? _felmeddelande;
     private bool _sparar;
+
+    // Ny vakans
+    private bool _visaSkapa;
+    private string? _skapaFel;
+    private List<EnhetVal> _enheter = [];
+    private OrganizationId? _nyEnhetId;
+    private string _nyTitel = "";
+    private string _nyBeskrivning = "";
+    private EmploymentType _nyForm = EmploymentType.Tillsvidare;
+    private DateTime? _nySistaDag = DateTime.Today.AddDays(30);
+    private decimal? _nyLonMin;
+    private decimal? _nyLonMax;
+
+    // Publicera / registrera ansökan
+    private bool _pubExternt = true;
+    private bool _pubPlatsbanken;
+    private string _ansNamn = "";
+    private string _ansEpost = "";
+
+    // Talangpool
+    private string _poolKompetens = "";
+    private string _poolAnteckningar = "";
 
     // Bedöm / intervju / avslå
     private int _poang = 70;
@@ -220,7 +358,12 @@ else
         _ => ""
     };
 
-    protected override async Task OnInitializedAsync() => await LaddaAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        try { _enheter = await Service.HamtaEnheterAsync(); }
+        catch { /* enhetslistan är icke-kritisk för visningen; skapa-formuläret hanterar tom lista */ }
+        await LaddaAsync();
+    }
 
     private async Task LaddaAsync()
     {
@@ -234,6 +377,25 @@ else
     {
         _oppenVakansId = _oppenVakansId == vakansId ? null : vakansId;
         Avbryt();
+        AvbrytVakansLage();
+    }
+
+    private void OppnaVakansLage(VakansOversikt v, VakansLage lage)
+    {
+        _oppenVakansId = v.Id;
+        Avbryt();
+        _vakansLage = lage;
+        _vakansFel = null;
+        _pubExternt = true;
+        _pubPlatsbanken = false;
+        _ansNamn = "";
+        _ansEpost = "";
+    }
+
+    private void AvbrytVakansLage()
+    {
+        _vakansLage = VakansLage.Ingen;
+        _vakansFel = null;
     }
 
     private void Avbryt()
@@ -246,6 +408,7 @@ else
     private void OppnaBedom(AnsokanOversikt a) { StartAtgard(a, Lage.Bedom); _poang = a.Poang ?? 70; _kommentar = ""; }
     private void OppnaIntervju(AnsokanOversikt a) { StartAtgard(a, Lage.Intervju); _intervjuDatum = DateTime.Today.AddDays(7); }
     private void OppnaAvsla(AnsokanOversikt a) { StartAtgard(a, Lage.Avsla); _avslagAnledning = ""; }
+    private void OppnaTalangpool(AnsokanOversikt a) { StartAtgard(a, Lage.Talangpool); _poolKompetens = ""; _poolAnteckningar = ""; }
 
     private void OppnaTillsatt(VakansOversikt v, AnsokanOversikt a)
     {
@@ -265,7 +428,82 @@ else
         _tBefattning = v.Titel;
     }
 
-    private void StartAtgard(AnsokanOversikt a, Lage lage) { _aktivAnsokanId = a.Id; _lage = lage; _felmeddelande = null; }
+    private void StartAtgard(AnsokanOversikt a, Lage lage) { AvbrytVakansLage(); _aktivAnsokanId = a.Id; _lage = lage; _felmeddelande = null; }
+
+    private async Task SkapaVakans()
+    {
+        _skapaFel = null;
+        if (_nyEnhetId is null) { _skapaFel = "Välj en enhet."; return; }
+        if (string.IsNullOrWhiteSpace(_nyTitel)) { _skapaFel = "Titel är obligatoriskt."; return; }
+        if (_nySistaDag is null) { _skapaFel = "Ange sista ansökningsdag."; return; }
+        if (_nyLonMin is { } lmin && _nyLonMax is { } lmax && lmin > lmax) { _skapaFel = "Lägsta lön kan inte vara högre än högsta lön."; return; }
+
+        _sparar = true;
+        try
+        {
+            await Service.SkapaVakansAsync(
+                _nyEnhetId.Value, _nyTitel, _nyBeskrivning, _nyForm,
+                DateOnly.FromDateTime(_nySistaDag.Value), _nyLonMin, _nyLonMax);
+            _flashMeddelande = $"Vakans \"{_nyTitel}\" skapad (status Utkast). Publicera den för att ta emot ansökningar.";
+            _visaSkapa = false;
+            _nyTitel = ""; _nyBeskrivning = ""; _nyLonMin = null; _nyLonMax = null; _nyEnhetId = null;
+            await LaddaAsync();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { _skapaFel = ex.Message; }
+        catch (Exception ex) { _skapaFel = $"Kunde inte skapa vakans: {ex.Message}"; }
+        finally { _sparar = false; }
+    }
+
+    private async Task Publicera(VakansOversikt v)
+    {
+        _sparar = true; _vakansFel = null;
+        try
+        {
+            await Service.PubliceraVakansAsync(v.Id, _pubExternt, _pubPlatsbanken);
+            _flashMeddelande = $"Vakans \"{v.Titel}\" publicerad.";
+            AvbrytVakansLage();
+            await LaddaAsync();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { _vakansFel = ex.Message; }
+        catch (Exception ex) { _vakansFel = $"Kunde inte publicera: {ex.Message}"; }
+        finally { _sparar = false; }
+    }
+
+    private async Task RegistreraAnsokan(VakansOversikt v)
+    {
+        if (string.IsNullOrWhiteSpace(_ansNamn)) { _vakansFel = "Ange sökandens namn."; return; }
+        if (string.IsNullOrWhiteSpace(_ansEpost)) { _vakansFel = "Ange sökandens e-post."; return; }
+        _sparar = true; _vakansFel = null;
+        try
+        {
+            await Service.TaEmotAnsokanAsync(v.Id, _ansNamn, _ansEpost);
+            _flashMeddelande = $"Ansökan från {_ansNamn} registrerad på \"{v.Titel}\".";
+            AvbrytVakansLage();
+            await LaddaAsync();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { _vakansFel = ex.Message; }
+        catch (Exception ex) { _vakansFel = $"Kunde inte registrera ansökan: {ex.Message}"; }
+        finally { _sparar = false; }
+    }
+
+    private async Task StangVakans(VakansOversikt v)
+    {
+        _sparar = true; _vakansFel = null;
+        try
+        {
+            await Service.StangVakansAsync(v.Id);
+            _flashMeddelande = $"Vakans \"{v.Titel}\" stängd.";
+            AvbrytVakansLage();
+            await LaddaAsync();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { _vakansFel = ex.Message; }
+        catch (Exception ex) { _vakansFel = $"Kunde inte stänga: {ex.Message}"; }
+        finally { _sparar = false; }
+    }
+
+    private async Task LaggITalangpool(VakansOversikt v, AnsokanOversikt a) =>
+        await Kor(() => Service.FlyttaTillTalangpoolAsync(v.Id, a.Id, _poolKompetens, _poolAnteckningar),
+                  $"{a.Namn} tillagd i talangpoolen.");
 
     private static decimal MittLon(VakansOversikt v) => (v.LonMin, v.LonMax) switch
     {

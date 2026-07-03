@@ -23,11 +23,21 @@
             <MudText Typo="Typo.h6" Style="font-weight: 600;">Skapa ny förmån</MudText>
             <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _showForm = false)" />
         </div>
-        <MudTextField @bind-Value="_newNamn" Label="Namn" Variant="Variant.Outlined" Class="mb-3" />
-        <MudTextField @bind-Value="_newBeskrivning" Label="Beskrivning" Variant="Variant.Outlined" Lines="3" Class="mb-3" />
-        <MudTextField @bind-Value="_newBudget" Label="Maxbelopp/år (kr)" Variant="Variant.Outlined" Class="mb-3" />
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
-                   Style="min-height: 48px;" OnClick="SkapaForman">Skapa</MudButton>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="6"><MudTextField @bind-Value="_newNamn" Label="Namn" Variant="Variant.Outlined" Required="true" /></MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect @bind-Value="_newKategori" Label="Kategori" Variant="Variant.Outlined">
+                    @foreach (var k in Enum.GetValues<BenefitCategory>()) { <MudSelectItem Value="@k">@KategoriText(k)</MudSelectItem> }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12"><MudTextField @bind-Value="_newBeskrivning" Label="Beskrivning" Variant="Variant.Outlined" Lines="3" /></MudItem>
+            <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_newBudget" Label="Maxbelopp/år (kr)" Variant="Variant.Outlined" Min="0" HideSpinButtons="true" /></MudItem>
+            <MudItem xs="12" sm="4"><MudNumericField T="decimal" @bind-Value="_newArbetsgivarAndel" Label="Arbetsgivarandel (%)" Variant="Variant.Outlined" Min="0" Max="100" /></MudItem>
+            <MudItem xs="12" sm="4" Class="d-flex align-center"><MudCheckBox T="bool" @bind-Value="_newSkattepliktig" Label="Skattepliktig förmån" Color="Color.Primary" /></MudItem>
+        </MudGrid>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-3"
+                   Style="min-height: 48px;" OnClick="SkapaForman"
+                   Disabled="@(string.IsNullOrWhiteSpace(_newNamn) || _saving)">Skapa</MudButton>
     </MudPaper>
 }
 
@@ -66,12 +76,31 @@
                     <td colspan="7">
                         <MudPaper Class="pa-4" Elevation="0" Style="background: var(--mud-palette-background-grey);">
                             <MudText Typo="Typo.subtitle1" Class="mb-2"><strong>@b.Namn</strong></MudText>
+                            @if (!string.IsNullOrWhiteSpace(b.Beskrivning))
+                            {
+                                <MudText Typo="Typo.body2"><strong>Beskrivning:</strong> @b.Beskrivning</MudText>
+                            }
                             <MudText Typo="Typo.body2"><strong>Kategori:</strong> @KategoriText(b.Kategori)</MudText>
                             <MudText Typo="Typo.body2"><strong>Maxbelopp:</strong> @(b.MaxBelopp > 0 ? $"{b.MaxBelopp:N0} kr" : "—")</MudText>
+                            <MudText Typo="Typo.body2"><strong>Arbetsgivarandel:</strong> @b.ArbetsgivarAndel %</MudText>
                             <MudText Typo="Typo.body2"><strong>Skattepliktig:</strong> @(b.ArSkattepliktig ? "Ja" : "Nej")</MudText>
                             <MudText Typo="Typo.body2"><strong>Antal anmälda:</strong> @AnmaldaCount(b.Id)</MudText>
                             <MudText Typo="Typo.body2"><strong>Status:</strong> @(b.ArAktiv ? "Aktiv" : "Inaktiv")</MudText>
-                            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => _valdForman = null)" Class="mt-2">Stäng</MudButton>
+                            <div class="d-flex gap-2 mt-3">
+                                @if (b.ArAktiv)
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning"
+                                               StartIcon="@Icons.Material.Filled.PauseCircle"
+                                               OnClick="@(() => VaxlaAktiv(b))">Inaktivera</MudButton>
+                                }
+                                else
+                                {
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                                               StartIcon="@Icons.Material.Filled.PlayCircle"
+                                               OnClick="@(() => VaxlaAktiv(b))">Aktivera</MudButton>
+                                }
+                                <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => _valdForman = null)">Stäng</MudButton>
+                            </div>
                         </MudPaper>
                     </td>
                 </tr>
@@ -83,18 +112,13 @@
 @code {
     private bool _showForm;
     private bool _skapad;
+    private bool _saving;
     private string _newNamn = "";
     private string _newBeskrivning = "";
-    private string _newBudget = "";
-
-    private void SkapaForman()
-    {
-        _showForm = false;
-        _skapad = true;
-        _newNamn = "";
-        _newBeskrivning = "";
-        _newBudget = "";
-    }
+    private decimal _newBudget;
+    private decimal _newArbetsgivarAndel = 100;
+    private bool _newSkattepliktig;
+    private BenefitCategory _newKategori = BenefitCategory.Friskvard;
 
     private List<Benefit> _benefits = [];
     private Benefit? _valdForman;
@@ -103,9 +127,11 @@
 
     private void ValjForman(Benefit b) => _valdForman = _valdForman == b ? null : b;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync() => await LaddaBenefits();
+
+    private async Task LaddaBenefits()
     {
-        using var db = DbFactory.CreateDbContext();
+        await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
             _benefits = await db.Benefits
@@ -120,6 +146,54 @@
                 .ToListAsync();
         }
         catch (Exception ex) { _error = $"Kunde inte hämta förmåner: {ex.Message}"; }
+    }
+
+    private async Task SkapaForman()
+    {
+        if (string.IsNullOrWhiteSpace(_newNamn)) return;
+        _saving = true; _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var forman = Benefit.Skapa(
+                _newNamn.Trim(),
+                _newBeskrivning.Trim(),
+                _newKategori,
+                _newBudget,
+                _newArbetsgivarAndel,
+                _newSkattepliktig);
+            db.Benefits.Add(forman);
+            await db.SaveChangesAsync();
+
+            _showForm = false;
+            _skapad = true;
+            _newNamn = ""; _newBeskrivning = ""; _newBudget = 0;
+            _newArbetsgivarAndel = 100; _newSkattepliktig = false;
+            _newKategori = BenefitCategory.Friskvard;
+            await LaddaBenefits();
+        }
+        catch (Exception ex) { _error = $"Kunde inte skapa förmån: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    /// <summary>
+    /// Aktiverar/inaktiverar en förmån. Entiteten hämtas i samma context som
+    /// SaveChanges eftersom den listade instansen kommer från en annan (disposad) context.
+    /// </summary>
+    private async Task VaxlaAktiv(Benefit b)
+    {
+        _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var forman = await db.Benefits.FirstOrDefaultAsync(x => x.Id == b.Id);
+            if (forman is null) { _error = "Förmånen hittades inte."; return; }
+            if (forman.ArAktiv) forman.Inaktivera(); else forman.Aktivera();
+            await db.SaveChangesAsync();
+            _valdForman = null;
+            await LaddaBenefits();
+        }
+        catch (Exception ex) { _error = $"Kunde inte uppdatera status: {ex.Message}"; }
     }
 
     private int AnmaldaCount(Guid benefitId) =>
@@ -137,4 +211,3 @@
         _ => k.ToString()
     };
 }
-

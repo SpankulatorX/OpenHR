@@ -88,11 +88,15 @@ else
         </MudTable>
     }
 
-    <MudText Typo="Typo.h6" Class="mb-3">Prognoser</MudText>
+    <MudText Typo="Typo.h6" Class="mb-1">Behovsprognos kommande 14 dagar</MudText>
+    <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+        Projicerat ur enhetens bemanningsmonster (snittbehov × sasongsfaktor) samt aktiva handelser.
+        Beraknat antal = personal per dag; timmar antar 8h-pass.
+    </MudText>
     @if (_forecasts.Count == 0)
     {
         <MudAlert Severity="Severity.Info" Variant="Variant.Text">
-            Inga prognoser beraknade for denna enhet annu. Kor optimering for att generera prognoser.
+            Inga bemanningsmonster inlagda for denna enhet — behovet kan darfor inte projiceras.
         </MudAlert>
     }
     else
@@ -123,9 +127,11 @@ else
     private List<OrganizationUnit> _enheter = [];
     private List<DemandPattern> _patterns = [];
     private List<DemandEvent> _events = [];
-    private List<DemandForecast> _forecasts = [];
+    private List<PrognosRad> _forecasts = [];
     private Guid _valdEnhet;
     private bool _loading = true;
+
+    private sealed record PrognosRad(DateOnly Datum, int BeraknatAntal, decimal BeraknadeTidmmar, decimal Konfidensgrad);
 
     protected override async Task OnInitializedAsync()
     {
@@ -157,11 +163,48 @@ else
             .OrderBy(e => e.DatumFran)
             .ToListAsync();
 
-        _forecasts = await db.DemandForecasts
-            .Where(f => f.EnhetId == OrganizationId.From(_valdEnhet))
-            .OrderBy(f => f.Datum)
-            .Take(30)
-            .ToListAsync();
+        // Projicera behovet ur mönster + händelser i stället för att läsa en tom prognostabell.
+        _forecasts = BeraknaPrognos(_patterns, _events);
+    }
+
+    /// <summary>
+    /// Deterministisk behovsprognos för kommande 14 dagar: för varje dag tas veckodagens
+    /// snittbelastning × säsongsfaktor och multipliceras med påverkansgraden för eventuella
+    /// aktiva händelser. Detta är en härledd projektion ur befintliga mönster — ingen ML-modell.
+    /// </summary>
+    private static List<PrognosRad> BeraknaPrognos(List<DemandPattern> patterns, List<DemandEvent> events)
+    {
+        var result = new List<PrognosRad>();
+        if (patterns.Count == 0) return result;
+
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        for (var i = 0; i < 14; i++)
+        {
+            var d = today.AddDays(i);
+            var pattern = patterns.FirstOrDefault(p => p.Veckodag == (int)d.DayOfWeek);
+            if (pattern is null) continue;
+
+            var eventFaktor = 1m;
+            var harEvent = false;
+            foreach (var e in events)
+            {
+                if (d >= e.DatumFran && d <= e.DatumTill)
+                {
+                    eventFaktor *= e.PaverkanGrad;
+                    harEvent = true;
+                }
+            }
+
+            var justerat = pattern.GenomsnittligBelastning * pattern.SasongsVariation * eventFaktor;
+            var antal = Math.Max(0, (int)Math.Round(justerat, MidpointRounding.AwayFromZero));
+            var timmar = antal * 8m;
+
+            // Konfidensen sjunker med prognoshorisonten och när en händelse gör dagen mer osäker.
+            var konfidens = Math.Max(50m, 92m - i * 2m) - (harEvent ? 12m : 0m);
+
+            result.Add(new PrognosRad(d, antal, timmar, konfidens));
+        }
+        return result;
     }
 
     private static string VeckodagNamn(int dag) => dag switch

@@ -181,6 +181,8 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            // Installationen laddades i init-contexten — attacha före mutation.
+            db.Attach(vm.Installation!);
             vm.Installation!.Inaktivera();
             await db.SaveChangesAsync();
             _success = $"'{vm.Extension.Namn}' inaktiverat.";
@@ -195,6 +197,7 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            db.Attach(vm.Installation!);
             vm.Installation!.Aktivera();
             await db.SaveChangesAsync();
             _success = $"'{vm.Extension.Namn}' aktiverat.";

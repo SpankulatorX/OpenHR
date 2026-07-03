@@ -128,6 +128,54 @@ public class RecruitmentTests
     }
 
     [Fact]
+    public void SattLonespann_satter_min_och_max()
+    {
+        var vacancy = SkapaTestVakans();
+
+        vacancy.SattLonespann(Money.SEK(28000m), Money.SEK(34000m));
+
+        Assert.NotNull(vacancy.Lonespann_Min);
+        Assert.NotNull(vacancy.Lonespann_Max);
+        Assert.Equal(28000m, vacancy.Lonespann_Min!.Value.Amount);
+        Assert.Equal(34000m, vacancy.Lonespann_Max!.Value.Amount);
+    }
+
+    [Fact]
+    public void SattLonespann_min_over_max_kastar_exception()
+    {
+        var vacancy = SkapaTestVakans();
+
+        Assert.Throws<ArgumentException>(() =>
+            vacancy.SattLonespann(Money.SEK(40000m), Money.SEK(30000m)));
+    }
+
+    [Fact]
+    public void SattLonespann_tillater_att_rensa_till_null()
+    {
+        var vacancy = SkapaTestVakans();
+        vacancy.SattLonespann(Money.SEK(28000m), Money.SEK(34000m));
+
+        vacancy.SattLonespann(null, null);
+
+        Assert.Null(vacancy.Lonespann_Min);
+        Assert.Null(vacancy.Lonespann_Max);
+    }
+
+    [Fact]
+    public void Publicera_tillsatt_vakans_kastar_exception()
+    {
+        var vacancy = SkapaTestVakans();
+        vacancy.Publicera();
+        var application = vacancy.TaEmotAnsokan("Test", "test@test.se");
+        application.Bedoma(80, "Bra");
+        application.BjudInIntervju(new DateTime(2026, 4, 15, 10, 0, 0, DateTimeKind.Utc));
+        application.ErbjudTjanst();
+        vacancy.Tillsatt(application.Id);
+
+        Assert.Throws<InvalidOperationException>(() => vacancy.Publicera());
+    }
+
+    [Fact]
     public void Stang_vakans()
     {
         var vacancy = SkapaTestVakans();

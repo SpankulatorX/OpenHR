@@ -74,17 +74,42 @@ else
                         <td>@c.Claim.Aktivitet</td>
                         <td>@c.Claim.Belopp.ToString("N0") kr</td>
                         <td>@c.Claim.Datum.ToString("yyyy-MM-dd")</td>
-                        <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(c.Claim.Status)">@StatusText(c.Claim.Status)</MudChip></td>
                         <td>
-                            @* Godkännande kräver chefs-/HR-behörighet och får inte avse egen ansökan
+                            <MudChip T="string" Size="Size.Small" Color="@StatusFarg(c.Claim.Status)">@StatusText(c.Claim.Status)</MudChip>
+                            @if (c.Claim.Status == WellnessClaimStatus.Avslagen && !string.IsNullOrWhiteSpace(c.Claim.Kommentar))
+                            {
+                                <MudText Typo="Typo.caption" Style="display: block; color: var(--mud-palette-text-secondary);">@c.Claim.Kommentar</MudText>
+                            }
+                        </td>
+                        <td>
+                            @* Godkännande/avslag kräver chefs-/HR-behörighet och får inte avse egen ansökan
                                (jämför FKAnmalan-sidans HR-spärr). *@
                             @if (c.Claim.Status == WellnessClaimStatus.Inskickad && Auth.EmployeeId.HasValue
                                  && Auth.IsChef && c.Claim.AnstallId != Auth.EmployeeId.Value)
                             {
-                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => GodkannClaim(c))">Godkänn</MudButton>
+                                <div class="d-flex gap-2">
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success" OnClick="@(() => GodkannClaim(c))">Godkänn</MudButton>
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" OnClick="@(() => OppnaAvsla(c))">Avslå</MudButton>
+                                </div>
                             }
                         </td>
                     </tr>
+                    @if (_avslarClaimId == c.Claim.Id)
+                    {
+                        <tr>
+                            <td colspan="6">
+                                <MudPaper Class="pa-3" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                                    <MudTextField @bind-Value="_avslaKommentar" Label="Motivering till avslag" Variant="Variant.Outlined" Lines="2" Immediate="true" />
+                                    <div class="d-flex gap-2 mt-2">
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Error"
+                                                   OnClick="@(() => AvslaClaim(c))"
+                                                   Disabled="@string.IsNullOrWhiteSpace(_avslaKommentar)">Bekräfta avslag</MudButton>
+                                        <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => _avslarClaimId = null)">Avbryt</MudButton>
+                                    </div>
+                                </MudPaper>
+                            </td>
+                        </tr>
+                    }
                 }
             </tbody>
         </MudSimpleTable>
@@ -158,6 +183,40 @@ else
             var idx = _claims.IndexOf(vm);
             if (idx >= 0) _claims[idx] = vm with { Claim = claim };
             _success = "Ansökan godkänd.";
+        }
+        catch (Exception ex) { _error = $"Fel: {ex.Message}"; }
+    }
+
+    private Guid? _avslarClaimId;
+    private string _avslaKommentar = "";
+
+    private void OppnaAvsla(ClaimVm vm)
+    {
+        _avslarClaimId = vm.Claim.Id;
+        _avslaKommentar = "";
+        _error = null;
+    }
+
+    private async Task AvslaClaim(ClaimVm vm)
+    {
+        if (!Auth.EmployeeId.HasValue) { _error = "Kräver kopplad anställd."; return; }
+        // Samma behörighetsspärr som vid godkännande: endast chef/HR, aldrig egen ansökan.
+        if (!Auth.IsChef) { _error = "Endast chef eller HR kan avslå friskvårdsansökningar."; return; }
+        if (vm.Claim.AnstallId == Auth.EmployeeId.Value) { _error = "Du kan inte avslå din egen ansökan."; return; }
+        if (string.IsNullOrWhiteSpace(_avslaKommentar)) return;
+        _error = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var claim = await db.WellnessClaims.FirstOrDefaultAsync(c => c.Id == vm.Claim.Id);
+            if (claim is null) { _error = "Ansökan hittades inte."; return; }
+            claim.Avvisa(Auth.EmployeeId.Value, _avslaKommentar.Trim());
+            await db.SaveChangesAsync();
+
+            var idx = _claims.IndexOf(vm);
+            if (idx >= 0) _claims[idx] = vm with { Claim = claim };
+            _avslarClaimId = null;
+            _success = "Ansökan avslagen.";
         }
         catch (Exception ex) { _error = $"Fel: {ex.Message}"; }
     }

@@ -39,4 +39,23 @@ public class SafetyRound
             CreatedAt = DateTime.UtcNow
         };
     }
+
+    /// <summary>
+    /// Registrerar att ronden genomförts. Antalet upptäckta brister och
+    /// eventuella anteckningar sparas och status sätts till Genomförd.
+    /// </summary>
+    public void Genomfor(int antalBrister, string? anteckningar = null)
+    {
+        if (antalBrister < 0)
+            throw new ArgumentOutOfRangeException(nameof(antalBrister), "Antal brister kan inte vara negativt.");
+        AntalBrister = antalBrister;
+        Anteckningar = anteckningar;
+        Status = SafetyRoundStatus.Genomford;
+    }
+
+    /// <summary>Stänger ronden när alla brister åtgärdats.</summary>
+    public void Avsluta()
+    {
+        Status = SafetyRoundStatus.Avslutad;
+    }
 }

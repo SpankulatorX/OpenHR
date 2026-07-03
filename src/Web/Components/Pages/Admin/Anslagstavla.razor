@@ -100,14 +100,16 @@ else
     private async Task PubliceraAnslag(Announcement a)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { a.Publicera(); await db.SaveChangesAsync(); }
+        // a laddades i init-contexten (nu disposad). Attacha i denna context före
+        // mutation så EF upptäcker statusändringen och persisterar den.
+        try { db.Attach(a); a.Publicera(); await db.SaveChangesAsync(); }
         catch (Exception ex) { _error = $"Kunde inte publicera: {ex.Message}"; }
     }
 
     private async Task ArkiveraAnslag(Announcement a)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { a.Arkivera(); await db.SaveChangesAsync(); }
+        try { db.Attach(a); a.Arkivera(); await db.SaveChangesAsync(); }
         catch (Exception ex) { _error = $"Kunde inte arkivera: {ex.Message}"; }
     }
 

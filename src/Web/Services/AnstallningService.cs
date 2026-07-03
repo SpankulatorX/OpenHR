@@ -118,6 +118,25 @@ public class AnstallningService
         return enheter.Select(o => new EnhetVal(o.Id, o.Namn, o.Kostnadsstalle)).ToList();
     }
 
+    /// <summary>
+    /// Skapar en ny organisationsenhet. Anropar domänfabriken direkt och persisterar via DbContext.
+    /// Sätts <paramref name="overordnadEnhetId"/> blir enheten en underenhet till den valda enheten.
+    /// </summary>
+    public async Task<OrganizationId> SkapaEnhetAsync(
+        string namn, OrganizationUnitType typ, string kostnadsstalle,
+        OrganizationId? overordnadEnhetId = null, string? cfarKod = null, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var enhet = OrganizationUnit.Skapa(
+            namn.Trim(), typ, kostnadsstalle.Trim(),
+            DateOnly.FromDateTime(DateTime.Today),
+            overordnadEnhetId,
+            string.IsNullOrWhiteSpace(cfarKod) ? null : cfarKod.Trim());
+        await db.OrganizationUnits.AddAsync(enhet, ct);
+        await db.SaveChangesAsync(ct);
+        return enhet.Id;
+    }
+
     /// <summary>Kollektivavtal att koppla en anställning till (DB-backade avtal).</summary>
     public async Task<List<AvtalVal>> HamtaAvtalAsync(CancellationToken ct = default)
     {

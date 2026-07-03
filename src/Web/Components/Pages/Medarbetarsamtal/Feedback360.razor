@@ -45,6 +45,39 @@ else
 
     @if (_success != null) { <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert> }
 
+    @if (_svarRoundId != null)
+    {
+        <MudPaper Class="pa-5 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-secondary);">
+            <div class="d-flex justify-space-between align-center mb-3">
+                <MudText Typo="Typo.h6" Style="font-weight: 600;">Registrera feedbacksvar — @_svarRoundTitel</MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _svarRoundId = null)" />
+            </div>
+            @if (_svarFel != null)
+            {
+                <MudAlert Severity="Severity.Error" Class="mb-3">@_svarFel</MudAlert>
+            }
+            <MudGrid Spacing="3">
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="Guid?" @bind-Value="_svarBedomareId" Label="Bedömare" Variant="Variant.Outlined" Required="true">
+                        @foreach (var e in _employees) { <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Fornamn @e.Efternamn</MudSelectItem> }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string" @bind-Value="_svarRelation" Label="Relation" Variant="Variant.Outlined">
+                        @foreach (var rel in _relationer) { <MudSelectItem T="string" Value="@rel">@rel</MudSelectItem> }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudText Typo="Typo.body2" Class="mb-1">Betyg</MudText>
+                    <MudRating @bind-SelectedValue="_svarBetyg" MaxValue="5" />
+                </MudItem>
+                <MudItem xs="12"><MudTextField @bind-Value="_svarKommentar" Label="Kommentar (valfritt)" Lines="2" Variant="Variant.Outlined" /></MudItem>
+            </MudGrid>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" Disabled="@_saving"
+                       OnClick="SparaSvar">Spara svar</MudButton>
+        </MudPaper>
+    }
+
     @if (_rounds.Count == 0) { <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga feedbackrundor registrerade.</MudAlert> }
     else
     {
@@ -61,7 +94,11 @@ else
                         <td>@(r.AntalSvar > 0 ? $"{r.SnittBetyg:F1} / 5" : "—")</td>
                         <td>
                             @if (r.Round.Status == FeedbackRoundStatus.Utkast) { <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => OppnaRunda(r.Round))">Öppna</MudButton> }
-                            else if (r.Round.Status == FeedbackRoundStatus.Oppnad) { <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning" OnClick="@(() => StangRunda(r.Round))">Stäng</MudButton> }
+                            else if (r.Round.Status == FeedbackRoundStatus.Oppnad)
+                            {
+                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => OppnaSvar(r.Round))">Registrera svar</MudButton>
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Warning" OnClick="@(() => StangRunda(r.Round))">Stäng</MudButton>
+                            }
                         </td>
                     </tr>
                 }
@@ -78,11 +115,24 @@ else
     private string? _error, _success, _formTitel = "";
     private Guid? _formAnstallId;
 
-    protected override async Task OnInitializedAsync()
+    // Registrera svar
+    private static readonly string[] _relationer = ["Chef", "Kollega", "Underordnad", "Extern"];
+    private Guid? _svarRoundId;
+    private string _svarRoundTitel = "";
+    private Guid? _svarBedomareId;
+    private string _svarRelation = "Kollega";
+    private int _svarBetyg = 4;
+    private string _svarKommentar = "";
+    private string? _svarFel;
+
+    protected override async Task OnInitializedAsync() => await Ladda();
+
+    private async Task Ladda()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
+        _loading = true;
         try
         {
+            await using var db = await DbFactory.CreateDbContextAsync();
             var rounds = await db.FeedbackRounds.OrderByDescending(r => r.SkapadVid).ToListAsync();
             var responses = await db.FeedbackResponses.ToListAsync();
             _employees = await db.Employees.OrderBy(e => e.Efternamn).ToListAsync();
@@ -96,9 +146,46 @@ else
                     resps.Count > 0 ? resps.Average(x => x.Betyg) : 0);
             }).ToList();
             _totalResponses = responses.Count;
+            _error = null;
         }
         catch (Exception ex) { _error = $"Kunde inte hämta data: {ex.Message}"; }
         finally { _loading = false; }
+    }
+
+    private void OppnaSvar(FeedbackRound r)
+    {
+        _svarRoundId = r.Id;
+        _svarRoundTitel = r.Titel;
+        _svarBedomareId = null;
+        _svarRelation = "Kollega";
+        _svarBetyg = 4;
+        _svarKommentar = "";
+        _svarFel = null;
+    }
+
+    private async Task SparaSvar()
+    {
+        _svarFel = null;
+        if (_svarRoundId is null) return;
+        if (_svarBedomareId is null) { _svarFel = "Välj en bedömare."; return; }
+        if (_svarBetyg is < 1 or > 5) { _svarFel = "Sätt ett betyg 1–5."; return; }
+
+        _saving = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var svar = FeedbackResponse.Skapa(
+                _svarRoundId.Value, _svarBedomareId.Value, _svarRelation, _svarBetyg,
+                string.IsNullOrWhiteSpace(_svarKommentar) ? null : _svarKommentar.Trim());
+            db.FeedbackResponses.Add(svar);
+            await db.SaveChangesAsync();
+            _success = "Feedbacksvar registrerat.";
+            _svarRoundId = null;
+            await Ladda();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { _svarFel = ex.Message; }
+        catch (Exception ex) { _svarFel = $"Kunde inte spara svar: {ex.Message}"; }
+        finally { _saving = false; }
     }
 
     private async Task SkapaRunda()

@@ -161,4 +161,51 @@ public class PositionTests
         // Assert
         Assert.Equal(successorId, position.EftertradarePlanerad);
     }
+
+    [Fact]
+    public void Tillsatt_FromFrysta_SetsAktivAndRecordsHistorik()
+    {
+        // En frusen position ska kunna tillsättas (webb-UI:t erbjuder Tillsätt för Vakant/Frusen).
+        // Arrange
+        var position = Position.Skapa(Guid.NewGuid(), "IT-tekniker", 38000m, 100m);
+        position.Frys();
+        var anstallId = Guid.NewGuid();
+
+        // Act
+        position.Tillsatt(anstallId);
+
+        // Assert
+        Assert.Equal(PositionStatus.Aktiv, position.Status);
+        Assert.Equal(anstallId, position.InnehavareAnstallId);
+        Assert.Single(position.Historik);
+    }
+
+    [Fact]
+    public void UppdateraBudget_SetsNewAmount()
+    {
+        // Arrange
+        var position = Position.Skapa(Guid.NewGuid(), "Sjuksköterska", 34500m, 100m);
+
+        // Act
+        position.UppdateraBudget(36200m);
+
+        // Assert
+        Assert.Equal(36200m, position.BudgeteradManadslon);
+    }
+
+    [Fact]
+    public void Vakansatt_RecordsAnledningInHistorik()
+    {
+        // Arrange
+        var position = Position.Skapa(Guid.NewGuid(), "Läkare", 62000m, 100m);
+        position.Tillsatt(Guid.NewGuid());
+
+        // Act
+        position.Vakansatt("Pensionsavgång");
+
+        // Assert
+        var senaste = position.Historik.OrderByDescending(h => h.AndradVid).First();
+        Assert.Equal("Pensionsavgång", senaste.Anledning);
+        Assert.Null(senaste.NyInnehavare);
+    }
 }
