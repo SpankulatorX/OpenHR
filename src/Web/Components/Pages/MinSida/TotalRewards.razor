@@ -3,10 +3,10 @@
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.Compensation.Domain
 @using RegionHR.SharedKernel.Domain
+@using RegionHR.Web.Services
 @using Microsoft.EntityFrameworkCore
-@using Microsoft.AspNetCore.Components.Authorization
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
-@inject AuthenticationStateProvider AuthState
+@inject AuthService Auth
 
 <PageTitle>OpenHR - Total Rewards</PageTitle>
 <MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Din totala kompensation</MudText>
@@ -14,7 +14,13 @@
     Oversikt av din fullstandiga ersattning inklusive lon, pension, forsakringar och formaner.
 </MudText>
 
-@if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
+@if (Auth.EmployeeId == null)
+{
+    <MudAlert Severity="Severity.Warning" Class="mb-4">
+        Total Rewards visar din personliga kompensation och kraver en kopplad personalprofil — logga in med en anstalld.
+    </MudAlert>
+}
+else if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
 else if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert> }
 else if (_statement == null)
 {
@@ -110,25 +116,16 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        // Personlig sida: bind ALLTID till den inloggades egen anställning (som
+        // övriga MinSida-sidor via AuthService.EmployeeId). Ingen fallback till
+        // "första anställd" — det läckte en annan persons totala kompensation till
+        // en användare utan kopplad profil (t.ex. Admin).
+        if (Auth.EmployeeId == null) { _loading = false; return; }
+        var anstallId = Auth.EmployeeId.Value;
+
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            var auth = await AuthState.GetAuthenticationStateAsync();
-            var employeeIdClaim = auth.User.FindFirst("EmployeeId")?.Value;
-
-            // Fallback to first employee for demo
-            Guid anstallId;
-            if (employeeIdClaim != null && Guid.TryParse(employeeIdClaim, out var parsedId))
-            {
-                anstallId = parsedId;
-            }
-            else
-            {
-                var first = await db.Employees.FirstOrDefaultAsync();
-                if (first == null) { _error = "Ingen anstalld hittad"; return; }
-                anstallId = first.Id.Value;
-            }
-
             var year = DateTime.Now.Year;
             _statement = await db.TotalRewardsStatements
                 .FirstOrDefaultAsync(s => s.AnstallId == EmployeeId.From(anstallId) && s.Ar == year);

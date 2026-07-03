@@ -30,8 +30,13 @@ public static class RouteAccessPolicy
 
     /// <summary>
     /// Öppna rutter (även oinloggade). Endast dessa nås utan session.
+    /// <c>/auth</c> = federerad inloggnings-landning (OIDC-completion sker innan sessionen
+    /// finns; sidan ligger dessutom på EmptyLayout utanför behörighetsvakten).
+    /// <c>/utbildning/extern</c> = publik utbildningsportal för externa deltagare där en
+    /// personlig token är bäraren (ingen inloggning) — policyn speglar det så att den
+    /// förblir en sann single-source-of-truth.
     /// </summary>
-    private static readonly string[] OpenRoutes = { "/login", "/trust", "/error" };
+    private static readonly string[] OpenRoutes = { "/login", "/trust", "/error", "/auth", "/utbildning/extern" };
 
     /// <summary>
     /// Prefix-regler. En regel matchar en path om path == prefix eller path börjar
@@ -76,6 +81,14 @@ public static class RouteAccessPolicy
             ("/medarbetarsamtal", ChefHrAdmin),
             ("/journeys", ChefHrAdmin),
             ("/rekrytering", ChefHrAdmin),
+
+            // Rapporter: operativa team-/enhetsrapporter är chef-nåbara (och enhets-scopade
+            // i vyn). Men löne-/pekvitetsrapporter och lagstadgad SCB/SKR-statistik är
+            // HR/Admin-domän — en chef ska aldrig nå organisationens löner via rapportvägen.
+            ("/rapporter/lonetransparens", HrAdmin),
+            ("/rapporter/lonekartering", HrAdmin),
+            ("/rapporter/statistik", HrAdmin),
+            ("/rapporter/scb", HrAdmin),
             ("/rapporter", ChefHrAdmin),
             ("/vms", ChefHrAdmin),
 
@@ -88,6 +101,10 @@ public static class RouteAccessPolicy
             ("/kompetens/endorsements", AllaInloggade),
             ("/formaner", AllaInloggade),
             ("/resor", AllaInloggade),
+            // Utbildning är självservice för alla — MEN administrationen av externa
+            // deltagare (access-tokens) är en kursadministrativ HR/Admin-funktion, inte
+            // "personligt". (Den publika token-portalen /utbildning/extern är öppen ovan.)
+            ("/utbildning/externa", HrAdmin),
             ("/utbildning", AllaInloggade),
         };
         // Mest specifik (längsta) prefix först.

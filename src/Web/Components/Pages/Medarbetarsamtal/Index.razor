@@ -4,6 +4,7 @@
 @using RegionHR.Performance.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR - Medarbetarsamtal</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -78,7 +79,17 @@
         using var db = DbFactory.CreateDbContext();
         try
         {
-            _reviews = await db.PerformanceReviews
+            // Enhets-scoping: en chef ser bara sin egen enhets medarbetarsamtal; HR/Admin ser alla.
+            // Fail-closed — kan chefens enhet inte härledas (tom mängd) visas inga samtal.
+            var scope = await Scope.GetEmployeeIdsInScopeAsync();
+            IQueryable<PerformanceReview> reviewQuery = db.PerformanceReviews;
+            if (scope is not null)
+            {
+                var scopeIds = scope.ToList();
+                reviewQuery = reviewQuery.Where(r => scopeIds.Contains(r.AnstallId));
+            }
+
+            _reviews = await reviewQuery
                 .OrderByDescending(x => x.SkapadVid)
                 .Take(50)
                 .ToListAsync();

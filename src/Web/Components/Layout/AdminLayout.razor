@@ -29,10 +29,13 @@
         <MudLayout>
             <TopBar UserName="@(Auth.UserName!)" UnreadCount="5"
                     IsDarkMode="_isDarkMode"
-                    IsDarkModeChanged="OnDarkModeToggled" />
+                    IsDarkModeChanged="OnDarkModeToggled"
+                    OnHamburgerClick="ToggleDrawer" />
+            @* Responsive: temporär overlay-drawer under Md (960px), persistent på desktop.
+               Hamburger-knappen i TopBar öppnar/stänger den. *@
             <MudDrawer @bind-Open="_drawerOpen" Variant="DrawerVariant.Responsive"
                        Elevation="1" ClipMode="DrawerClipMode.Always"
-                       Breakpoint="Breakpoint.Lg">
+                       Breakpoint="Breakpoint.Md">
                 <NavMenu />
             </MudDrawer>
             <MudMainContent Class="pt-16" id="main-content" role="main">
@@ -49,6 +52,8 @@
                     }
                 </MudContainer>
             </MudMainContent>
+            @* Bottennavigering — visas endast på mobil (< 960px) via CSS. *@
+            <BottomNav UnreadCount="5" />
             <RegionHR.Web.Components.Shared.OhrAssistant />
         </MudLayout>
     }
@@ -61,6 +66,11 @@
 @code {
     private bool _drawerOpen = true;
     private bool _isDarkMode;
+
+    private void ToggleDrawer()
+    {
+        _drawerOpen = !_drawerOpen;
+    }
 
     protected override void OnInitialized()
     {

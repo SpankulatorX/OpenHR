@@ -73,13 +73,26 @@
         <MudNavLink Href="/kompetens/endorsements">@L["Endorsements"]</MudNavLink>
     </MudNavGroup>
 
+    @* Självservice: förmåner, utbildning och resor är nåbara för ALLA inloggade
+       (RouteAccessPolicy: /formaner/*, /utbildning, /resor = AllaInloggade). Låg tidigare
+       gömda i chefsblocket → en anställd saknade menyväg till sina egna förmåner. *@
+    <MudNavGroup Title="@L["Benefits"]" Icon="@Icons.Material.Filled.CardGiftcard"
+                 Expanded="@_formanerOpen" ExpandedChanged="@(v => _formanerOpen = v)">
+        <MudNavLink Href="/formaner">@L["BenefitsOverview"]</MudNavLink>
+        <MudNavLink Href="/formaner/enrollment">@L["BenefitsEnrollment"]</MudNavLink>
+        <MudNavLink Href="/formaner/val">@L["OpenEnrollment"]</MudNavLink>
+        <MudNavLink Href="/formaner/livshandelse">@L["LifeEvent"]</MudNavLink>
+        <MudNavLink Href="/formaner/sammanstallning">@L["BenefitsSummary"]</MudNavLink>
+    </MudNavGroup>
+    <MudNavLink Href="/utbildning" Icon="@Icons.Material.Filled.School">Utbildning</MudNavLink>
+    <MudNavLink Href="/resor" Icon="@Icons.Material.Filled.Flight">Resor</MudNavLink>
+
     @if (Auth.IsInitialized && Auth.IsChef)
     {
         <MudNavLink Href="/godkannanden" Icon="@Icons.Material.Filled.CheckCircle">@L["Approvals"]</MudNavLink>
         <MudNavLink Href="/journeys" Icon="@Icons.Material.Filled.Route">@L["EmployeeJourneys"]</MudNavLink>
         <MudNavLink Href="/halsosam" Icon="@Icons.Material.Filled.LocalHospital">@L["HalsoSAM"]</MudNavLink>
         <MudNavLink Href="/arbetsmiljo" Icon="@Icons.Material.Filled.Shield">@L["WorkEnvironment"]</MudNavLink>
-        <MudNavLink Href="/las" Icon="@Icons.Material.Filled.Warning">@L["LAS"]</MudNavLink>
         <MudNavLink Href="/dokument" Icon="@Icons.Material.Filled.Description">@L["Documents"]</MudNavLink>
         <MudNavLink Href="/medarbetarsamtal" Icon="@Icons.Material.Filled.RecordVoiceOver">@L["PerformanceReviews"]</MudNavLink>
         <MudNavLink Href="/chef/1-1" Icon="@Icons.Material.Filled.Forum">1:1-möten</MudNavLink>
@@ -89,14 +102,6 @@
             <MudNavLink Href="/rekrytering/vakanser">@L["Vacancies"]</MudNavLink>
             <MudNavLink Href="/rekrytering/talangpool">@L["TalentPool"]</MudNavLink>
         </MudNavGroup>
-        <MudNavGroup Title="@L["Benefits"]" Icon="@Icons.Material.Filled.CardGiftcard"
-                     Expanded="@_formanerOpen" ExpandedChanged="@(v => _formanerOpen = v)">
-            <MudNavLink Href="/formaner">@L["BenefitsOverview"]</MudNavLink>
-            <MudNavLink Href="/formaner/enrollment">@L["BenefitsEnrollment"]</MudNavLink>
-            <MudNavLink Href="/formaner/val">@L["OpenEnrollment"]</MudNavLink>
-            <MudNavLink Href="/formaner/livshandelse">@L["LifeEvent"]</MudNavLink>
-            <MudNavLink Href="/formaner/sammanstallning">@L["BenefitsSummary"]</MudNavLink>
-        </MudNavGroup>
         <MudNavGroup Title="@L["Reports"]" Icon="@Icons.Material.Filled.BarChart"
                      Expanded="@_rapporterOpen" ExpandedChanged="@(v => _rapporterOpen = v)">
             <MudNavLink Href="/rapporter">@L["ReportLibrary"]</MudNavLink>
@@ -105,7 +110,6 @@
             <MudNavLink Href="/rapporter/prediktion">@L["PredictiveAnalysis"]</MudNavLink>
             <MudNavLink Href="/rapporter/workforce-plan">@L["WorkforcePlanning"]</MudNavLink>
             <MudNavLink Href="/rapporter/flight-risk">@L["FlightRisk"]</MudNavLink>
-            <MudNavLink Href="/rapporter/lonetransparens">@L["PayTransparency"]</MudNavLink>
             <MudNavLink Href="/rapporter/scenarioplanering">@L["ScenarioPlanning"]</MudNavLink>
         </MudNavGroup>
         <MudNavGroup Title="@L["ContractStaff"]" Icon="@Icons.Material.Filled.GroupWork"
@@ -152,6 +156,10 @@
             <MudNavLink Href="/admin/formaner/perioder">@L["EnrollmentPeriods"]</MudNavLink>
         </MudNavGroup>
         <MudNavLink Href="/admin/ona" Icon="@Icons.Material.Filled.Hub">Nätverksanalys (ONA)</MudNavLink>
+        @* HR/Admin-only: LAS-hantering och lönetransparens (flyttade hit ur chefsblocket —
+           chef nekas dessa i RouteAccessPolicy och ska därför inte se dem i menyn). *@
+        <MudNavLink Href="/las" Icon="@Icons.Material.Filled.Warning">@L["LAS"]</MudNavLink>
+        <MudNavLink Href="/rapporter/lonetransparens" Icon="@Icons.Material.Filled.Insights">@L["PayTransparency"]</MudNavLink>
         <MudNavLink Href="/gdpr" Icon="@Icons.Material.Filled.Security">@L["GDPR"]</MudNavLink>
         <MudNavLink Href="/audit" Icon="@Icons.Material.Filled.History">@L["AuditLog"]</MudNavLink>
     }

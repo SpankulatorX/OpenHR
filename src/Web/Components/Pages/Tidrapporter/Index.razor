@@ -4,6 +4,7 @@
 @using RegionHR.Scheduling.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR - Tidrapporter</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -77,7 +78,17 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            var timesheets = await db.Timesheets
+            // Enhets-scoping: en chef ser bara sin egen enhets tidrapporter; HR/Admin ser alla.
+            // Fail-closed — kan chefens enhet inte härledas (tom mängd) visas inga tidrapporter.
+            var scope = await Scope.GetEmployeeIdsInScopeAsync();
+            IQueryable<Timesheet> tsQuery = db.Timesheets;
+            if (scope is not null)
+            {
+                var scopeIds = scope.ToList();
+                tsQuery = tsQuery.Where(t => scopeIds.Contains(t.AnstallId));
+            }
+
+            var timesheets = await tsQuery
                 .OrderByDescending(t => t.Ar).ThenByDescending(t => t.Manad)
                 .Take(50).ToListAsync();
 

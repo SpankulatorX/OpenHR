@@ -200,4 +200,56 @@ public class RouteAccessPolicyTests
         Assert.False(RouteAccessPolicy.IsAllowed("/nagon/helt/okand/rutt", Admin));
         Assert.Empty(RouteAccessPolicy.AllowedRolesFor("/nagon/helt/okand/rutt"));
     }
+
+    // ── Federerad inloggnings-landning (OIDC) + publik utbildningsportal: öppna (pre-login) ──
+    [Theory]
+    [InlineData("/auth/oidc/complete")]
+    [InlineData("/utbildning/extern/abc123-token")]
+    public void LoginLandingAndPublicPortal_AreOpen(string path)
+    {
+        Assert.True(RouteAccessPolicy.IsOpen(path));
+        Assert.True(RouteAccessPolicy.IsAllowed(path, null));
+        Assert.True(RouteAccessPolicy.IsAllowed(path, Anstalld));
+    }
+
+    // ── Löne-/pekvitetsrapporter + lagstadgad SCB/SKR-statistik: HR/Admin, ALDRIG chef ──
+    [Theory]
+    [InlineData("/rapporter/lonetransparens")]
+    [InlineData("/rapporter/lonetransparens/00000000-0000-0000-0000-000000000001")]
+    [InlineData("/rapporter/lonekartering")]
+    [InlineData("/rapporter/statistik")]
+    [InlineData("/rapporter/scb")]
+    public void SalaryAndStatutoryReports_AreHrAdminOnly(string path)
+    {
+        Assert.False(RouteAccessPolicy.IsAllowed(path, Anstalld));
+        Assert.False(RouteAccessPolicy.IsAllowed(path, Chef));
+        Assert.True(RouteAccessPolicy.IsAllowed(path, Hr));
+        Assert.True(RouteAccessPolicy.IsAllowed(path, Admin));
+    }
+
+    // ── Operativa enhetsrapporter förblir chef-nåbara (scopas till enheten i vyn) ──
+    [Theory]
+    [InlineData("/rapporter")]
+    [InlineData("/rapporter/analytics")]
+    [InlineData("/rapporter/flight-risk")]
+    [InlineData("/rapporter/kpi")]
+    public void OperationalReports_RemainChefAccessible(string path)
+    {
+        Assert.True(RouteAccessPolicy.IsAllowed(path, Chef));
+        Assert.False(RouteAccessPolicy.IsAllowed(path, Anstalld));
+    }
+
+    // ── Administration av externa utbildningsdeltagare: HR/Admin (ej självservice) ──
+    // Självservice-utbildningen (/utbildning, /utbildning/elearning) är fortsatt öppen för alla.
+    [Fact]
+    public void ExternalParticipantAdmin_IsHrAdminOnly_ButSelfServiceTrainingStaysOpen()
+    {
+        Assert.False(RouteAccessPolicy.IsAllowed("/utbildning/externa", Anstalld));
+        Assert.False(RouteAccessPolicy.IsAllowed("/utbildning/externa", Chef));
+        Assert.True(RouteAccessPolicy.IsAllowed("/utbildning/externa", Hr));
+        Assert.True(RouteAccessPolicy.IsAllowed("/utbildning/externa", Admin));
+
+        Assert.True(RouteAccessPolicy.IsAllowed("/utbildning", Anstalld));
+        Assert.True(RouteAccessPolicy.IsAllowed("/utbildning/elearning", Anstalld));
+    }
 }

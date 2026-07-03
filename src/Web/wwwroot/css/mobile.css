@@ -11,8 +11,10 @@
     /* Forms full width */
     .mud-input, .mud-select { width: 100% !important; }
 
-    /* AppBar: hide search on mobile */
-    .mud-appbar > div:nth-child(2) { display: none; }
+    /* AppBar: hide the omnisearch on mobile (hamburger + icons stannar).
+       Klass-baserad selector (ohr-appbar-search i TopBar) — robust mot att
+       hamburger-knappen läggs till som första barn i appbaren. */
+    .ohr-appbar-search { display: none !important; }
 
     /* Reduce padding */
     .mud-container { padding-left: 8px !important; padding-right: 8px !important; }
@@ -33,7 +35,31 @@
 @media (max-width: 960px) {
     /* Medium: 2 KPI cards per row */
     .mud-grid > .mud-item-xs-3 { flex-basis: 50% !important; max-width: 50% !important; }
+}
 
-    /* Hide less important table columns */
-    .hide-mobile { display: none; }
+/* ── Responsiva tabeller (MudTable / MudDataGrid) ──
+   MudTable stackar redan till kort under Xs (via DataLabel), men för
+   tabeller utan DataLabel och för medelstora skärmar säkrar vi horisontell
+   scroll så inga kolumner klipps bort. Ligger utanför media query så att
+   scroll-behållaren alltid finns; min-width tvingar scroll bara på små skärmar. */
+.mud-table-container,
+.mud-datagrid .mud-table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 600px) {
+    /* Data-täta tabeller (icke-stackade) blir scrollbara i stället för hopträngda. */
+    .ohr-scroll-table .mud-table-container table { min-width: 640px; }
+}
+
+/* ── Kolumn-döljande hjälpklasser (opt-in i sidmarkup på <MudTh>/<MudTd>) ── */
+@media (max-width: 600px) {
+    .hide-sm-down { display: none !important; }
+}
+
+@media (max-width: 960px) {
+    /* Dölj mindre viktiga kolumner/element på liten skärm. */
+    .hide-mobile,
+    .hide-md-down { display: none !important; }
 }
