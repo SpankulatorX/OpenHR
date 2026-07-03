@@ -158,6 +158,7 @@
     }
 
     .ohr-bottom-nav-item {
+        position: relative;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -227,6 +228,13 @@
     .ohr-main-content,
     .mud-main-content {
         padding-bottom: 80px !important;
+    }
+
+    /* Lyft OpenHR-assistentens FAB ovanför bottennavigeringen på mobil så de
+       inte överlappar. Kräver att OhrAssistant-wrappern får klassen
+       .ohr-assistant-fab (se wiring_behov) — regeln ligger redo. */
+    .ohr-assistant-fab {
+        bottom: calc(72px + env(safe-area-inset-bottom, 0)) !important;
     }
 }
 

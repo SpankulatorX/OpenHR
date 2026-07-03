@@ -7,6 +7,7 @@
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject ExportService Export
 @inject IJSRuntime JS
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR - @Namn</PageTitle>
 <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary" Href="/rapporter" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
@@ -87,6 +88,13 @@ else if (_result != null)
         await using var db = await DbFactory.CreateDbContextAsync();
         await Task.Delay(500); // Simulate generation time
 
+        // Enhets-scoping: en chef får bara sin egen enhets rader (annars läcker t.ex.
+        // "Löneregister" och "Personalförteckning" hela organisationens löne-/persondata
+        // via rapportvägen). scope == null ⇒ HR/Admin utan scoping. Fail-closed: en tom
+        // scope (chef utan härledbar enhet) filtrerar bort alla rader.
+        var scope = await Scope.GetEmployeeIdsInScopeAsync();
+        var scopedUnit = Scope.IsUnitScoped ? await Scope.GetCurrentUnitIdAsync() : (Guid?)null;
+
         switch (Namn)
         {
             case "Personalförteckning":
@@ -94,6 +102,7 @@ else if (_result != null)
                 try
                 {
                     var emps = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
+                    if (scope is not null) emps = emps.Where(e => scope.Contains(e.Id.Value)).ToList();
                     _result = emps.Select(e => new List<string>
                     {
                         $"{e.Fornamn} {e.Efternamn}",
@@ -114,6 +123,7 @@ else if (_result != null)
                     var payroll = await db.PayrollResults
                         .OrderByDescending(r => r.Year).ThenByDescending(r => r.Month)
                         .ToListAsync();
+                    if (scope is not null) payroll = payroll.Where(r => scope.Contains(r.AnstallId.Value)).ToList();
                     var loneEmpIds = payroll.Select(r => r.AnstallId).Distinct().ToList();
                     var loneEmps = await db.Employees.Include(e => e.Anstallningar)
                         .Where(e => loneEmpIds.Contains(e.Id)).ToListAsync();
@@ -144,6 +154,7 @@ else if (_result != null)
                 try
                 {
                     var leaves = await db.LeaveRequests.ToListAsync();
+                    if (scope is not null) leaves = leaves.Where(l => scope.Contains(l.AnstallId)).ToList();
                     _result = leaves.GroupBy(l => l.Typ).Select(g => new List<string>
                         { g.Key.ToString(), g.Count().ToString(), g.Sum(l => l.AntalDagar).ToString() }).ToList();
                 }
@@ -155,6 +166,7 @@ else if (_result != null)
                 try
                 {
                     var accs = await db.LASAccumulations.ToListAsync();
+                    if (scope is not null) accs = accs.Where(a => scope.Contains(a.AnstallId.Value)).ToList();
                     var lasEmpIds = accs.Select(a => a.AnstallId).Distinct().ToList();
                     var lasEmps = await db.Employees.Where(e => lasEmpIds.Contains(e.Id)).ToListAsync();
                     var lasNames = lasEmps.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
@@ -174,6 +186,9 @@ else if (_result != null)
                     var empEnhBem = new Dictionary<Guid, Guid>();
                     foreach (var be in bemEmps) { var ba = be.AktivAnstallning(idagBem); if (ba != null) empEnhBem[be.Id.Value] = ba.EnhetId.Value; }
                     var enhBem = await db.OrganizationUnits.ToListAsync();
+                    // En chef ser bara sin egen enhets bemanning (fail-closed: okänd enhet → inga rader).
+                    if (Scope.IsUnitScoped)
+                        enhBem = scopedUnit is Guid su ? enhBem.Where(u => u.Id.Value == su).ToList() : enhBem.Where(_ => false).ToList();
                     _result = enhBem.Select(enhet => {
                         var es = todayShifts.Where(s => empEnhBem.GetValueOrDefault(s.AnstallId.Value) == enhet.Id.Value).ToList();
                         return new List<string> { enhet.Namn, es.Count(s => s.PassTyp == RegionHR.Scheduling.Domain.ShiftType.Dag).ToString(), es.Count(s => s.PassTyp == RegionHR.Scheduling.Domain.ShiftType.Kvall).ToString(), es.Count(s => s.PassTyp == RegionHR.Scheduling.Domain.ShiftType.Natt).ToString(), es.Count.ToString() };

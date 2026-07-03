@@ -2,8 +2,12 @@
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.Performance.Domain
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Web.Services
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject AuthService Auth
+@inject UnitScopeService Scope
 @inject ISnackbar Snackbar
 
 <PageTitle>OpenHR - 1:1-möten</PageTitle>
@@ -37,8 +41,12 @@
             <MudTextField Label="Agenda (valfri)" @bind-Value="_nyAgenda" Variant="Variant.Outlined" />
         </MudItem>
     </MudGrid>
+    @if (Auth.EmployeeId == null)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">Bokning kräver en kopplad chefsprofil — logga in med en chef.</MudAlert>
+    }
     <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" Style="min-height: 44px;"
-               OnClick="SkapaMote" Disabled="@(_nyAnstallId == Guid.Empty)">Boka möte</MudButton>
+               OnClick="SkapaMote" Disabled="@(_nyAnstallId == Guid.Empty || Auth.EmployeeId == null)">Boka möte</MudButton>
 </MudPaper>
 
 @* === UPCOMING MEETINGS === *@
@@ -148,7 +156,17 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            var emps = await db.Employees.OrderBy(e => e.Efternamn).Take(200).ToListAsync();
+            // Medarbetar-listan scopas till chefens EGET team (UnitScopeService).
+            // En chef ska bara kunna boka 1:1 med sina egna medarbetare — inte hela
+            // organisationen. HR/Admin (null scope) ser alla, som tidigare.
+            var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
+            IQueryable<RegionHR.Core.Domain.Employee> empQuery = db.Employees;
+            if (scopeIds is not null)
+            {
+                var scopeEmpIds = scopeIds.Select(g => EmployeeId.From(g)).ToList();
+                empQuery = empQuery.Where(e => scopeEmpIds.Contains(e.Id));
+            }
+            var emps = await empQuery.OrderBy(e => e.Efternamn).Take(500).ToListAsync();
             _employees = emps.Select(e => (e.Id.Value, $"{e.Fornamn} {e.Efternamn}")).ToList();
             _employeeNames = emps.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
 
@@ -160,29 +178,56 @@ else
     private async Task LaddaData()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        var now = DateTime.UtcNow;
-        _upcoming = await db.OneOnOneMeetings
+
+        // Möten scopas till den inloggade chefens egna (OneOnOneMeeting.ChefId).
+        // Tidigare visades ALLA chefers 1:1-möten och deras privata anteckningar.
+        // Admin utan kopplad profil (ChefId saknas) faller tillbaka på att visa alla.
+        IQueryable<OneOnOneMeeting> baseQ = db.OneOnOneMeetings;
+        if (Auth.EmployeeId is Guid chefId)
+            baseQ = baseQ.Where(m => m.ChefId == chefId);
+
+        _upcoming = await baseQ
             .Where(m => m.Status == MeetingStatus.Scheduled)
             .OrderBy(m => m.Datum).Take(50).ToListAsync();
 
-        _past = await db.OneOnOneMeetings
+        _past = await baseQ
             .Where(m => m.Status != MeetingStatus.Scheduled)
             .OrderByDescending(m => m.Datum).Take(50).ToListAsync();
 
-        _actionItems = await db.MeetingActionItems
-            .Where(a => a.Status != ActionItemStatus.Done)
-            .OrderBy(a => a.Deadline).Take(50).ToListAsync();
+        // Åtgärdspunkter begränsas till chefens egna möten.
+        if (Auth.EmployeeId is Guid cid)
+        {
+            var myMeetingIds = await db.OneOnOneMeetings
+                .Where(m => m.ChefId == cid).Select(m => m.Id).ToListAsync();
+            _actionItems = await db.MeetingActionItems
+                .Where(a => a.Status != ActionItemStatus.Done && myMeetingIds.Contains(a.MeetingId))
+                .OrderBy(a => a.Deadline).Take(50).ToListAsync();
+        }
+        else
+        {
+            _actionItems = await db.MeetingActionItems
+                .Where(a => a.Status != ActionItemStatus.Done)
+                .OrderBy(a => a.Deadline).Take(50).ToListAsync();
+        }
     }
 
     private string GetNamn(Guid id) => _employeeNames.GetValueOrDefault(id, "Okänd");
 
     private async Task SkapaMote()
     {
+        // Mötet måste ägas av den inloggade chefen (ChefId) — annars går det inte
+        // att scopa listan till "mina möten". Tidigare sattes ett slumpmässigt
+        // Guid.NewGuid() som chef, vilket frikopplade varje möte från sin chef.
+        if (Auth.EmployeeId is not Guid chefId)
+        {
+            _error = "Bokning kräver en kopplad chefsprofil — logga in med en chef.";
+            return;
+        }
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
             var datum = _nyDatum ?? DateTime.Today.AddDays(7);
-            var meeting = OneOnOneMeeting.Skapa(Guid.NewGuid(), _nyAnstallId, datum, _nyAgenda);
+            var meeting = OneOnOneMeeting.Skapa(chefId, _nyAnstallId, datum, _nyAgenda);
             await db.OneOnOneMeetings.AddAsync(meeting);
             await db.SaveChangesAsync();
             Snackbar.Add("Möte bokat!", Severity.Success);

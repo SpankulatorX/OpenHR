@@ -2,8 +2,10 @@
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.Performance.Domain
+@using RegionHR.Web.Services
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject AuthService Auth
 
 <PageTitle>OpenHR - Chefsstyrkort</PageTitle>
 
@@ -116,16 +118,23 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            // Get latest scorecard (in real app, filter by logged-in chef)
-            _scorecard = await db.ManagerScorecards
-                .OrderByDescending(s => s.GenereradVid)
-                .FirstOrDefaultAsync();
+            // Styrkortet är chefs-specifikt (ManagerScorecard.ChefId). Visa ENDAST
+            // den inloggade chefens eget styrkort och egna coaching-insikter — aldrig
+            // en annan chefs (tidigare togs "senast genererade" oavsett chef).
+            // HR/Admin utan egen chefskoppling ser inget styrkort (de leder inget team här).
+            if (Auth.EmployeeId is Guid chefId)
+            {
+                _scorecard = await db.ManagerScorecards
+                    .Where(s => s.ChefId == chefId)
+                    .OrderByDescending(s => s.GenereradVid)
+                    .FirstOrDefaultAsync();
 
-            _nudges = await db.CoachingNudges
-                .Where(n => !n.ArLast)
-                .OrderByDescending(n => n.SkapadVid)
-                .Take(20)
-                .ToListAsync();
+                _nudges = await db.CoachingNudges
+                    .Where(n => !n.ArLast && n.ChefId == chefId)
+                    .OrderByDescending(n => n.SkapadVid)
+                    .Take(20)
+                    .ToListAsync();
+            }
         }
         catch (Exception ex) { _error = $"Kunde inte hämta data: {ex.Message}"; }
         finally { _loading = false; }

@@ -1,0 +1,39 @@
+@namespace RegionHR.Web.Components.Layout
+@using Microsoft.AspNetCore.Components.Routing
+
+@* ────────────────────────────────────────────────────────────
+   Bottennavigering för mobil. Döljs på desktop via CSS
+   (.ohr-bottom-nav i pwa-enhancements.css, display:none som default,
+   display:flex under 960px). Ger snabb åtkomst till de vanligaste
+   anställd-flödena. NavLink lägger på klassen "active" automatiskt.
+   ──────────────────────────────────────────────────────────── *@
+<nav class="ohr-bottom-nav" aria-label="Snabbnavigering">
+    <NavLink class="ohr-bottom-nav-item" href="/" Match="NavLinkMatch.All">
+        <MudIcon Icon="@Icons.Material.Filled.Home" Class="ohr-bottom-nav-icon" Size="Size.Medium" />
+        <span class="ohr-bottom-nav-label">Start</span>
+    </NavLink>
+    <NavLink class="ohr-bottom-nav-item" href="/minsida" Match="NavLinkMatch.Prefix">
+        <MudIcon Icon="@Icons.Material.Filled.AccountCircle" Class="ohr-bottom-nav-icon" Size="Size.Medium" />
+        <span class="ohr-bottom-nav-label">Min sida</span>
+    </NavLink>
+    <NavLink class="ohr-bottom-nav-item" href="/minsida/schema" Match="NavLinkMatch.All">
+        <MudIcon Icon="@Icons.Material.Filled.CalendarMonth" Class="ohr-bottom-nav-icon" Size="Size.Medium" />
+        <span class="ohr-bottom-nav-label">Schema</span>
+    </NavLink>
+    <NavLink class="ohr-bottom-nav-item" href="/ledighet" Match="NavLinkMatch.All">
+        <MudIcon Icon="@Icons.Material.Filled.BeachAccess" Class="ohr-bottom-nav-icon" Size="Size.Medium" />
+        <span class="ohr-bottom-nav-label">Ledighet</span>
+    </NavLink>
+    <NavLink class="ohr-bottom-nav-item" href="/notiser" Match="NavLinkMatch.Prefix">
+        <MudIcon Icon="@Icons.Material.Filled.Notifications" Class="ohr-bottom-nav-icon" Size="Size.Medium" />
+        @if (UnreadCount > 0)
+        {
+            <span class="ohr-badge">@(UnreadCount > 99 ? "99+" : UnreadCount.ToString())</span>
+        }
+        <span class="ohr-bottom-nav-label">Notiser</span>
+    </NavLink>
+</nav>
+
+@code {
+    [Parameter] public int UnreadCount { get; set; }
+}

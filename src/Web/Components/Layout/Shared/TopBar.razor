@@ -5,9 +5,14 @@
 @using RegionHR.Web
 
 <MudAppBar Fixed="true" Color="Color.Primary" Elevation="1">
+    @if (OnHamburgerClick.HasDelegate)
+    {
+        <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start"
+                       OnClick="OnHamburgerClick" aria-label="Växla sidomeny" />
+    }
     <MudText Typo="Typo.h6" Class="ml-3" Style="font-weight: 700; cursor: pointer;" @onclick="@(() => Nav?.NavigateTo("/"))">OpenHR</MudText>
 
-    <div style="margin-left: 1rem; max-width: 320px; flex: 1;">
+    <div class="ohr-appbar-search" style="margin-left: 1rem; max-width: 320px; flex: 1;">
         <MudAutocomplete T="string" Placeholder="@L["Search"]"
                          SearchFunc="Search" Variant="Variant.Filled" Dense="true"
                          Style="background: rgba(255,255,255,0.15); border-radius: 8px;"
@@ -74,6 +79,7 @@
     [Parameter] public int UnreadCount { get; set; }
     [Parameter] public bool IsDarkMode { get; set; }
     [Parameter] public EventCallback<bool> IsDarkModeChanged { get; set; }
+    [Parameter] public EventCallback OnHamburgerClick { get; set; }
 
     private string _currentLang = "sv";
     private List<string> _recentSearches = new();

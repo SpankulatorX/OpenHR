@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RegionHR.Infrastructure.Persistence;
+using RegionHR.SharedKernel.Domain;
 
 namespace RegionHR.Web.Services;
 
@@ -49,27 +50,41 @@ public sealed class UnitScopeService
 
     /// <summary>
     /// Mängden anställd-id (Guid) som den inloggade får se.
-    /// Returnerar <c>null</c> när ingen scoping ska ske (Admin/HR, eller en chef
-    /// utan enhetskoppling) — anropande vy visar då alla. För en chef med känd
-    /// enhet returneras de anställda vars aktiva anställning ligger på den enheten.
+    /// Semantik (entydig och fail-closed):
+    /// <list type="bullet">
+    ///   <item><c>null</c> = ingen scoping ska ske (Admin/HR) → anropande vy visar alla.</item>
+    ///   <item>en icke-null mängd = exakt de anställda den inloggade får se. Mängden kan
+    ///   vara <b>tom</b> — då ska vyn visa INGET (aldrig "alla").</item>
+    /// </list>
+    /// En chef vars enhet inte kan härledas får en TOM mängd (fail-closed): hellre
+    /// visa inget än att läcka hela organisationen (kritiskt vid ~11 000 anställda).
+    /// Frågan körs på SQL-sidan och laddar aldrig hela Employee-tabellen i minnet.
     /// </summary>
     public async Task<HashSet<Guid>?> GetEmployeeIdsInScopeAsync()
     {
         if (!IsUnitScoped)
-            return null;
+            return null; // Admin/HR: ingen scoping.
 
         var unitId = await GetCurrentUnitIdAsync();
         if (unitId is null)
-            return null; // Chef utan enhetskoppling → behåll nuvarande beteende (visa alla).
+            return new HashSet<Guid>(); // Fail-closed: chef utan härledbar enhet ser inget.
 
         await using var db = await _dbFactory.CreateDbContextAsync();
         var idag = DateOnly.FromDateTime(DateTime.Today);
-        var employees = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
+        var oid = OrganizationId.From(unitId.Value);
 
-        return employees
-            .Where(e => e.AktivAnstallning(idag)?.EnhetId.Value == unitId.Value)
-            .Select(e => e.Id.Value)
-            .ToHashSet();
+        // Hämta bara id för anställda med en aktiv anställning på chefens enhet.
+        // Where-villkoret översätts till SQL (samma mönster som AnstallningService),
+        // så vi materialiserar aldrig hela personaltabellen.
+        var ids = await db.Employees
+            .Where(e => e.Anstallningar.Any(a =>
+                a.EnhetId == oid &&
+                a.Giltighetsperiod.Start <= idag &&
+                (a.Giltighetsperiod.End == null || a.Giltighetsperiod.End >= idag)))
+            .Select(e => e.Id)
+            .ToListAsync();
+
+        return ids.Select(id => id.Value).ToHashSet();
     }
 
     /// <summary>

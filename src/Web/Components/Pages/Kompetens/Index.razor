@@ -7,6 +7,7 @@
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject NavigationManager Nav
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR - Kompetensregister</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -231,7 +232,18 @@ else
         using var db = DbFactory.CreateDbContext();
         try
         {
-            _certs = await db.Certifications
+            // Enhets-scoping: en chef ser bara sin egen enhets certifieringar; HR/Admin ser alla.
+            // Fail-closed — kan chefens enhet inte härledas (tom mängd) visas inga certifieringar
+            // i stället för hela organisationens (certifieringar är känslig persondata).
+            var scope = await Scope.GetEmployeeIdsInScopeAsync();
+            IQueryable<Certification> certQuery = db.Certifications;
+            if (scope is not null)
+            {
+                var scopeIds = scope.ToList();
+                certQuery = certQuery.Where(c => scopeIds.Contains(c.AnstallId));
+            }
+
+            _certs = await certQuery
                 .OrderByDescending(x => x.GiltigTill)
                 .Take(50)
                 .ToListAsync();

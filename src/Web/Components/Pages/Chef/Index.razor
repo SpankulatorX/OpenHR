@@ -162,12 +162,16 @@ else if (!_loading)
                 ? franvaroAll.Count
                 : franvaroAll.Count(r => scopeIds.Contains(r.AnstallId));
 
-            // Coaching nudges
-            _nudges = await db.CoachingNudges
-                .Where(n => !n.ArLast)
-                .OrderByDescending(n => n.SkapadVid)
-                .Take(5)
-                .ToListAsync();
+            // Coaching nudges — bara den inloggade chefens egna (CoachingNudge.ChefId),
+            // aldrig en annan chefs insikter. Admin/HR utan chefskoppling får inga.
+            if (Auth.EmployeeId is Guid chefId)
+            {
+                _nudges = await db.CoachingNudges
+                    .Where(n => !n.ArLast && n.ChefId == chefId)
+                    .OrderByDescending(n => n.SkapadVid)
+                    .Take(5)
+                    .ToListAsync();
+            }
         }
         catch (Exception ex) { _error = $"Kunde inte hämta data: {ex.Message}"; }
         finally { _loading = false; }
