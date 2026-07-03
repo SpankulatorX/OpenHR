@@ -12,38 +12,133 @@ public class AnstallningService
 
     public AnstallningService(IDbContextFactory<RegionHRDbContext> dbFactory) => _dbFactory = dbFactory;
 
+    /// <summary>
+    /// Bakåtkompatibel "hämta upp till 100"-lista (används av bl.a. mallgeneratorns
+    /// medarbetarväljare). För den paginerade listvyn: använd <see cref="HamtaSidaAsync"/>.
+    /// </summary>
     public async Task<List<EmployeeListItem>> HamtaAllaAsync(string? sokterm = null, CancellationToken ct = default)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
-        var query = db.Employees
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+
+        var employees = await ByggFiltreradFraga(db, idag, sokterm, null)
+            .OrderBy(e => e.Efternamn).ThenBy(e => e.Fornamn)
+            .Take(100)
             .Include(e => e.Anstallningar)
-            .AsQueryable();
+            .ToListAsync(ct);
+
+        var enhetNamn = await HamtaEnhetNamnAsync(db, ct);
+        return employees.Select(e => MapItem(e, idag, enhetNamn)).ToList();
+    }
+
+    /// <summary>
+    /// Serversidig paginering för anställd-listan. Laddar BARA en sida (typiskt 25–50)
+    /// ur databasen plus totalantal — skalar till tiotusentals anställda utan att frysa
+    /// Blazor-circuiten. Filtrerar valfritt på fritext (namn, befattning, e-post) och/eller
+    /// en exakt enhet (<paramref name="enhetId"/>, används både för enhetsfilter i UI och
+    /// för chefs-scoping). Aktiv anställning bestäms i SQL via giltighetsperioden.
+    /// </summary>
+    /// <param name="hoppaOver">Antal rader att hoppa över (sida × sidstorlek).</param>
+    /// <param name="taAntal">Sidstorlek (klampas till 1–200).</param>
+    public async Task<PagedResult<EmployeeListItem>> HamtaSidaAsync(
+        int hoppaOver, int taAntal, string? sokterm = null, Guid? enhetId = null, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+        var query = ByggFiltreradFraga(db, idag, sokterm, enhetId);
+
+        var total = await query.CountAsync(ct);
+
+        var employees = await query
+            .OrderBy(e => e.Efternamn).ThenBy(e => e.Fornamn)
+            .Skip(Math.Max(0, hoppaOver))
+            .Take(Math.Clamp(taAntal, 1, 200))
+            .Include(e => e.Anstallningar)
+            .ToListAsync(ct);
+
+        var enhetNamn = await HamtaEnhetNamnAsync(db, ct);
+        var items = employees.Select(e => MapItem(e, idag, enhetNamn)).ToList();
+        return new PagedResult<EmployeeListItem>(items, total);
+    }
+
+    /// <summary>
+    /// Hämtar hela det filtrerade urvalet (utan paginering) för CSV/Excel-export.
+    /// Har ett tak (<paramref name="max"/>) som skyddsnät mot en oavsiktlig helexport
+    /// av hela registret; höj vid behov.
+    /// </summary>
+    public async Task<List<EmployeeListItem>> HamtaForExportAsync(
+        string? sokterm = null, Guid? enhetId = null, int max = 20000, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+
+        var employees = await ByggFiltreradFraga(db, idag, sokterm, enhetId)
+            .OrderBy(e => e.Efternamn).ThenBy(e => e.Fornamn)
+            .Take(Math.Clamp(max, 1, 100000))
+            .Include(e => e.Anstallningar)
+            .ToListAsync(ct);
+
+        var enhetNamn = await HamtaEnhetNamnAsync(db, ct);
+        return employees.Select(e => MapItem(e, idag, enhetNamn)).ToList();
+    }
+
+    /// <summary>
+    /// Bygger den filtrerade grundfrågan (utan paginering/materialisering). All filtrering
+    /// sker i SQL: aktiv-anställnings-scoping via giltighetsperioden och fritext via LIKE.
+    /// </summary>
+    private static IQueryable<Employee> ByggFiltreradFraga(
+        RegionHRDbContext db, DateOnly idag, string? sokterm, Guid? enhetId)
+    {
+        var query = db.Employees.AsQueryable();
+
+        if (enhetId is Guid eid)
+        {
+            var oid = OrganizationId.From(eid);
+            query = query.Where(e => e.Anstallningar.Any(a =>
+                a.EnhetId == oid &&
+                a.Giltighetsperiod.Start <= idag &&
+                (a.Giltighetsperiod.End == null || a.Giltighetsperiod.End >= idag)));
+        }
 
         if (!string.IsNullOrWhiteSpace(sokterm))
         {
-            var term = sokterm.ToLower();
+            var t = sokterm.Trim().ToLower();
             query = query.Where(e =>
-                e.Fornamn.ToLower().Contains(term) ||
-                e.Efternamn.ToLower().Contains(term));
+                e.Fornamn.ToLower().Contains(t) ||
+                e.Efternamn.ToLower().Contains(t) ||
+                (e.Fornamn + " " + e.Efternamn).ToLower().Contains(t) ||
+                (e.Epost != null && e.Epost.ToLower().Contains(t)) ||
+                e.Anstallningar.Any(a =>
+                    a.Befattningstitel != null && a.Befattningstitel.ToLower().Contains(t)));
         }
 
-        var employees = await query.OrderBy(e => e.Efternamn).Take(100).ToListAsync(ct);
+        return query;
+    }
 
-        return employees.Select(e =>
-        {
-            var aktiv = e.Anstallningar.FirstOrDefault(a =>
-                a.Giltighetsperiod.Start <= DateOnly.FromDateTime(DateTime.Today) &&
-                (a.Giltighetsperiod.End == null || a.Giltighetsperiod.End >= DateOnly.FromDateTime(DateTime.Today)));
-            return new EmployeeListItem(
-                e.Id,
-                e.Fornamn,
-                e.Efternamn,
-                e.Personnummer.ToMaskedString(),
-                e.Epost,
-                aktiv?.Befattningstitel ?? "-",
-                aktiv?.Anstallningsform.ToString() ?? "-",
-                aktiv?.Sysselsattningsgrad.Value ?? 0);
-        }).ToList();
+    /// <summary>Uppslag enhets-id → namn. Organisationsenheter är en liten tabell (≪ anställda).</summary>
+    private static async Task<Dictionary<Guid, string>> HamtaEnhetNamnAsync(
+        RegionHRDbContext db, CancellationToken ct)
+    {
+        var enheter = await db.OrganizationUnits
+            .Select(o => new { o.Id, o.Namn })
+            .ToListAsync(ct);
+        return enheter.ToDictionary(x => x.Id.Value, x => x.Namn);
+    }
+
+    private static EmployeeListItem MapItem(Employee e, DateOnly idag, IReadOnlyDictionary<Guid, string> enhetNamn)
+    {
+        var aktiv = e.AktivAnstallning(idag);
+        var enhet = aktiv != null && enhetNamn.TryGetValue(aktiv.EnhetId.Value, out var namn) ? namn : "-";
+        return new EmployeeListItem(
+            e.Id,
+            e.Fornamn,
+            e.Efternamn,
+            e.Personnummer.ToMaskedString(),
+            e.Epost,
+            aktiv?.Befattningstitel ?? "-",
+            aktiv?.Anstallningsform.ToString() ?? "-",
+            aktiv?.Sysselsattningsgrad.Value ?? 0,
+            enhet);
     }
 
     public async Task<Employee?> HamtaAsync(EmployeeId id, CancellationToken ct = default)
@@ -245,7 +340,11 @@ public record EmployeeListItem(
     string? Epost,
     string Befattning,
     string Anstallningsform,
-    decimal Sysselsattningsgrad);
+    decimal Sysselsattningsgrad,
+    string Enhet);
+
+/// <summary>En sida ur ett större resultat: raderna + totalantalet matchande poster.</summary>
+public record PagedResult<T>(IReadOnlyList<T> Items, int TotalAntal);
 
 public record EnhetVal(OrganizationId Id, string Namn, string Kostnadsstalle);
 public record AvtalVal(CollectiveAgreementId Id, string Namn);

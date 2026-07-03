@@ -1,7 +1,9 @@
 @page "/chef/team"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
+@using RegionHR.Core.Domain
 @using RegionHR.Leave.Domain
+@using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject RegionHR.Web.Services.AuthService Auth
@@ -91,46 +93,61 @@ else
     private bool _loading = true;
     private string? _error, _enhetNamn;
 
+    // Skyddstak: en enhets team laddas i sin helhet (ingen paginering här ännu). Taket
+    // hindrar att en oväntat stor enhet — eller en chef utan härledbar enhet — fryser vyn.
+    private const int TeamTak = 1000;
+
     protected override async Task OnInitializedAsync()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
             var idag = DateOnly.FromDateTime(DateTime.Today);
-            var allEmployees = await db.Employees.Include(e => e.Anstallningar).OrderBy(e => e.Efternamn).ToListAsync();
 
-            // Filter on chef's unit if auth provides EmployeeId
-            Guid? chefEnhetId = null;
-            if (Auth.EmployeeId.HasValue)
+            // Chefens enhet: använd i första hand det cachade unit-id:t, annars EN uppslagsfråga.
+            Guid? chefEnhetId = Auth.UnitId;
+            if (chefEnhetId is null && Auth.EmployeeId is Guid empId)
             {
-                var chef = allEmployees.FirstOrDefault(e => e.Id.Value == Auth.EmployeeId.Value);
-                var chefAnst = chef?.AktivAnstallning(idag);
-                if (chefAnst != null)
-                {
-                    chefEnhetId = chefAnst.EnhetId.Value;
-                    var enhet = await db.OrganizationUnits.FirstOrDefaultAsync(e => e.Id.Value == chefEnhetId.Value);
-                    _enhetNamn = enhet?.Namn;
-                }
+                var chef = await db.Employees.Include(e => e.Anstallningar)
+                    .FirstOrDefaultAsync(e => e.Id == EmployeeId.From(empId));
+                chefEnhetId = chef?.AktivAnstallning(idag)?.EnhetId.Value;
             }
 
-            var employees = chefEnhetId.HasValue
-                ? allEmployees.Where(e => e.AktivAnstallning(idag)?.EnhetId.Value == chefEnhetId.Value).ToList()
-                : allEmployees;
+            // Teamet filtreras på enhet DIREKT i SQL — hela personalregistret laddas aldrig.
+            IQueryable<Employee> teamQuery = db.Employees.Include(e => e.Anstallningar);
+            if (chefEnhetId is Guid enhetId)
+            {
+                var oid = OrganizationId.From(enhetId);
+                teamQuery = teamQuery.Where(e => e.Anstallningar.Any(a =>
+                    a.EnhetId == oid &&
+                    a.Giltighetsperiod.Start <= idag &&
+                    (a.Giltighetsperiod.End == null || a.Giltighetsperiod.End >= idag)));
+                _enhetNamn = (await db.OrganizationUnits.FirstOrDefaultAsync(o => o.Id == oid))?.Namn;
+            }
 
-            // Aktiva frånvaroperioder idag
+            var employees = await teamQuery
+                .OrderBy(e => e.Efternamn).ThenBy(e => e.Fornamn)
+                .Take(TeamTak)
+                .ToListAsync();
+
+            var teamGuids = employees.Select(e => e.Id.Value).ToList();
+
+            // Aktiva frånvaroperioder idag — bara för teamet (inte hela regionen).
             var aktivFranvaro = await db.LeaveRequests
                 .Where(r => r.FranDatum <= idag && r.TillDatum >= idag
-                    && (r.Status == LeaveRequestStatus.Inskickad || r.Status == LeaveRequestStatus.Godkand))
+                    && (r.Status == LeaveRequestStatus.Inskickad || r.Status == LeaveRequestStatus.Godkand)
+                    && teamGuids.Contains(r.AnstallId))
                 .ToListAsync();
             var franvaroPerAnstall = aktivFranvaro.ToDictionary(r => r.AnstallId, r => r.Typ);
 
-            // Semestersaldo
-            var balances = await db.VacationBalances.Where(b => b.Ar == idag.Year).ToListAsync();
+            // Semestersaldo — bara för teamet.
+            var balances = await db.VacationBalances
+                .Where(b => b.Ar == idag.Year && teamGuids.Contains(b.AnstallId))
+                .ToListAsync();
             var balansPerAnstall = balances.ToDictionary(b => b.AnstallId, b => b.TillgangligaDagar);
 
-            // Enhetnamn
-            var enheter = await db.OrganizationUnits.ToListAsync();
-            var enhetNamn = enheter.ToDictionary(e => e.Id.Value, e => e.Namn);
+            // Enhetnamn (liten tabell)
+            var enhetNamn = await db.OrganizationUnits.ToDictionaryAsync(e => e.Id.Value, e => e.Namn);
 
             _team = employees.Select(e =>
             {

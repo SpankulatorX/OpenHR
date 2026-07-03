@@ -29,7 +29,6 @@
   <!-- ══════════════════════════════════════════════ -->
   <data name="Login" xml:space="preserve"><value>Logga in</value></data>
   <data name="Logout" xml:space="preserve"><value>Logga ut</value></data>
-  <data name="LogOut" xml:space="preserve"><value>Logga ut</value></data>
   <data name="ChooseLoginMethod" xml:space="preserve"><value>Valj inloggningsmetod</value></data>
   <data name="BankID" xml:space="preserve"><value>BankID</value></data>
   <data name="BankIDAllEmployees" xml:space="preserve"><value>Alla anstallda</value></data>

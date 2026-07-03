@@ -73,19 +73,31 @@ else
         try
         {
             var idag = DateOnly.FromDateTime(DateTime.Today);
-            // Enhets-scoping: chef ser bara sin egen enhet (null = ingen scoping).
-            var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
             var shifts = await db.ScheduledShifts
                 .Where(s => s.Datum == idag && s.Status != ShiftStatus.Avbokad)
                 .ToListAsync();
-            if (scopeIds is not null)
-                shifts = shifts.Where(s => scopeIds.Contains(s.AnstallId.Value)).ToList();
 
             if (shifts.Count > 0)
             {
                 var anstallIds = shifts.Select(s => s.AnstallId).Distinct().ToList();
+                // Endast anställda med pass idag laddas (bundet av dagens schema, aldrig hela
+                // registret) — inkl. anställningar för enhets-scoping.
                 var employees = await db.Employees
+                    .Include(e => e.Anstallningar)
                     .Where(e => anstallIds.Contains(e.Id)).ToListAsync();
+
+                // Chef ser bara sin egen enhet. Enhets-id härleds billigt (cachat unit-id
+                // eller en enda uppslagsfråga) i stället för att materialisera alla anställda.
+                // Kan enheten inte härledas behålls nuvarande beteende (ingen scoping).
+                if (Scope.IsUnitScoped && await Scope.GetCurrentUnitIdAsync() is Guid enhetId)
+                {
+                    var iEnhet = employees
+                        .Where(e => e.AktivAnstallning(idag)?.EnhetId.Value == enhetId)
+                        .Select(e => e.Id).ToHashSet();
+                    shifts = shifts.Where(s => iEnhet.Contains(s.AnstallId)).ToList();
+                    employees = employees.Where(e => iEnhet.Contains(e.Id)).ToList();
+                }
+
                 var names = employees.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
 
                 _passgrupper = shifts.GroupBy(s => s.PassTyp)
