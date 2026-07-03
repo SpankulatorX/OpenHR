@@ -1,6 +1,8 @@
 @page "/arenden/{Id:guid}"
+@using Microsoft.EntityFrameworkCore
 @inject RegionHR.Web.Services.ArendeService ArendeService
 @inject RegionHR.Web.Services.AuthService Auth
+@inject Microsoft.EntityFrameworkCore.IDbContextFactory<RegionHR.Infrastructure.Persistence.RegionHRDbContext> DbFactory
 
 <PageTitle>Ärende - RegionHR</PageTitle>
 
@@ -18,6 +20,10 @@ else
     @if (_meddelande is not null)
     {
         <RhrAlert Variant="success">@_meddelande</RhrAlert>
+    }
+    @if (_fel is not null)
+    {
+        <RhrAlert Variant="danger">@_fel</RhrAlert>
     }
 
     <div class="rhr-grid rhr-grid--2">
@@ -61,12 +67,12 @@ else
             <Header>Chefsgodkännande</Header>
             <ChildContent>
                 <div style="margin-bottom: 1rem;">
-                    <label class="rhr-label">Kommentar (valfritt)</label>
+                    <label class="rhr-label">Kommentar / motivering (krävs vid avslag)</label>
                     <textarea class="rhr-input" rows="2" @bind="_godkannandeKommentar"></textarea>
                 </div>
                 <div style="display: flex; gap: 0.5rem;">
-                    <RhrButton OnClick="Godkann" Variant="primary">Godkänn</RhrButton>
-                    <RhrButton OnClick="Avslag" Variant="danger">Avslå</RhrButton>
+                    <RhrButton OnClick="Godkann" Variant="primary" Disabled="@_arbetar">Godkänn</RhrButton>
+                    <RhrButton OnClick="Avslag" Variant="danger" Disabled="@_arbetar">Avslå</RhrButton>
                 </div>
             </ChildContent>
         </RhrCard>
@@ -101,6 +107,8 @@ else
     private RegionHR.CaseManagement.Domain.Case? _arende;
     private string? _godkannandeKommentar;
     private string? _meddelande;
+    private string? _fel;
+    private bool _arbetar;
 
     protected override async Task OnInitializedAsync()
     {
@@ -109,20 +117,68 @@ else
 
     private async Task Godkann()
     {
-        if (!Auth.EmployeeId.HasValue) return;
+        if (!Auth.EmployeeId.HasValue) { _fel = "Kräver kopplad anställd."; return; }
         var godkannare = RegionHR.SharedKernel.Domain.EmployeeId.From(Auth.EmployeeId.Value);
-        // First send for approval, then approve
-        _arende!.SkickaForGodkannande("Chefsgodkännande", godkannare);
-        await ArendeService.GodkannAsync(
-            RegionHR.SharedKernel.Domain.CaseId.From(Id), godkannare, _godkannandeKommentar);
-        _meddelande = "Ärende godkänt!";
+        _fel = null; _meddelande = null; _arbetar = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var caseId = RegionHR.SharedKernel.Domain.CaseId.From(Id);
+            var arende = await db.Cases.Include(c => c.Godkannanden).Include(c => c.Kommentarer)
+                .FirstOrDefaultAsync(c => c.Id == caseId);
+            if (arende is null) { _fel = "Ärendet hittades inte."; return; }
+
+            // Säkerställ att ett väntande godkännande finns för denna beslutsfattare innan Godkann().
+            var pending = arende.Godkannanden.LastOrDefault(g =>
+                g.GodkannareId == godkannare && g.Status == RegionHR.CaseManagement.Domain.ApprovalStatus.Vantar);
+            if (pending is null)
+                arende.SkickaForGodkannande("Chefsgodkännande", godkannare);
+
+            arende.Godkann(godkannare, _godkannandeKommentar);
+            arende.Avsluta();
+            await db.SaveChangesAsync();
+            _meddelande = "Ärende godkänt och avslutat.";
+        }
+        catch (Exception ex) { _fel = $"Kunde inte godkänna: {ex.Message}"; }
+        finally { _arbetar = false; }
+
         _arende = await ArendeService.HamtaAsync(RegionHR.SharedKernel.Domain.CaseId.From(Id));
     }
 
-    private Task Avslag()
+    private async Task Avslag()
     {
-        _meddelande = "Ärende avslaget.";
-        return Task.CompletedTask;
+        if (!Auth.EmployeeId.HasValue) { _fel = "Kräver kopplad anställd."; return; }
+        if (string.IsNullOrWhiteSpace(_godkannandeKommentar)) { _fel = "Ange en motivering för avslaget."; return; }
+        var beslutsfattare = RegionHR.SharedKernel.Domain.EmployeeId.From(Auth.EmployeeId.Value);
+        _fel = null; _meddelande = null; _arbetar = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var caseId = RegionHR.SharedKernel.Domain.CaseId.From(Id);
+            var arende = await db.Cases.Include(c => c.Godkannanden).Include(c => c.Kommentarer)
+                .FirstOrDefaultAsync(c => c.Id == caseId);
+            if (arende is null) { _fel = "Ärendet hittades inte."; return; }
+
+            // Registrera ett avslagsbeslut på godkännandet och stäng ärendet.
+            var pending = arende.Godkannanden.LastOrDefault(g =>
+                g.Status == RegionHR.CaseManagement.Domain.ApprovalStatus.Vantar);
+            if (pending is null)
+            {
+                arende.SkickaForGodkannande("Chefsgodkännande", beslutsfattare);
+                pending = arende.Godkannanden.Last();
+            }
+            pending.Status = RegionHR.CaseManagement.Domain.ApprovalStatus.Avslagen;
+            pending.BeslutVid = DateTime.UtcNow;
+            pending.Kommentar = _godkannandeKommentar;
+            arende.LaggTillKommentar(beslutsfattare, $"Avslag: {_godkannandeKommentar}");
+            arende.Avsluta();
+            await db.SaveChangesAsync();
+            _meddelande = "Ärende avslaget. Beslut och motivering sparade.";
+        }
+        catch (Exception ex) { _fel = $"Kunde inte avslå: {ex.Message}"; }
+        finally { _arbetar = false; }
+
+        _arende = await ArendeService.HamtaAsync(RegionHR.SharedKernel.Domain.CaseId.From(Id));
     }
 
     private static string StatusVariant(RegionHR.SharedKernel.Domain.CaseStatus status) => status switch

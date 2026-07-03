@@ -13,7 +13,10 @@
 
 <div class="d-flex justify-space-between align-center mb-2">
     <MudText Typo="Typo.h4" Style="font-weight: 700;">Behovsstyrd schemaautomatik</MudText>
-    <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/schema" StartIcon="@Icons.Material.Filled.ArrowBack">Till schemaöversikt</MudButton>
+    <div class="d-flex gap-2">
+        <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/schema/bemanningsmallar" StartIcon="@Icons.Material.Filled.EditCalendar">Bemanningsmallar</MudButton>
+        <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/schema" StartIcon="@Icons.Material.Filled.ArrowBack">Till schemaöversikt</MudButton>
+    </div>
 </div>
 <MudText Typo="Typo.body1" Class="mb-5" Style="color: var(--mud-palette-text-secondary);">
     Auto-generera ett schema ur en bemanningsmall som täcker behovet per pass och kompetens,
@@ -75,7 +78,9 @@
     @if (_mallarForEnhet.Count == 0 && !_loading)
     {
         <MudAlert Severity="Severity.Info" Variant="Variant.Text" Dense="true" Class="mt-3">
-            Ingen bemanningsmall finns för vald enhet. Skapa en mall med bemanningsbehov per veckodag och pass först.
+            Ingen bemanningsmall finns för vald enhet.
+            <MudLink Href="/schema/bemanningsmallar">Skapa en bemanningsmall</MudLink>
+            med behov per veckodag och pass först.
         </MudAlert>
     }
 </MudPaper>

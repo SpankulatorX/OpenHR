@@ -118,6 +118,8 @@ else
     private async Task MarkeraLast(Notification n)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        // n laddades i init-contexten — attacha före mutation för att persistera.
+        db.Attach(n);
         n.MarkAsRead();
         await db.SaveChangesAsync();
     }
@@ -126,8 +128,12 @@ else
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         var unread = _notiser.Where(n => !n.IsRead).ToList();
+        // Notiserna kommer från init-contexten — attacha var och en före mutation.
         foreach (var n in unread)
+        {
+            db.Attach(n);
             n.MarkAsRead();
+        }
         await db.SaveChangesAsync();
         Snackbar.Add($"{unread.Count} {L["NotificationsMarkedAsRead"]}", MudBlazor.Severity.Success);
     }

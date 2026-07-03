@@ -1,11 +1,14 @@
 @page "/minsida/lonespecifikationer"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Export
 @using RegionHR.Payroll.Domain
+@using RegionHR.Core.Domain
 @using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject RegionHR.Web.Services.AuthService Auth
+@inject IJSRuntime JS
 
 <PageTitle>OpenHR - Lönespecifikationer</PageTitle>
 <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary" Href="/minsida/lon" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
@@ -23,7 +26,15 @@ else
     @foreach (var r in _results)
     {
         <MudPaper Class="pa-5 mb-4" Elevation="2">
-            <MudText Typo="Typo.h6" Class="mb-3" Style="font-weight: 600;">@r.Year-@r.Month.ToString("D2")</MudText>
+            <div class="d-flex justify-space-between align-center mb-3" style="flex-wrap: wrap; gap: 0.5rem;">
+                <MudText Typo="Typo.h6" Style="font-weight: 600;">@r.Year-@r.Month.ToString("D2")</MudText>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                           StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                           Disabled="@_genererar"
+                           OnClick="@(() => LaddaNerPdf(r))">
+                    Ladda ner PDF
+                </MudButton>
+            </div>
             <MudGrid Spacing="3" Class="mb-3">
                 <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Brutto</MudText><MudText Typo="Typo.h5" Style="font-weight: 700;">@r.Brutto.Amount.ToString("N0") kr</MudText></MudItem>
                 <MudItem xs="6" sm="3"><MudText Typo="Typo.caption">Skatt</MudText><MudText Typo="Typo.h5" Style="font-weight: 700; color: var(--mud-palette-error);">-@r.Skatt.Amount.ToString("N0") kr</MudText></MudItem>
@@ -47,21 +58,53 @@ else
 @code {
     private List<PayrollResult> _results = [];
     private bool _loading = true;
+    private bool _genererar;
     private string? _error;
+
+    private string _namn = "Anställd";
+    private string _personnummer = "";
+    private string _befattning = "";
 
     protected override async Task OnInitializedAsync()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) { _loading = false; return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            var empId = EmployeeId.From(Auth.EmployeeId.Value);
             _results = await db.PayrollResults
-                .Where(r => r.AnstallId == EmployeeId.From(Auth.EmployeeId.Value))
+                .Include(r => r.Rader)
+                .Where(r => r.AnstallId == empId)
                 .OrderByDescending(r => r.Year).ThenByDescending(r => r.Month)
                 .Take(12).ToListAsync();
+
+            var emp = await db.Employees
+                .Include(e => e.Anstallningar)
+                .FirstOrDefaultAsync(e => e.Id == empId);
+            if (emp is not null)
+            {
+                _namn = emp.FulltNamn;
+                _personnummer = (string)emp.Personnummer;
+                _befattning = emp.AktivAnstallning(DateOnly.FromDateTime(DateTime.Today))?.Befattningstitel ?? "";
+            }
         }
         catch (Exception ex) { _error = $"Kunde inte hämta specifikationer: {ex.Message}"; }
         finally { _loading = false; }
     }
-}
 
+    private async Task LaddaNerPdf(PayrollResult r)
+    {
+        _genererar = true;
+        _error = null;
+        try
+        {
+            var dokument = LonespecifikationDokument.FromPayrollResult(r, _namn, _personnummer, _befattning);
+            var pdf = new LonespecifikationPdfGenerator().Generate(dokument);
+            var base64 = Convert.ToBase64String(pdf);
+            await JS.InvokeVoidAsync("downloadFile",
+                $"lonespecifikation-{r.Year}-{r.Month:D2}.pdf", base64, "application/pdf");
+        }
+        catch (Exception ex) { _error = $"Kunde inte skapa PDF: {ex.Message}"; }
+        finally { _genererar = false; }
+    }
+}

@@ -114,10 +114,17 @@ else
 
     private async Task MarkeraKlar(Guid stegId)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (_instance == null) return;
-        _instance.MarkeraStegKlart(stegId, "Admin");
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // Ladda instansen spårad i denna context så att ändringen faktiskt persisteras
+        // (den tidigare _instance kommer från en disposad context och skulle inte sparas).
+        var inst = await db.JourneyInstances
+            .Include("Steg")
+            .FirstOrDefaultAsync(i => i.Id == _instance.Id);
+        if (inst == null) return;
+        inst.MarkeraStegKlart(stegId, "Admin");
         await db.SaveChangesAsync();
+        _instance = inst;
     }
 }
 

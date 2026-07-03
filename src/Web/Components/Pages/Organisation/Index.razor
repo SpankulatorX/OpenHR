@@ -1,14 +1,72 @@
 @page "/organisation"
 @layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.SharedKernel.Domain
+@using RegionHR.Web.Services
 @inject RegionHR.Web.Services.AnstallningService Service
 
 <PageTitle>Organisation - RegionHR</PageTitle>
 
-<h1>Organisationsstruktur</h1>
+<div class="d-flex justify-space-between align-center mb-4">
+    <MudText Typo="Typo.h4" Style="font-weight: 700;">Organisationsstruktur</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+               StartIcon="@Icons.Material.Filled.Add" Style="min-height: 48px;"
+               OnClick="@(() => _visarForm = !_visarForm)">Ny enhet</MudButton>
+</div>
 
 @if (_error != null)
 {
-    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+}
+@if (_success != null)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+}
+
+@if (_visarForm)
+{
+    <MudPaper Class="pa-6 mb-4" Elevation="3" Style="border-left: 4px solid var(--mud-palette-primary);">
+        <div class="d-flex justify-space-between align-center mb-3">
+            <MudText Typo="Typo.h6" Style="font-weight: 600;">Skapa ny organisationsenhet</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="@(() => _visarForm = false)" />
+        </div>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_formNamn" Label="Namn" Variant="Variant.Outlined" Required="true" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="OrganizationUnitType" @bind-Value="_formTyp" Label="Typ" Variant="Variant.Outlined">
+                    @foreach (var t in Enum.GetValues<OrganizationUnitType>())
+                    {
+                        <MudSelectItem T="OrganizationUnitType" Value="@t">@TypNamn(t)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_formKostnadsstalle" Label="Kostnadsställe" Variant="Variant.Outlined" Required="true" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudTextField @bind-Value="_formCfar" Label="CFAR-kod (valfritt)" Variant="Variant.Outlined" HelperText="Arbetsställenummer (SCB)" />
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="Guid?" @bind-Value="_formOverordnad" Label="Överordnad enhet (valfritt)" Variant="Variant.Outlined" Clearable="true"
+                           HelperText="Lämna tomt för en rotenhet">
+                    @foreach (var e in _plattaEnheter)
+                    {
+                        <MudSelectItem T="Guid?" Value="@((Guid?)e.Id.Value)">@e.Namn (@e.Kostnadsstalle)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+        </MudGrid>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" Class="mt-3" Style="min-height: 48px;"
+                   OnClick="SkapaEnhet"
+                   Disabled="@(string.IsNullOrWhiteSpace(_formNamn) || string.IsNullOrWhiteSpace(_formKostnadsstalle) || _sparar)">
+            @if (_sparar)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            Skapa enhet
+        </MudButton>
+    </MudPaper>
 }
 
 <RhrCard>
@@ -19,7 +77,7 @@
         }
         else if (_rotenheter.Count == 0)
         {
-            <RhrAlert Variant="info">Ingen organisation konfigurerad ännu. Skapa enheter via databasen eller API:t.</RhrAlert>
+            <RhrAlert Variant="info">Ingen organisation konfigurerad ännu. Skapa den första enheten med knappen "Ny enhet".</RhrAlert>
         }
         else
         {
@@ -33,14 +91,29 @@
 
 @code {
     private List<RegionHR.Core.Domain.OrganizationUnit> _rotenheter = [];
+    private List<EnhetVal> _plattaEnheter = [];
     private bool _loading = true;
+    private bool _visarForm;
+    private bool _sparar;
     private string? _error;
+    private string? _success;
 
-    protected override async Task OnInitializedAsync()
+    // Formulärfält
+    private string _formNamn = "";
+    private OrganizationUnitType _formTyp = OrganizationUnitType.Enhet;
+    private string _formKostnadsstalle = "";
+    private string _formCfar = "";
+    private Guid? _formOverordnad;
+
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
     {
+        _loading = true;
         try
         {
             _rotenheter = await Service.HamtaOrganisationAsync();
+            _plattaEnheter = await Service.HamtaEnheterAsync();
         }
         catch (Exception ex)
         {
@@ -51,4 +124,44 @@
             _loading = false;
         }
     }
+
+    private async Task SkapaEnhet()
+    {
+        if (string.IsNullOrWhiteSpace(_formNamn) || string.IsNullOrWhiteSpace(_formKostnadsstalle)) return;
+        _sparar = true;
+        _error = null;
+        _success = null;
+        try
+        {
+            var overordnad = _formOverordnad.HasValue ? OrganizationId.From(_formOverordnad.Value) : (OrganizationId?)null;
+            await Service.SkapaEnhetAsync(_formNamn, _formTyp, _formKostnadsstalle, overordnad, _formCfar);
+            _success = $"Enheten \"{_formNamn.Trim()}\" skapades.";
+            _visarForm = false;
+            _formNamn = "";
+            _formKostnadsstalle = "";
+            _formCfar = "";
+            _formOverordnad = null;
+            _formTyp = OrganizationUnitType.Enhet;
+            await LaddaAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Kunde inte skapa enhet: {ex.Message}";
+        }
+        finally
+        {
+            _sparar = false;
+        }
+    }
+
+    private static string TypNamn(OrganizationUnitType t) => t switch
+    {
+        OrganizationUnitType.Region => "Region",
+        OrganizationUnitType.Forvaltning => "Förvaltning",
+        OrganizationUnitType.Verksamhet => "Verksamhet",
+        OrganizationUnitType.Enhet => "Enhet",
+        OrganizationUnitType.Avdelning => "Avdelning",
+        OrganizationUnitType.Sektion => "Sektion",
+        _ => t.ToString()
+    };
 }

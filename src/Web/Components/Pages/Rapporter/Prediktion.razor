@@ -1,13 +1,23 @@
 @page "/rapporter/prediktion"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
+@using RegionHR.Infrastructure.Analytics
 @using RegionHR.Analytics.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject FlightRiskService RiskService
 
 <PageTitle>OpenHR - Prediktiv analys</PageTitle>
-<MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Prediktiv analys</MudText>
-<MudText Typo="Typo.body2" Color="Color.Default" Class="mb-6">AI-drivna modeller for att forutsaga personalfloden, sjukfranvaro och kostnader.</MudText>
+<MudText Typo="Typo.h4" Class="mb-2" Style="font-weight: 700;">Prediktiv analys</MudText>
+<MudText Typo="Typo.body2" Color="Color.Default" Class="mb-4">Modeller för att bedöma personalflöden, sjukfrånvaro och kostnader.</MudText>
+
+<MudAlert Severity="Severity.Info" Variant="Variant.Filled" Class="mb-6">
+    <strong>Ärlig statusbild.</strong> Endast <em>uppsägningsriskmodellen</em> är aktiverad. Den drivs av en
+    <strong>regelbaserad heuristik</strong> (FlightRiskService) som beräknas live ur anställningsdata — inte en tränad
+    AI-/ML-modell, och därför visas inga precisions-/accuracy-siffror. Övriga modeller (bemannings-, sjukfrånvaro- och
+    lönekostnadsprognos) är <strong>ej aktiverade</strong>: de kräver ML-infrastruktur som inte ingår i OpenHR och visas
+    här som planerade.
+</MudAlert>
 
 @if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
 else if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert> }
@@ -16,41 +26,49 @@ else
     <MudGrid Spacing="3" Class="mb-6">
         @foreach (var model in _models)
         {
+            var aktiv = ArAktiverad(model.Typ);
             <MudItem xs="12" sm="6" md="3">
-                <MudPaper Class="pa-4" Elevation="2" Style="border-top: 4px solid var(--mud-palette-primary);">
-                    <MudIcon Icon="@GetModelIcon(model.Typ)" Color="Color.Primary" Size="Size.Large" />
+                <MudPaper Class="pa-4" Elevation="2" Style="@($"border-top: 4px solid {(aktiv ? "var(--mud-palette-success)" : "var(--mud-palette-lines-default)")};")">
+                    <MudIcon Icon="@GetModelIcon(model.Typ)" Color="@(aktiv ? Color.Success : Color.Default)" Size="Size.Large" />
                     <MudText Typo="Typo.h6" Class="mt-2" Style="font-weight: 600;">@model.Namn</MudText>
                     <MudText Typo="Typo.body2" Color="Color.Default" Class="mt-1">@GetModelBeskrivning(model.Typ)</MudText>
                     <MudDivider Class="my-3" />
-                    <div class="d-flex justify-space-between">
-                        <MudText Typo="Typo.body2"><strong>Precision:</strong></MudText>
-                        <MudText Typo="Typo.body2">@(model.Accuracy.HasValue ? $"{model.Accuracy.Value:P0}" : "Ej tranad")</MudText>
-                    </div>
-                    <div class="d-flex justify-space-between mt-1">
-                        <MudText Typo="Typo.body2"><strong>Tranad:</strong></MudText>
-                        <MudText Typo="Typo.body2">@(model.SenasteTranningsDatum.HasValue ? model.SenasteTranningsDatum.Value.ToString("yyyy-MM-dd") : "-")</MudText>
-                    </div>
-                    @if (model.Accuracy.HasValue)
+                    <MudChip T="string" Size="Size.Small" Color="@(aktiv ? Color.Success : Color.Default)">
+                        @(aktiv ? "Aktiverad (regelbaserad)" : "Ej aktiverad")
+                    </MudChip>
+                    @if (aktiv)
                     {
-                        <MudProgressLinear Color="@(model.Accuracy >= 0.9m ? Color.Success : model.Accuracy >= 0.8m ? Color.Warning : Color.Error)"
-                                           Value="@((double)(model.Accuracy.Value * 100))" Class="mt-3" Rounded="true" Size="Size.Medium" />
+                        <div class="d-flex justify-space-between mt-3">
+                            <MudText Typo="Typo.body2"><strong>Analyserade:</strong></MudText>
+                            <MudText Typo="Typo.body2">@_risk.Count</MudText>
+                        </div>
+                        <div class="d-flex justify-space-between mt-1">
+                            <MudText Typo="Typo.body2"><strong>Hög risk:</strong></MudText>
+                            <MudText Typo="Typo.body2" Color="Color.Error">@_risk.Count(r => r.Niva == FlightRiskNiva.Hog)</MudText>
+                        </div>
                     }
-                    <div class="d-flex justify-space-between mt-2">
-                        <MudText Typo="Typo.caption">Resultat:</MudText>
-                        <MudText Typo="Typo.caption"><strong>@_resultCount.GetValueOrDefault(model.Id, 0)</strong></MudText>
-                    </div>
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Class="mt-3" Style="display:block;color:var(--mud-palette-text-secondary);">
+                            Demonstration — genererar inga resultat.
+                        </MudText>
+                    }
                 </MudPaper>
             </MudItem>
         }
     </MudGrid>
 
-    <MudText Typo="Typo.h6" Class="mb-3">Senaste prediktionsresultat</MudText>
-    @if (_results.Count == 0)
+    <div class="d-flex justify-space-between align-center mb-3">
+        <MudText Typo="Typo.h6">Uppsägningsrisk per anställd (regelbaserad)</MudText>
+        <MudButton Variant="Variant.Text" Color="Color.Primary" EndIcon="@Icons.Material.Filled.ArrowForward"
+                   Href="/rapporter/flight-risk">Öppna full analys</MudButton>
+    </div>
+    @if (_risk.Count == 0)
     {
         <MudPaper Class="pa-6 text-center" Elevation="2">
             <MudIcon Icon="@Icons.Material.Filled.Psychology" Color="Color.Default" Size="Size.Large" />
-            <MudText Typo="Typo.h6" Class="mt-3" Color="Color.Default">Inga prediktionsresultat annu</MudText>
-            <MudText Typo="Typo.body2" Color="Color.Default">Resultat genereras automatiskt nar modellerna kors med aktuell data.</MudText>
+            <MudText Typo="Typo.h6" Class="mt-3" Color="Color.Default">Inga anställda med aktiv anställning</MudText>
+            <MudText Typo="Typo.body2" Color="Color.Default">Riskpoäng beräknas live när det finns anställningsdata i databasen.</MudText>
         </MudPaper>
     }
     else
@@ -59,35 +77,42 @@ else
             <thead>
                 <tr>
                     <th>Modell</th>
-                    <th>Entitetstyp</th>
-                    <th>Score</th>
-                    <th>Riskniva</th>
-                    <th>Beraknad</th>
+                    <th>Anställd</th>
+                    <th>Befattning</th>
+                    <th>Poäng</th>
+                    <th>Risknivå</th>
+                    <th>Beräknad</th>
                 </tr>
             </thead>
             <tbody>
-                @foreach (var r in _results)
+                @foreach (var r in _risk.Take(20))
                 {
                     <tr>
-                        <td>@(_modelNames.GetValueOrDefault(r.PredictionModelId, "-"))</td>
-                        <td>@r.EntityTyp</td>
-                        <td>@r.Score.ToString("F2")</td>
+                        <td>Uppsägningsriskmodell</td>
+                        <td><strong>@r.Namn</strong></td>
+                        <td>@r.Befattning</td>
+                        <td>@r.Poang / @r.MaxPoang</td>
                         <td>
-                            <MudChip T="string" Size="Size.Small" Color="@GetRiskColor(r.RiskNiva)">@r.RiskNiva</MudChip>
+                            <MudChip T="string" Size="Size.Small" Color="@GetRiskColor(r.Niva)">@GetRiskText(r.Niva)</MudChip>
                         </td>
-                        <td>@r.BeraknadVid.ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>@_beraknadVid.ToString("yyyy-MM-dd HH:mm")</td>
                     </tr>
                 }
             </tbody>
         </MudSimpleTable>
+        @if (_risk.Count > 20)
+        {
+            <MudText Typo="Typo.caption" Class="mt-2" Style="color: var(--mud-palette-text-secondary);">
+                Visar de 20 med högst poäng av @_risk.Count analyserade. Se full analys för samtliga.
+            </MudText>
+        }
     }
 }
 
 @code {
     private List<PredictionModel> _models = [];
-    private List<PredictionResult> _results = [];
-    private Dictionary<Guid, string> _modelNames = [];
-    private Dictionary<Guid, int> _resultCount = [];
+    private List<FlightRiskResult> _risk = [];
+    private DateTime _beraknadVid = DateTime.Now;
     private bool _loading = true;
     private string? _error;
 
@@ -97,20 +122,17 @@ else
         try
         {
             _models = await db.PredictionModels.OrderBy(m => m.Typ).ToListAsync();
-            _modelNames = _models.ToDictionary(m => m.Id, m => m.Namn);
 
-            _results = await db.PredictionResults
-                .OrderByDescending(r => r.BeraknadVid)
-                .Take(20)
-                .ToListAsync();
-
-            _resultCount = _results
-                .GroupBy(r => r.PredictionModelId)
-                .ToDictionary(g => g.Key, g => g.Count());
+            var employees = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
+            _risk = RiskService.BeraknaForAlla(employees);
+            _beraknadVid = DateTime.Now;
         }
         catch (Exception ex) { _error = $"Kunde inte ladda prediktioner: {ex.Message}"; }
         finally { _loading = false; }
     }
+
+    // Endast uppsägningsriskmodellen (Attrition) backas av en verklig, regelbaserad beräkning.
+    private static bool ArAktiverad(string typ) => typ == "Attrition";
 
     private string GetModelIcon(string typ) => typ switch
     {
@@ -123,20 +145,26 @@ else
 
     private string GetModelBeskrivning(string typ) => typ switch
     {
-        "Attrition" => "Identifierar medarbetare med forhojd risk for uppsagning baserat pa historiska monster.",
-        "HeadcountForecast" => "Prognos for framtida bemanningsbehov baserat pa turnover, pension och tillvaxt.",
-        "SickLeaveForecast" => "Forutser sjukfranvaro per enhet baserat pa sasong, historik och arbetsbelastning.",
-        "LaborCostForecast" => "Beraknar framtida lonekostnader inklusive OB, overtid och arbetsgivaravgifter.",
+        "Attrition" => "Regelbaserad heuristik som flaggar medarbetare med förhöjd uppsägningsrisk ur anställningsdata.",
+        "HeadcountForecast" => "Prognos för framtida bemanningsbehov baserat på turnover, pension och tillväxt.",
+        "SickLeaveForecast" => "Förutser sjukfrånvaro per enhet baserat på säsong, historik och arbetsbelastning.",
+        "LaborCostForecast" => "Beräknar framtida lönekostnader inklusive OB, övertid och arbetsgivaravgifter.",
         _ => ""
     };
 
-    private Color GetRiskColor(string riskNiva) => riskNiva switch
+    private static Color GetRiskColor(FlightRiskNiva niva) => niva switch
     {
-        "Critical" => Color.Error,
-        "High" => Color.Error,
-        "Medium" => Color.Warning,
-        "Low" => Color.Success,
+        FlightRiskNiva.Hog => Color.Error,
+        FlightRiskNiva.Medel => Color.Warning,
+        FlightRiskNiva.Lag => Color.Success,
         _ => Color.Default
     };
-}
 
+    private static string GetRiskText(FlightRiskNiva niva) => niva switch
+    {
+        FlightRiskNiva.Hog => "Hög",
+        FlightRiskNiva.Medel => "Medel",
+        FlightRiskNiva.Lag => "Låg",
+        _ => "—"
+    };
+}

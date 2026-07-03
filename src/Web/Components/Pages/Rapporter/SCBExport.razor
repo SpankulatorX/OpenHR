@@ -1,8 +1,11 @@
 @page "/rapporter/scb"
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
+@using RegionHR.IntegrationHub.Adapters.SCB
+@using RegionHR.SharedKernel.Abstractions
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
 
 <PageTitle>OpenHR - SCB-export</PageTitle>
 <MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">SCB-export</MudText>
@@ -16,12 +19,34 @@ else
         <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Primary" Style="font-weight: 700;">@_totalAnstallda</MudText><MudText Typo="Typo.body2">Anställda</MudText></MudPaper></MudItem>
         <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Style="font-weight: 700;">@_enheter</MudText><MudText Typo="Typo.body2">Enheter</MudText></MudPaper></MudItem>
         <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Style="font-weight: 700;">@_befattningar</MudText><MudText Typo="Typo.body2">Unika befattningar</MudText></MudPaper></MudItem>
-        <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h4" Color="Color.Success" Style="font-weight: 700;">Klar</MudText><MudText Typo="Typo.body2">Exportstatus</MudText></MudPaper></MudItem>
+        <MudItem xs="3"><MudPaper Class="pa-3 text-center" Elevation="1"><MudText Typo="Typo.h6" Color="Color.Warning" Style="font-weight: 700; margin-top: 0.4rem;">Ej inlämnad</MudText><MudText Typo="Typo.body2">Exportstatus</MudText></MudPaper></MudItem>
     </MudGrid>
 
-    <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-4">
-        Rapporten omfattar alla aktiva anställda med giltigt anställningsförhållande. Data exporteras i SCB:s KLR-format.
+    <MudAlert Severity="Severity.Warning" Variant="Variant.Filled" Class="mb-4">
+        <strong>Ej inlämnad.</strong> Filen produceras och laddas ner lokalt i SCB:s KLR-format (fast breddformat).
+        Skarp inlämning till SCB sker via deras portal och kräver inloggning — det steget är avsiktligt frånkopplat här.
+        Lön per timme och arbetade timmar härleds via schablonen @ManadsarbetstidHeltid h/månad heltid × sysselsättningsgrad.
     </MudAlert>
+
+    <MudPaper Class="pa-4 mb-4" Elevation="2">
+        <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap">
+            <MudTextField @bind-Value="_orgnr" Label="Organisationsnummer" Variant="Variant.Outlined" Style="max-width: 260px;" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large"
+                       StartIcon="@Icons.Material.Filled.Download"
+                       Disabled="@(_genererar || _preview.Count == 0)"
+                       OnClick="LaddaNerKlr">
+                Ladda ner KLR-fil (@_preview.Count individer)
+            </MudButton>
+        </MudStack>
+        @if (_status is not null)
+        {
+            <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mt-3">@_status</MudAlert>
+        }
+        @if (_fel is not null)
+        {
+            <MudAlert Severity="Severity.Error" Variant="Variant.Text" Class="mt-3">@_fel</MudAlert>
+        }
+    </MudPaper>
 
     <MudText Typo="Typo.h6" Class="mb-3">Förhandsgranska data</MudText>
     @if (_preview.Count == 0) { <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga anställda att exportera.</MudAlert> }
@@ -41,9 +66,18 @@ else
 }
 
 @code {
+    // Schablon: heltidsmått i timmar per månad (för att härleda lön/timme och arbetade timmar
+    // ur månadslön + sysselsättningsgrad). Tydligt markerat i UI:t.
+    private const decimal ManadsarbetstidHeltid = 165m;
+
     private List<SCBRad> _preview = [];
+    private List<KlrKalla> _klrKallor = [];
     private int _totalAnstallda, _enheter, _befattningar;
     private bool _loading = true;
+    private bool _genererar;
+    private string _orgnr = "232100-0164";
+    private string? _status;
+    private string? _fel;
     private string? _error;
 
     protected override async Task OnInitializedAsync()
@@ -53,11 +87,20 @@ else
         {
             var idag = DateOnly.FromDateTime(DateTime.Today);
             var employees = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
-            _preview = employees.Where(e => e.AktivAnstallning(idag) != null).Select(e =>
-            {
-                var a = e.AktivAnstallning(idag)!;
-                return new SCBRad($"{e.Fornamn} {e.Efternamn}", a.Befattningstitel ?? "—", a.Anstallningsform.ToString(), a.Sysselsattningsgrad.Value, a.Manadslon.Amount);
-            }).OrderBy(r => r.Namn).ToList();
+            var aktiva = employees
+                .Select(e => new { e, a = e.AktivAnstallning(idag) })
+                .Where(x => x.a != null)
+                .ToList();
+
+            _preview = aktiva.Select(x =>
+                new SCBRad($"{x.e.Fornamn} {x.e.Efternamn}", x.a!.Befattningstitel ?? "—",
+                    x.a.Anstallningsform.ToString(), x.a.Sysselsattningsgrad.Value, x.a.Manadslon.Amount))
+                .OrderBy(r => r.Namn).ToList();
+
+            _klrKallor = aktiva.Select(x =>
+                new KlrKalla((string)x.e.Personnummer, x.a!.Manadslon.Amount, x.a.Sysselsattningsgrad.Value))
+                .ToList();
+
             _totalAnstallda = _preview.Count;
             _enheter = (await db.OrganizationUnits.CountAsync());
             _befattningar = _preview.Select(r => r.Befattning).Distinct().Count();
@@ -66,6 +109,51 @@ else
         finally { _loading = false; }
     }
 
+    private async Task LaddaNerKlr()
+    {
+        _genererar = true;
+        _status = null;
+        _fel = null;
+        try
+        {
+            var input = new KLRInput
+            {
+                Period = DateTime.Today.ToString("yyyyMM"),
+                Organisationsnummer = _orgnr.Trim(),
+                Individer = _klrKallor.Select(k =>
+                {
+                    var timmar = Math.Round(ManadsarbetstidHeltid * (k.Sysselsattningsgrad / 100m), 1);
+                    var lonPerTimme = timmar > 0 ? Math.Round(k.Manadslon / timmar, 2) : 0m;
+                    return new KLRIndivid
+                    {
+                        Personnummer = k.Pnr,
+                        GenomsnittslonPerTimme = lonPerTimme,
+                        ArbetadeTimmar = timmar,
+                        Arsarbetare = Math.Round(k.Sysselsattningsgrad / 100m, 3)
+                    };
+                }).ToList()
+            };
+
+            var res = await new SCBKLRAdapter()
+                .ExecuteAsync(new IntegrationRequest("GenereraKLRRapport", input));
+
+            if (res.Success && res.ResponseData is KLRRapportFil fil)
+            {
+                var bytes = System.Text.Encoding.UTF8.GetBytes(fil.Content);
+                var base64 = Convert.ToBase64String(bytes);
+                await JS.InvokeVoidAsync("downloadFile", fil.FileName, base64, "text/plain;charset=utf-8");
+                _status = $"KLR-fil genererad: {fil.FileName} ({_klrKallor.Count} individer). Ej inlämnad till SCB.";
+            }
+            else
+            {
+                _fel = res.Message ?? "Kunde inte generera KLR-filen.";
+            }
+        }
+        catch (Exception ex) { _fel = $"Kunde inte generera KLR-filen: {ex.Message}"; }
+        finally { _genererar = false; }
+    }
+
     private record SCBRad(string Namn, string Befattning, string Form, decimal Sysselsattning, decimal Lon);
+    private record KlrKalla(string Pnr, decimal Manadslon, decimal Sysselsattningsgrad);
 }
 

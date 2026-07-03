@@ -31,6 +31,8 @@ else
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="3"><MudDatePicker @bind-Date="_formDatum" Label="Datum" Variant="Variant.Outlined" /></MudItem>
+                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_formFackombud" Label="Fackombud (valfritt)" Variant="Variant.Outlined" /></MudItem>
+                <MudItem xs="12" sm="6"><MudTextField @bind-Value="_formArbetsgivarombud" Label="Arbetsgivarombud (valfritt)" Variant="Variant.Outlined" /></MudItem>
             </MudGrid>
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SkapaMBL"
                        Disabled="@(string.IsNullOrWhiteSpace(_formArende) || _formDatum == null || _saving)">Skapa</MudButton>
@@ -43,7 +45,7 @@ else
     else
     {
         <MudSimpleTable Hover="true" Elevation="2">
-            <thead><tr><th>Ärende</th><th>Typ</th><th>Datum</th><th>Status</th><th>Fackombud</th><th>AG-ombud</th></tr></thead>
+            <thead><tr><th>Ärende</th><th>Typ</th><th>Datum</th><th>Status</th><th>Fackombud</th><th>AG-ombud</th><th>Åtgärder</th></tr></thead>
             <tbody>
                 @foreach (var m in _forhandlingar)
                 {
@@ -54,7 +56,38 @@ else
                         <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(m.Status)">@StatusText(m.Status)</MudChip></td>
                         <td>@(m.Fackombud ?? "—")</td>
                         <td>@(m.Arbetsgivarombud ?? "—")</td>
+                        <td>
+                            @if (m.Status == MBLStatus.Kallad)
+                            {
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info" OnClick="@(() => Paborja(m))" Disabled="_saving">Påbörja</MudButton>
+                            }
+                            @if (m.Status == MBLStatus.Pagaende)
+                            {
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success" OnClick="@(() => Avsluta(m))" Disabled="_saving">Avsluta</MudButton>
+                            }
+                            @if (m.Status == MBLStatus.Avslutad || m.Status == MBLStatus.Pagaende)
+                            {
+                                <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => StartaProtokoll(m))" Disabled="_saving">Protokollför</MudButton>
+                            }
+                            @if (m.Status == MBLStatus.Protokollfrd && !string.IsNullOrWhiteSpace(m.Protokoll))
+                            {
+                                <MudTooltip Text="@m.Protokoll"><MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.Description">Protokoll</MudChip></MudTooltip>
+                            }
+                        </td>
                     </tr>
+                    @if (_protokollFor == m.Id)
+                    {
+                        <tr>
+                            <td colspan="7">
+                                <MudPaper Class="pa-3" Elevation="0" Style="background: var(--mud-palette-background-grey);">
+                                    <MudTextField @bind-Value="_protokollText" Label="Protokolltext" Variant="Variant.Outlined" Lines="3" Class="mb-2" />
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => SparaProtokoll(m))"
+                                               Disabled="@(string.IsNullOrWhiteSpace(_protokollText) || _saving)" Class="mr-2">Spara protokoll</MudButton>
+                                    <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => _protokollFor = null)">Avbryt</MudButton>
+                                </MudPaper>
+                            </td>
+                        </tr>
+                    }
                 }
             </tbody>
         </MudSimpleTable>
@@ -65,10 +98,16 @@ else
     private List<MBLNegotiation> _forhandlingar = [];
     private bool _loading = true, _saving, _showForm;
     private string? _error, _success, _formArende = "";
+    private string _formFackombud = "", _formArbetsgivarombud = "";
     private MBLType _formTyp = MBLType.Information;
     private DateTime? _formDatum;
 
-    protected override async Task OnInitializedAsync()
+    private Guid? _protokollFor;
+    private string _protokollText = "";
+
+    protected override async Task OnInitializedAsync() => await Load();
+
+    private async Task Load()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         try { _forhandlingar = await db.MBLNegotiations.OrderByDescending(m => m.Datum).ToListAsync(); }
@@ -83,13 +122,52 @@ else
         _saving = true; _error = null;
         try
         {
-            var mbl = MBLNegotiation.Skapa(_formArende!, _formTyp, DateOnly.FromDateTime(_formDatum.Value));
+            var mbl = MBLNegotiation.Skapa(_formArende!, _formTyp, DateOnly.FromDateTime(_formDatum.Value),
+                string.IsNullOrWhiteSpace(_formFackombud) ? null : _formFackombud,
+                string.IsNullOrWhiteSpace(_formArbetsgivarombud) ? null : _formArbetsgivarombud);
             db.MBLNegotiations.Add(mbl);
             await db.SaveChangesAsync();
-            _forhandlingar.Insert(0, mbl);
             _showForm = false; _success = "MBL-förhandling skapad."; _formArende = "";
+            _formFackombud = ""; _formArbetsgivarombud = "";
+            await Load();
         }
         catch (Exception ex) { _error = $"Kunde inte skapa: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task Paborja(MBLNegotiation m) => await KorAsync(m, x => x.Paborja(), "Förhandling påbörjad.");
+    private async Task Avsluta(MBLNegotiation m) => await KorAsync(m, x => x.Avsluta(), "Förhandling avslutad.");
+
+    private void StartaProtokoll(MBLNegotiation m)
+    {
+        _protokollFor = m.Id;
+        _protokollText = m.Protokoll ?? "";
+    }
+
+    private async Task SparaProtokoll(MBLNegotiation m)
+    {
+        var text = _protokollText;
+        await KorAsync(m, x => x.RegistreraProtokoll(text), "Protokoll registrerat.");
+        _protokollFor = null;
+        _protokollText = "";
+    }
+
+    // Attacherar den (från annan context laddade) entiteten i en ny context så att
+    // statusövergången faktiskt persisteras, och laddar sedan om listan.
+    private async Task KorAsync(MBLNegotiation m, Action<MBLNegotiation> operation, string okMsg)
+    {
+        _saving = true; _error = null; _success = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            db.Attach(m);
+            operation(m);
+            await db.SaveChangesAsync();
+            _success = okMsg;
+            await Load();
+        }
+        catch (InvalidOperationException ex) { _error = ex.Message; }
+        catch (Exception ex) { _error = $"Åtgärden misslyckades: {ex.Message}"; }
         finally { _saving = false; }
     }
 

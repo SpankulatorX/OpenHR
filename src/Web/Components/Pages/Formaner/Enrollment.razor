@@ -138,8 +138,12 @@ else
                         <td>
                             @if (s.Status == EnrollmentStatus.Ansokt)
                             {
-                                <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
-                                           OnClick="@(async () => await GodkannVal(s))">Godkänn</MudButton>
+                                <div class="d-flex gap-2">
+                                    <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Success"
+                                               OnClick="@(async () => await GodkannVal(s))">Godkänn</MudButton>
+                                    <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error"
+                                               OnClick="@(async () => await NekaVal(s))">Neka</MudButton>
+                                </div>
                             }
                         </td>
                     </tr>
@@ -190,9 +194,39 @@ else
 
     private async Task GodkannVal(EmployeeBenefit val)
     {
+        _error = null; _success = null;
+        // Hämta entiteten i samma context som SaveChanges — den listade instansen
+        // kommer från OnInitialized-contextet (disposat) och trackas inte här,
+        // så en mutation på den skulle inte persisteras.
         await using var db = await DbFactory.CreateDbContextAsync();
-        val.Godkann();
-        await db.SaveChangesAsync();
+        try
+        {
+            var e = await db.EmployeeBenefits.FirstOrDefaultAsync(x => x.Id == val.Id);
+            if (e is null) { _error = "Förmånsvalet hittades inte."; return; }
+            e.Godkann();
+            await db.SaveChangesAsync();
+            var idx = _selections.IndexOf(val);
+            if (idx >= 0) _selections[idx] = e;
+            _success = $"Förmånsval godkänt för {GetEmployeeName(e.AnstallId)}.";
+        }
+        catch (Exception ex) { _error = $"Kunde inte godkänna: {ex.Message}"; }
+    }
+
+    private async Task NekaVal(EmployeeBenefit val)
+    {
+        _error = null; _success = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        try
+        {
+            var e = await db.EmployeeBenefits.FirstOrDefaultAsync(x => x.Id == val.Id);
+            if (e is null) { _error = "Förmånsvalet hittades inte."; return; }
+            e.Neka();
+            await db.SaveChangesAsync();
+            var idx = _selections.IndexOf(val);
+            if (idx >= 0) _selections[idx] = e;
+            _success = $"Förmånsval nekat för {GetEmployeeName(e.AnstallId)}.";
+        }
+        catch (Exception ex) { _error = $"Kunde inte neka: {ex.Message}"; }
     }
 
     private string GetEmployeeName(Guid id)

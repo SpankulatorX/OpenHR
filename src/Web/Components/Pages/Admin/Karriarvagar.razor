@@ -157,7 +157,10 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         if (string.IsNullOrWhiteSpace(_newStepBefattning)) return;
 
-        cp.LaggTillSteg(_newStepBefattning, _newStepOrdning, _newStepTid);
+        // cp kommer från init-contexten (disposad). Skapa steget via aggregatet (så UI:t
+        // uppdateras) och lägg till det nya steget direkt i denna context för persistens.
+        var steg = cp.LaggTillSteg(_newStepBefattning, _newStepOrdning, _newStepTid);
+        await db.CareerPathSteps.AddAsync(steg);
         await db.SaveChangesAsync();
 
         _newStepBefattning = "";

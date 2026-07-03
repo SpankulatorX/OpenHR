@@ -145,7 +145,9 @@ else
     private async Task PauseSubscription(EventSubscription sub)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        sub.Pausa();
+        var tracked = await db.EventSubscriptions.FirstOrDefaultAsync(s => s.Id == sub.Id);
+        if (tracked == null) return;
+        tracked.Pausa();
         await db.SaveChangesAsync();
         _success = $"Webhook '{sub.Namn}' pausad.";
         await LoadSubscriptions();
@@ -154,7 +156,9 @@ else
     private async Task ActivateSubscription(EventSubscription sub)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        sub.Aktivera();
+        var tracked = await db.EventSubscriptions.FirstOrDefaultAsync(s => s.Id == sub.Id);
+        if (tracked == null) return;
+        tracked.Aktivera();
         await db.SaveChangesAsync();
         _success = $"Webhook '{sub.Namn}' aktiverad.";
         await LoadSubscriptions();

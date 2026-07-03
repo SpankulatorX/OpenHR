@@ -3,8 +3,13 @@
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.GDPR.Domain
 @using RegionHR.SharedKernel.Domain
+@using RegionHR.Infrastructure.GDPR
+@using RegionHR.Infrastructure.Export
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegisterutdragGenerator Generator
+@inject PdfGenerator Pdf
+@inject IJSRuntime JS
 
 <PageTitle>OpenHR - GDPR</PageTitle>
 <MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">GDPR-efterlevnad</MudText>
@@ -92,17 +97,29 @@ else
         </TitleContent>
         <DialogContent>
             <MudTextField @bind-Value="_registerutdragAnstallId" Label="Anställd-ID (GUID)" Variant="Variant.Outlined" Class="mb-3" />
+            <MudText Typo="Typo.caption" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                Fullständigt registerutdrag enligt GDPR Art 15 samlar personuppgifter, anställningar, ärenden,
+                löneresultat, ledighet, dokument, certifieringar, medarbetarsamtal, LAS-uppföljning, rehab och granskningslogg.
+            </MudText>
             @if (_registerutdragResult is not null)
             {
                 <MudPaper Class="pa-4" Elevation="1">
-                    <MudText Typo="Typo.subtitle1" Class="mb-2" Style="font-weight: 700;">Registerutdrag</MudText>
+                    <MudText Typo="Typo.subtitle1" Class="mb-2" Style="font-weight: 700;">Förhandsvisning</MudText>
                     <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@_registerutdragResult</MudText>
                 </MudPaper>
+            }
+            @if (_nedladdningsInfo is not null)
+            {
+                <MudAlert Severity="Severity.Success" Class="mt-3" Variant="Variant.Text">@_nedladdningsInfo</MudAlert>
             }
         </DialogContent>
         <DialogActions>
             <MudButton OnClick="@(() => _showRegisterutdrag = false)">Stäng</MudButton>
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="HamtaRegisterutdrag">Hämta data</MudButton>
+            <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="HamtaRegisterutdrag">Förhandsvisa</MudButton>
+            <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.DataObject"
+                       Disabled="@_genererar" OnClick="@(() => LaddaNer("json"))">Ladda ner JSON</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                       Disabled="@_genererar" OnClick="@(() => LaddaNer("pdf"))">Ladda ner PDF</MudButton>
         </DialogActions>
     </MudDialog>
 }
@@ -114,10 +131,18 @@ else
     private string? _error;
 
     private bool _showRegisterutdrag;
+    private bool _genererar;
     private string _registerutdragAnstallId = "";
     private string? _registerutdragResult;
+    private string? _nedladdningsInfo;
 
     protected override async Task OnInitializedAsync()
+    {
+        await LaddaDsr();
+        _loading = false;
+    }
+
+    private async Task LaddaDsr()
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         try
@@ -130,21 +155,66 @@ else
             _expiredCount = _requests.Count(r => r.ArForsenad);
             _pendingCount = _requests.Count(r => r.Status == RequestStatus.Mottagen || r.Status == RequestStatus.UnderBehandling);
 
-            if (_requests.Count > 0)
-            {
-                var completed = _requests.Count(r => r.Status == RequestStatus.Klar);
-                _compliancePercent = (int)((double)completed / _requests.Count * 100);
-            }
+            _compliancePercent = _requests.Count > 0
+                ? (int)((double)_requests.Count(r => r.Status == RequestStatus.Klar) / _requests.Count * 100)
+                : 0;
         }
         catch (Exception ex) { _error = $"Kunde inte hämta GDPR-data: {ex.Message}"; }
-        finally { _loading = false; }
     }
 
     private void GenereraRegisterutdrag()
     {
         _showRegisterutdrag = true;
         _registerutdragResult = null;
+        _nedladdningsInfo = null;
         _registerutdragAnstallId = "";
+    }
+
+    private async Task LaddaNer(string format)
+    {
+        _nedladdningsInfo = null;
+        if (!Guid.TryParse(_registerutdragAnstallId, out var anstallId))
+        {
+            _registerutdragResult = "Ogiltigt anställd-ID. Ange ett giltigt GUID.";
+            return;
+        }
+
+        _genererar = true;
+        try
+        {
+            // Anropar den kanoniska infrastruktur-generatorn (samma väg som REST-API:t).
+            var json = await Generator.GenerateAsync(anstallId);
+            var kort = anstallId.ToString()[..8];
+
+            if (format == "pdf")
+            {
+                var bytes = Pdf.GenerateEnkeltDokument("Registerutdrag enligt GDPR Art 15", json);
+                await JS.InvokeVoidAsync("downloadFile", $"registerutdrag_{kort}.pdf",
+                    Convert.ToBase64String(bytes), "application/pdf");
+            }
+            else
+            {
+                var bytes = new byte[] { 0xEF, 0xBB, 0xBF }
+                    .Concat(System.Text.Encoding.UTF8.GetBytes(json)).ToArray();
+                await JS.InvokeVoidAsync("downloadFile", $"registerutdrag_{kort}.json",
+                    Convert.ToBase64String(bytes), "application/json");
+            }
+
+            // Logga begäran som en slutförd DSR så listan och efterlevnadsmåtten blir riktiga.
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var dsr = DataSubjectRequest.Skapa(anstallId, RequestType.Registerutdrag);
+            dsr.Slutfor($"registerutdrag_{kort}.{format}");
+            db.DataSubjectRequests.Add(dsr);
+            await db.SaveChangesAsync();
+            await LaddaDsr();
+
+            _nedladdningsInfo = $"Registerutdrag ({format.ToUpper()}) genererat och loggat som slutförd DSR.";
+        }
+        catch (Exception ex)
+        {
+            _registerutdragResult = $"Kunde inte generera registerutdrag: {ex.Message}";
+        }
+        finally { _genererar = false; }
     }
 
     private async Task HamtaRegisterutdrag()

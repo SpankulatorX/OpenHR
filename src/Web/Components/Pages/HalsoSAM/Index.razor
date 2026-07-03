@@ -165,6 +165,12 @@ else
                                     </MudTimeline>
 
                                     <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                                               Href="@($"/halsosam/{c.Id}")"
+                                               StartIcon="@Icons.Material.Filled.ManageAccounts">
+                                        Hantera ärende
+                                    </MudButton>
+                                    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Small"
+                                               Class="ml-2"
                                                Href="@($"/halsosam/{c.Id}/uppfoljning")"
                                                StartIcon="@Icons.Material.Filled.EventAvailable">
                                         Registrera uppföljning

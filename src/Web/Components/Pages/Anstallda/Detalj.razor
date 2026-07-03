@@ -165,10 +165,38 @@
 
         <MudTabPanel Text="LAS" Icon="@Icons.Material.Filled.Warning">
             <MudText Typo="Typo.h6" Class="mb-3">LAS-information</MudText>
-            <MudAlert Severity="Severity.Info" Class="mb-3">Tillsvidareanställd — LAS ej tillämpligt</MudAlert>
-            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
-                Denna anställd har en tillsvidareanställning. LAS-ackumulering f&#246;r konvertering gäller inte.
-            </MudText>
+            @{
+                var aktivLas = _emp.AktivAnstallning(DateOnly.FromDateTime(DateTime.Today))
+                               ?? _emp.Anstallningar.OrderByDescending(a => a.Giltighetsperiod.Start).FirstOrDefault();
+            }
+            @if (aktivLas is null)
+            {
+                <MudAlert Severity="Severity.Info" Class="mb-3">Ingen aktiv anställning registrerad — LAS-uppföljning är inte tillämplig.</MudAlert>
+            }
+            else if (aktivLas.ArTillsvidareanstallning)
+            {
+                <MudAlert Severity="Severity.Success" Class="mb-3">Tillsvidareanställd — LAS-ackumulering för konvertering är inte tillämplig.</MudAlert>
+                <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+                    En tillsvidareanställning har redan det anställningsskydd som LAS-konverteringen syftar till. Ackumulering av visstidsdagar sker inte.
+                </MudText>
+            }
+            else if (aktivLas.ArProvanstallning)
+            {
+                <MudAlert Severity="Severity.Warning" Class="mb-3">Provanställning — övergår till tillsvidareanställning om den inte avbryts (LAS 6 §, högst 6 månader).</MudAlert>
+                <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+                    Anställd sedan @aktivLas.Giltighetsperiod.Start.ToString("yyyy-MM-dd")@(aktivLas.Giltighetsperiod.End is { } slut ? $", planerat slut {slut:yyyy-MM-dd}" : ""). Om provanställningen inte avbryts i tid övergår den automatiskt i en tillsvidareanställning.
+                </MudText>
+            }
+            else
+            {
+                <MudAlert Severity="Severity.Warning" Class="mb-3">Tidsbegränsad anställning (@aktivLas.Anstallningsform) — LAS-dagar ackumuleras mot konvertering till tillsvidareanställning.</MudAlert>
+                <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
+                    Anställd sedan @aktivLas.Giltighetsperiod.Start.ToString("yyyy-MM-dd")@(aktivLas.Giltighetsperiod.End is { } slut ? $", t.o.m. {slut:yyyy-MM-dd}" : ""). Ackumulerade LAS-dagar och konverteringströsklar (SÄVA/vikariat) följs upp i LAS-modulen.
+                </MudText>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.OpenInNew" Href="/las">
+                    Öppna LAS-uppföljning
+                </MudButton>
+            }
         </MudTabPanel>
 
         <MudTabPanel Text="Kompetens" Icon="@Icons.Material.Filled.School">

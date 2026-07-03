@@ -13,7 +13,14 @@
 
 <div class="d-flex justify-space-between align-center mb-4">
     <MudText Typo="Typo.h4" Style="font-weight: 700;">Schemaoptimering</MudText>
+    <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/schema/bemanningsmallar"
+               StartIcon="@Icons.Material.Filled.EditCalendar">Bemanningsmallar</MudButton>
 </div>
+
+<MudText Typo="Typo.body1" Class="mb-5" Style="color: var(--mud-palette-text-secondary);">
+    Constraint-lösaren genererar ett bemanningsförslag för perioden (dag- och kvällspass) som
+    respekterar Arbetstidslagen. Granska förslaget nedan och spara det som ett schemautkast.
+</MudText>
 
 <MudGrid Spacing="3" Class="mb-6">
     <MudItem xs="12" sm="4">
@@ -60,8 +67,8 @@
         </MudItem>
         <MudItem xs="6" sm="3">
             <MudPaper Class="pa-4 text-center" Elevation="2">
-                <MudText Typo="Typo.h4" Color="Color.Info" Style="font-weight: 700;">@_resultat.TotalOvertidKostnad.ToString("N0") kr</MudText>
-                <MudText Typo="Typo.body2">Overtidskostnad</MudText>
+                <MudText Typo="Typo.h4" Color="Color.Info" Style="font-weight: 700;">@_obemannade</MudText>
+                <MudText Typo="Typo.body2">Obemannade behov</MudText>
             </MudPaper>
         </MudItem>
         <MudItem xs="6" sm="3">
@@ -74,16 +81,57 @@
         </MudItem>
     </MudGrid>
 
-    <MudAlert Severity="@(_resultat.ATLKompliant ? Severity.Success : Severity.Warning)" Class="mb-4">
-        @if (_resultat.ATLKompliant)
+    <MudAlert Severity="@(_obemannade == 0 ? Severity.Success : Severity.Warning)" Class="mb-4">
+        @if (_obemannade == 0)
         {
-            <span>Optimeringen genererade @_resultat.GenereradePass pass som uppfyller alla ATL-krav.</span>
+            <span>Optimeringen genererade @_resultat.GenereradePass pass som täcker hela behovet och uppfyller ATL.</span>
         }
         else
         {
-            <span>Varning: Inte alla pass kunde bemannas. Kontrollera bemanning manuellt.</span>
+            <span>@_obemannade behov kunde inte bemannas (personalbrist eller ATL-begränsning). Inget pass har schemalagts olagligt.</span>
         }
     </MudAlert>
+
+    @if (_solution is not null && _solution.Tilldelningar.Count > 0)
+    {
+        <div class="d-flex justify-space-between align-center mb-3">
+            <MudText Typo="Typo.h6">Genererade pass — förhandsvy</MudText>
+            <div class="d-flex gap-2">
+                @if (_sparatSchemaId is not null)
+                {
+                    <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                               Href="@($"/schema/redigera/{_sparatSchemaId}")"
+                               StartIcon="@Icons.Material.Filled.GridView">Öppna i schemaredigeraren</MudButton>
+                }
+                <MudButton Variant="Variant.Filled" Color="Color.Success" OnClick="SparaSchema"
+                           Disabled="@(_sparar || _sparatSchemaId is not null)"
+                           StartIcon="@Icons.Material.Filled.Save">
+                    @if (_sparar)
+                    {
+                        <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Surface" Class="mr-2" />
+                    }
+                    @(_sparatSchemaId is null ? "Spara som schema (utkast)" : "Sparat")
+                </MudButton>
+            </div>
+        </div>
+
+        <MudTable Items="_forhandsPass" Hover="true" Elevation="2" Dense="true" Class="mb-6">
+            <HeaderContent>
+                <MudTh>Datum</MudTh>
+                <MudTh>Dag</MudTh>
+                <MudTh>Pass</MudTh>
+                <MudTh>Tid</MudTh>
+                <MudTh>Anställd</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Datum">@context.Datum.ToString("yyyy-MM-dd")</MudTd>
+                <MudTd DataLabel="Dag">@_sv.DateTimeFormat.GetAbbreviatedDayName(context.Datum.DayOfWeek)</MudTd>
+                <MudTd DataLabel="Pass">@context.PassTyp</MudTd>
+                <MudTd DataLabel="Tid">@context.Start.ToString("HH:mm")–@context.Slut.ToString("HH:mm")</MudTd>
+                <MudTd DataLabel="Anställd">@context.Namn</MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
 }
 
 <MudText Typo="Typo.h6" Class="mb-3">Tidigare korningar</MudText>
@@ -116,13 +164,26 @@
 </MudTable>
 
 @code {
+    private static readonly System.Globalization.CultureInfo _sv = System.Globalization.CultureInfo.GetCultureInfo("sv-SE");
+
     private List<OrganizationUnit> _enheter = [];
     private List<SchedulingRun> _tidigareKorningar = [];
     private Guid _valdEnhet;
     private DateTime? _periodFran = DateTime.Today;
     private DateTime? _periodTill = DateTime.Today.AddDays(7);
     private bool _optimerar;
+    private bool _sparar;
     private SchedulingRun? _resultat;
+
+    // Det senaste genererade förslaget (behålls så att det kan sparas som schema).
+    private ScheduleSolution? _solution;
+    private int _obemannade;
+    private Guid _optimeradEnhet;
+    private DateOnly _optimeradFran;
+    private DateOnly _optimeradTill;
+    private Guid? _sparatSchemaId;
+    private Dictionary<Guid, string> _namnMap = [];
+    private List<ForhandsPass> _forhandsPass = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -140,8 +201,15 @@
     {
         await using var db = await DbFactory.CreateDbContextAsync();
         if (_valdEnhet == Guid.Empty || _periodFran is null || _periodTill is null) return;
+        if (_periodTill < _periodFran)
+        {
+            Snackbar.Add("Slutdatum kan inte vara före startdatum.", Severity.Error);
+            return;
+        }
 
         _optimerar = true;
+        _sparatSchemaId = null;
+        _solution = null;
         StateHasChanged();
 
         try
@@ -156,8 +224,13 @@
             var solver = new ConstraintScheduleSolver();
             var employees = await db.Employees.Include(e => e.Anstallningar).ToListAsync();
             var idag = DateOnly.FromDateTime(DateTime.Today);
-            var personal = employees
+            var enhetsAnstallda = employees
                 .Where(e => e.Anstallningar.Any(a => a.EnhetId == OrganizationId.From(_valdEnhet) && a.Giltighetsperiod.IsActiveOn(idag)))
+                .ToList();
+
+            _namnMap = enhetsAnstallda.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
+
+            var personal = enhetsAnstallda
                 .Select(e => new PersonalInfo
                 {
                     AnstallId = e.Id,
@@ -188,6 +261,19 @@
             await db.SchedulingRuns.AddAsync(run);
             await db.SaveChangesAsync();
 
+            // Behåll förslaget för att kunna spara det som schema, och bygg förhandsvyn.
+            _solution = solution;
+            _obemannade = solution.ObemannadeBehov.Count;
+            _optimeradEnhet = _valdEnhet;
+            _optimeradFran = fran;
+            _optimeradTill = till;
+            _forhandsPass = solution.Tilldelningar
+                .OrderBy(a => a.Datum).ThenBy(a => a.Start)
+                .Select(a => new ForhandsPass(
+                    a.Datum, a.PassTyp, a.Start, a.Slut,
+                    _namnMap.GetValueOrDefault(a.AnstallId.Value, "Okänd")))
+                .ToList();
+
             _resultat = run;
             _tidigareKorningar.Insert(0, run);
             Snackbar.Add($"Optimering klar! {run.GenereradePass} pass genererade.", Severity.Success);
@@ -202,6 +288,39 @@
         }
     }
 
+    private async Task SparaSchema()
+    {
+        if (_solution is null || _solution.Tilldelningar.Count == 0 || _sparatSchemaId is not null) return;
+
+        _sparar = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var enhet = OrganizationId.From(_optimeradEnhet);
+            var schema = Schedule.SkapaPeriodschema(
+                enhet, $"Optimering {_optimeradFran:yyyy-MM-dd}–{_optimeradTill:yyyy-MM-dd}", _optimeradFran, _optimeradTill);
+
+            foreach (var a in _solution.Tilldelningar)
+            {
+                schema.LaggTillPass(a.AnstallId, a.Datum, a.PassTyp, a.Start, a.Slut, a.Rast);
+            }
+
+            db.Schedules.Add(schema);
+            await db.SaveChangesAsync();
+
+            _sparatSchemaId = schema.Id.Value;
+            Snackbar.Add($"Schema sparat som utkast med {_solution.Tilldelningar.Count} pass.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte spara schema: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _sparar = false;
+        }
+    }
+
     private static Color RunStatusColor(string status) => status switch
     {
         "Complete" => Color.Success,
@@ -209,5 +328,6 @@
         "Failed" => Color.Error,
         _ => Color.Default
     };
-}
 
+    private readonly record struct ForhandsPass(DateOnly Datum, ShiftType PassTyp, TimeOnly Start, TimeOnly Slut, string Namn);
+}

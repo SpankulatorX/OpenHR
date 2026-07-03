@@ -2,8 +2,10 @@
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.Offboarding.Domain
+@using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
 
 <PageTitle>OpenHR - Offboarding</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -16,69 +18,71 @@
     <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
 }
 
-<MudSimpleTable Hover="true" Elevation="2">
-    <thead>
-        <tr>
-            <th>Anställd</th>
-            <th>Anledning</th>
-            <th>Sista dag</th>
-            <th>Status</th>
-            <th>Checklista</th>
-            <th></th>
-        </tr>
-    </thead>
-    <tbody>
-        @foreach (var c in _cases)
-        {
-            var total = c.Steg.Count;
-            var done = c.Steg.Count(s => s.Klar);
-            var pct = total > 0 ? (int)(100.0 * done / total) : 0;
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_cases.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga offboarding-ärenden registrerade.</MudAlert>
+}
+else
+{
+    <MudSimpleTable Hover="true" Elevation="2">
+        <thead>
             <tr>
-                <td>@c.AnstallId.ToString()[..8]...</td>
-                <td>@AnledningText(c.Anledning)</td>
-                <td>@c.SistaArbetsdag.ToString("yyyy-MM-dd")</td>
-                <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(c.Status)">@StatusText(c.Status)</MudChip></td>
-                <td><MudProgressLinear Color="@ProgressFarg(pct)" Value="@pct" Style="min-width: 100px;" /> <MudText Typo="Typo.caption">@done/@total</MudText></td>
-                <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => ValjArende(c))">Öppna</MudButton></td>
+                <th>Anställd</th>
+                <th>Anledning</th>
+                <th>Sista dag</th>
+                <th>Status</th>
+                <th>Checklista</th>
+                <th></th>
             </tr>
-            @if (_valdArende == c)
+        </thead>
+        <tbody>
+            @foreach (var c in _cases)
             {
-                <tr>
-                    <td colspan="6">
-                        <MudPaper Class="pa-4" Elevation="0" Style="background: var(--mud-palette-background-grey);">
-                            <MudText Typo="Typo.subtitle1" Class="mb-2"><strong>Offboarding — @c.AnstallId.ToString()[..8]...</strong></MudText>
-                            <MudText Typo="Typo.body2"><strong>Anledning:</strong> @AnledningText(c.Anledning)</MudText>
-                            <MudText Typo="Typo.body2"><strong>Sista arbetsdag:</strong> @c.SistaArbetsdag.ToString("yyyy-MM-dd")</MudText>
-                            <MudText Typo="Typo.body2"><strong>Status:</strong> @StatusText(c.Status)</MudText>
-                            <MudText Typo="Typo.body2"><strong>Checklista:</strong> @c.Steg.Count(s => s.Klar) / @c.Steg.Count klara</MudText>
-                            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="@(() => _valdArende = null)" Class="mt-2">Stäng</MudButton>
-                        </MudPaper>
-                    </td>
+                var total = c.Steg.Count;
+                var done = c.Steg.Count(s => s.Klar);
+                var pct = total > 0 ? (int)(100.0 * done / total) : 0;
+                <tr style="cursor: pointer;" @onclick="@(() => Nav.NavigateTo($"/offboarding/{c.Id}"))">
+                    <td><strong>@Namn(c.AnstallId)</strong></td>
+                    <td>@AnledningText(c.Anledning)</td>
+                    <td>@c.SistaArbetsdag.ToString("yyyy-MM-dd")</td>
+                    <td><MudChip T="string" Size="Size.Small" Color="@StatusFarg(c.Status)">@StatusText(c.Status)</MudChip></td>
+                    <td><MudProgressLinear Color="@ProgressFarg(pct)" Value="@pct" Style="min-width: 100px;" /> <MudText Typo="Typo.caption">@done/@total</MudText></td>
+                    <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Nav.NavigateTo($"/offboarding/{c.Id}"))">Öppna</MudButton></td>
                 </tr>
             }
-        }
-    </tbody>
-</MudSimpleTable>
+        </tbody>
+    </MudSimpleTable>
+}
 
 @code {
     private List<OffboardingCase> _cases = [];
-    private OffboardingCase? _valdArende;
+    private Dictionary<Guid, string> _namn = new();
+    private bool _loading = true;
     private string? _error;
 
-    private void ValjArende(OffboardingCase c) => _valdArende = _valdArende == c ? null : c;
+    private string Namn(Guid anstallId) => _namn.GetValueOrDefault(anstallId, "Okänd anställd");
 
     protected override async Task OnInitializedAsync()
     {
-        using var db = DbFactory.CreateDbContext();
         try
         {
+            await using var db = await DbFactory.CreateDbContextAsync();
             _cases = await db.OffboardingCases
                 .Include(c => c.Steg)
                 .OrderByDescending(c => c.SkapadVid)
                 .Take(50)
                 .ToListAsync();
+
+            var ids = _cases.Select(c => new EmployeeId(c.AnstallId)).Distinct().ToList();
+            var employees = await db.Employees.Where(e => ids.Contains(e.Id)).ToListAsync();
+            _namn = employees.ToDictionary(e => e.Id.Value, e => $"{e.Fornamn} {e.Efternamn}");
         }
         catch (Exception ex) { _error = $"Kunde inte hämta offboarding-ärenden: {ex.Message}"; }
+        finally { _loading = false; }
     }
 
     private static string AnledningText(AvslutAnledning a) => a switch
@@ -117,4 +121,3 @@
         _ => Color.Info
     };
 }
-

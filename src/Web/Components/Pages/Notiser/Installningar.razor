@@ -85,6 +85,10 @@ else
         _saving = true; _error = null;
         try
         {
+            // _prefs laddades/muterades i init-contexten (nu disposad). Denna context
+            // trackar dem inte, så en naken SaveChanges vore en no-op. Markera dem som
+            // ändrade i denna context så de faktiskt persisteras.
+            db.NotificationPreferences.UpdateRange(_prefs);
             await db.SaveChangesAsync();
             _sparad = true;
             _dirty = false;

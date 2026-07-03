@@ -9,20 +9,25 @@
 <MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Rapportbibliotek</MudText>
 
 <MudGrid Spacing="3" Class="mb-6">
-    <MudItem xs="4"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-primary);"><MudText Typo="Typo.h3" Color="Color.Primary" Style="font-weight: 700;">12</MudText><MudText Typo="Typo.body2">Standardrapporter</MudText></MudPaper></MudItem>
-    <MudItem xs="4"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-info);"><MudText Typo="Typo.h3" Color="Color.Info" Style="font-weight: 700;">3</MudText><MudText Typo="Typo.body2">Schemalagda</MudText></MudPaper></MudItem>
-    <MudItem xs="4"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-success);"><MudText Typo="Typo.h3" Color="Color.Success" Style="font-weight: 700;">47</MudText><MudText Typo="Typo.body2">Körda senaste 30 d</MudText></MudPaper></MudItem>
+    <MudItem xs="4"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-primary);"><MudText Typo="Typo.h3" Color="Color.Primary" Style="font-weight: 700;">@Standardrapporter.Count</MudText><MudText Typo="Typo.body2">Standardrapporter</MudText></MudPaper></MudItem>
+    <MudItem xs="4"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-info);"><MudText Typo="Typo.h3" Color="Color.Info" Style="font-weight: 700;">@_scheduledReports.Count</MudText><MudText Typo="Typo.body2">Schemalagda</MudText></MudPaper></MudItem>
+    <MudItem xs="4"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-success);"><MudText Typo="Typo.h3" Color="Color.Success" Style="font-weight: 700;">@_korda30d</MudText><MudText Typo="Typo.body2">Körda senaste 30 d</MudText></MudPaper></MudItem>
 </MudGrid>
 
 <MudText Typo="Typo.h6" Class="mb-3">Standardrapporter</MudText>
 <MudSimpleTable Hover="true" Elevation="2">
     <thead><tr><th>Rapport</th><th>Beskrivning</th><th>Kategori</th><th>Format</th><th>Åtgärd</th></tr></thead>
     <tbody>
-        <tr><td><strong>Personalförteckning</strong></td><td>Komplett lista över aktiva anställda med befattning och enhet</td><td>Personal</td><td>Excel / PDF</td><td><MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Href="/rapporter/kor/Personalförteckning">Kör</MudButton></td></tr>
-        <tr><td><strong>Löneregister</strong></td><td>Lönespecifikationer per period med brutto, netto och avdrag</td><td>Lön</td><td>Excel / PDF</td><td><MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Href="/rapporter/kor/Löneregister">Kör</MudButton></td></tr>
-        <tr><td><strong>Frånvarostatistik</strong></td><td>Sjukfrånvaro, VAB och övrig frånvaro per enhet och period</td><td>Frånvaro</td><td>Excel / PDF</td><td><MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Href="/rapporter/kor/Frånvarostatistik">Kör</MudButton></td></tr>
-        <tr><td><strong>LAS-status</strong></td><td>Ackumulerade dagar för vikarier och SAVA med varningsnivåer</td><td>Juridik</td><td>Excel / PDF</td><td><MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Href="/rapporter/kor/LAS-status">Kör</MudButton></td></tr>
-        <tr><td><strong>Bemanningsanalys</strong></td><td>Bemanningsgrad per enhet, dag och skifttyp med avvikelser</td><td>Schema</td><td>Excel / PDF</td><td><MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Href="/rapporter/kor/Bemanningsanalys">Kör</MudButton></td></tr>
+        @foreach (var r in Standardrapporter)
+        {
+            <tr>
+                <td><strong>@r.Namn</strong></td>
+                <td>@r.Beskrivning</td>
+                <td>@r.Kategori</td>
+                <td>@r.Format</td>
+                <td><MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" Href="@($"/rapporter/kor/{r.Namn}")">Kör</MudButton></td>
+            </tr>
+        }
     </tbody>
 </MudSimpleTable>
 
@@ -62,6 +67,20 @@
 
 @code {
     private List<ReportDefinition> _scheduledReports = [];
+    private int _korda30d;
+
+    private record StandardRapport(string Namn, string Beskrivning, string Kategori, string Format);
+
+    // Standardrapporterna som kan köras via /rapporter/kor/{Namn} (se KorRapport.razor).
+    // Kortet "Standardrapporter" räknar denna lista så siffran aldrig kan divergera från raderna.
+    private static readonly List<StandardRapport> Standardrapporter =
+    [
+        new("Personalförteckning", "Komplett lista över aktiva anställda med befattning och enhet", "Personal", "Excel / CSV"),
+        new("Löneregister", "Lönespecifikationer per period med brutto, netto och avdrag", "Lön", "Excel / CSV"),
+        new("Frånvarostatistik", "Sjukfrånvaro, VAB och övrig frånvaro per enhet och period", "Frånvaro", "Excel / CSV"),
+        new("LAS-status", "Ackumulerade dagar för vikarier och SAVA med varningsnivåer", "Juridik", "Excel / CSV"),
+        new("Bemanningsanalys", "Bemanningsgrad per enhet, dag och skifttyp med avvikelser", "Schema", "Excel / CSV"),
+    ];
 
     protected override async Task OnInitializedAsync()
     {
@@ -72,6 +91,10 @@
                 .Where(r => r.CronExpression != null)
                 .OrderBy(r => r.Namn)
                 .ToListAsync();
+
+            // Verkligt antal loggade rapportkörningar (KorRapport.razor + API loggar ReportExecution).
+            var sedan = DateTime.UtcNow.AddDays(-30);
+            _korda30d = await db.ReportExecutions.CountAsync(e => e.StartadVid >= sedan);
         }
         catch
         {

@@ -134,6 +134,8 @@ else
     private async Task MarkeraLast(CoachingNudge nudge)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        // nudge laddades i init-contexten — attacha före mutation för att persistera.
+        db.Attach(nudge);
         nudge.MarkeraSomLast();
         await db.SaveChangesAsync();
         _nudges.Remove(nudge);

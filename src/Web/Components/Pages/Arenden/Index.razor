@@ -7,6 +7,7 @@
 @using Microsoft.Extensions.Localization
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject IStringLocalizer<SharedResources> L
+@inject NavigationManager Nav
 
 <PageTitle>OpenHR - @L["Cases"]</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -37,16 +38,17 @@ else
     else
     {
         <MudSimpleTable Hover="true" Elevation="2">
-            <thead><tr><th>@L["Type"]</th><th>@L["Employee"]</th><th>@L["Description"]</th><th>@L["Status"]</th><th>@L["Created"]</th></tr></thead>
+            <thead><tr><th>@L["Type"]</th><th>@L["Employee"]</th><th>@L["Description"]</th><th>@L["Status"]</th><th>@L["Created"]</th><th></th></tr></thead>
             <tbody>
                 @foreach (var r in _rader)
                 {
-                    <tr>
+                    <tr @onclick="@(() => Nav.NavigateTo($"/arenden/{r.Id}"))" style="cursor: pointer;">
                         <td><MudChip T="string" Size="Size.Small">@r.Typ</MudChip></td>
                         <td><strong>@r.Anstalld</strong></td>
                         <td>@r.Beskrivning</td>
                         <td><MudChip T="string" Size="Size.Small" Color="@r.StatusFarg">@r.StatusText</MudChip></td>
                         <td>@r.Skapad</td>
+                        <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" Href="@($"/arenden/{r.Id}")">Visa</MudButton></td>
                     </tr>
                 }
             </tbody>
@@ -77,6 +79,7 @@ else
             var names = employees.ToDictionary(e => e.Id, e => $"{e.Fornamn} {e.Efternamn}");
 
             _rader = cases.Select(c => new ArendeRad(
+                c.Id.Value,
                 MapTyp(c.Typ),
                 names.TryGetValue(c.AnstallId, out var n) ? n : L["Unknown"].Value,
                 c.Beskrivning,
@@ -124,6 +127,6 @@ else
         _ => Color.Default
     };
 
-    private record ArendeRad(string Typ, string Anstalld, string Beskrivning, string StatusText, Color StatusFarg, string Skapad);
+    private record ArendeRad(Guid Id, string Typ, string Anstalld, string Beskrivning, string StatusText, Color StatusFarg, string Skapad);
 }
 

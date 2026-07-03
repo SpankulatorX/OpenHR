@@ -143,14 +143,14 @@ else
     private async Task OppnaSurvey(ONASurvey survey)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { survey.Oppna(); await db.SaveChangesAsync(); Snackbar.Add("Undersökning öppnad!", Severity.Success); await LaddaData(); }
+        try { db.Attach(survey); survey.Oppna(); await db.SaveChangesAsync(); Snackbar.Add("Undersökning öppnad!", Severity.Success); await LaddaData(); }
         catch (Exception ex) { _error = ex.Message; }
     }
 
     private async Task StangSurvey(ONASurvey survey)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { survey.Stang(); await db.SaveChangesAsync(); Snackbar.Add("Undersökning stängd.", Severity.Info); await LaddaData(); }
+        try { db.Attach(survey); survey.Stang(); await db.SaveChangesAsync(); Snackbar.Add("Undersökning stängd.", Severity.Info); await LaddaData(); }
         catch (Exception ex) { _error = ex.Message; }
     }
 
@@ -159,6 +159,8 @@ else
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
+            // survey laddades i init-contexten — attacha så statusändringen persisteras.
+            db.Attach(survey);
             var responses = await db.ONAResponses.Where(r => r.SurveyId == survey.Id).ToListAsync();
             var result = ONACalculationService.Berakna(survey.Id, responses);
 

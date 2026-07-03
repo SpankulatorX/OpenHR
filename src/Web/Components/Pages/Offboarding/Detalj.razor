@@ -1,0 +1,238 @@
+@page "/offboarding/{Id:guid}"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Offboarding.Domain
+@using RegionHR.SharedKernel.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+
+<PageTitle>OpenHR - Offboarding-ärende</PageTitle>
+<MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary" Href="/offboarding" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_case is null)
+{
+    <MudAlert Severity="Severity.Error">Offboarding-ärendet hittades inte.</MudAlert>
+}
+else
+{
+    var total = _case.Steg.Count;
+    var done = _case.Steg.Count(s => s.Klar);
+    var pct = total > 0 ? (int)(100.0 * done / total) : 0;
+
+    <div class="d-flex justify-space-between align-center mb-4">
+        <div>
+            <MudText Typo="Typo.h4" Style="font-weight: 700;">Offboarding — @_anstalldNamn</MudText>
+            <MudText Typo="Typo.body1" Style="color: var(--mud-palette-text-secondary);">@AnledningText(_case.Anledning) · sista arbetsdag @_case.SistaArbetsdag.ToString("yyyy-MM-dd")</MudText>
+        </div>
+        <MudChip T="string" Size="Size.Medium" Color="@StatusFarg(_case.Status)">@StatusText(_case.Status)</MudChip>
+    </div>
+
+    @if (_success != null)
+    {
+        <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _success = null)">@_success</MudAlert>
+    }
+    @if (_error != null)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+    }
+
+    <MudGrid Spacing="4">
+        <MudItem xs="12" md="7">
+            <MudPaper Class="pa-5" Elevation="2">
+                <div class="d-flex justify-space-between align-center mb-3">
+                    <MudText Typo="Typo.h6">Checklista</MudText>
+                    <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">@done / @total klara</MudText>
+                </div>
+                <MudProgressLinear Color="@ProgressFarg(pct)" Value="@pct" Class="mb-4" Style="height: 8px; border-radius: 4px;" />
+
+                @for (int i = 0; i < _case.Steg.Count; i++)
+                {
+                    var index = i;
+                    var steg = _case.Steg[i];
+                    <div class="d-flex align-center" style="gap: 0.5rem; padding: 0.35rem 0; border-bottom: 1px solid var(--mud-palette-lines-default);">
+                        <MudCheckBox T="bool" Value="@steg.Klar" Color="Color.Success"
+                                     Disabled="@(steg.Klar || _saving || _case.Status == OffboardingStatus.Slutford)"
+                                     ValueChanged="@(_ => MarkeraSteg(index))" />
+                        <div style="flex: 1;">
+                            <MudText Typo="Typo.body1" Style="@(steg.Klar ? "text-decoration: line-through; color: var(--mud-palette-text-secondary);" : "")">@steg.Beskrivning</MudText>
+                            @if (steg.Klar && steg.KlarVid.HasValue)
+                            {
+                                <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">Klar @steg.KlarVid.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</MudText>
+                            }
+                        </div>
+                    </div>
+                }
+
+                <div class="mt-4">
+                    @if (_case.Status == OffboardingStatus.Slutford)
+                    {
+                        <MudAlert Severity="Severity.Success" Variant="Variant.Text">
+                            Offboarding slutförd @(_case.SlutfordVid?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")).
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Large" Style="min-height: 48px;"
+                                   StartIcon="@Icons.Material.Filled.CheckCircle" Disabled="@(_saving || done < total)" OnClick="Slutfor">
+                            Slutför offboarding
+                        </MudButton>
+                        @if (done < total)
+                        {
+                            <MudText Typo="Typo.caption" Class="ml-2" Style="color: var(--mud-palette-text-secondary);">Alla steg måste vara klara innan ärendet kan slutföras.</MudText>
+                        }
+                    }
+                </div>
+            </MudPaper>
+        </MudItem>
+
+        <MudItem xs="12" md="5">
+            <MudPaper Class="pa-5 mb-4" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">Exit-samtal</MudText>
+                @if (_case.ExitSamtalGenomfort)
+                {
+                    <MudAlert Severity="Severity.Success" Variant="Variant.Text" Class="mb-2">Exit-samtal genomfört</MudAlert>
+                    <MudText Typo="Typo.body2" Style="white-space: pre-wrap;">@(_case.ExitSamtalKommentar ?? "")</MudText>
+                }
+                <MudTextField @bind-Value="_exitKommentar" Label="Kommentar från exit-samtal" Variant="Variant.Outlined"
+                              Lines="3" Class="mb-2" Disabled="@(_case.Status == OffboardingStatus.Slutford)" />
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.RecordVoiceOver"
+                           Style="min-height: 48px;" Disabled="@(_saving || string.IsNullOrWhiteSpace(_exitKommentar) || _case.Status == OffboardingStatus.Slutford)"
+                           OnClick="RegistreraExitSamtal">
+                    @(_case.ExitSamtalGenomfort ? "Uppdatera exit-samtal" : "Registrera exit-samtal")
+                </MudButton>
+            </MudPaper>
+
+            <MudPaper Class="pa-5" Elevation="2">
+                <MudText Typo="Typo.h6" Class="mb-3">Återanställningsbarhet</MudText>
+                <MudText Typo="Typo.body2" Class="mb-2">
+                    Nuvarande status:
+                    <MudChip T="string" Size="Size.Small" Color="@(_case.ArReHireEligible ? Color.Success : Color.Error)">
+                        @(_case.ArReHireEligible ? "Återanställningsbar" : "Ej återanställningsbar")
+                    </MudChip>
+                </MudText>
+                <MudCheckBox T="bool" @bind-Value="_reHireEligible" Label="Kan återanställas" Disabled="@(_case.Status == OffboardingStatus.Slutford)" />
+                <MudTextField @bind-Value="_reHireKommentar" Label="Kommentar (valfritt)" Variant="Variant.Outlined" Class="mb-2" Disabled="@(_case.Status == OffboardingStatus.Slutford)" />
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save"
+                           Style="min-height: 48px;" Disabled="@(_saving || _case.Status == OffboardingStatus.Slutford)" OnClick="SattReHire">
+                    Spara
+                </MudButton>
+            </MudPaper>
+        </MudItem>
+    </MudGrid>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private OffboardingCase? _case;
+    private bool _loading = true, _saving;
+    private string? _error, _success;
+    private string _anstalldNamn = "";
+
+    private string _exitKommentar = "";
+    private bool _reHireEligible = true;
+    private string _reHireKommentar = "";
+
+    protected override async Task OnInitializedAsync() => await LaddaAsync();
+
+    private async Task LaddaAsync()
+    {
+        _loading = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _case = await db.OffboardingCases
+                .Include(c => c.Steg)
+                .FirstOrDefaultAsync(c => c.Id == Id);
+
+            if (_case is null) { _loading = false; return; }
+
+            var emp = await db.Employees.FirstOrDefaultAsync(e => e.Id == EmployeeId.From(_case.AnstallId));
+            _anstalldNamn = emp != null ? $"{emp.Fornamn} {emp.Efternamn}" : "Okänd anställd";
+
+            _reHireEligible = _case.ArReHireEligible;
+            _reHireKommentar = _case.ReHireKommentar ?? "";
+        }
+        catch (Exception ex) { _error = $"Kunde inte hämta ärendet: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task UtforAsync(Action<OffboardingCase> mutate, string ok)
+    {
+        _saving = true; _error = null; _success = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var c = await db.OffboardingCases.Include(x => x.Steg).FirstOrDefaultAsync(x => x.Id == Id);
+            if (c is null) { _error = "Ärendet hittades inte längre."; return; }
+            mutate(c);
+            await db.SaveChangesAsync();
+            _success = ok;
+            await LaddaAsync();
+        }
+        catch (InvalidOperationException ex) { _error = ex.Message; }
+        catch (ArgumentOutOfRangeException) { _error = "Ogiltigt checklistesteg."; }
+        catch (Exception ex) { _error = $"Åtgärden kunde inte genomföras: {ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task MarkeraSteg(int index)
+        => await UtforAsync(c => c.MarkeraStegKlart(index), "Checklistesteget markerades som klart.");
+
+    private async Task Slutfor()
+        => await UtforAsync(c => c.Slutfor(), "Offboarding-ärendet är slutfört.");
+
+    private async Task RegistreraExitSamtal()
+    {
+        var kommentar = _exitKommentar.Trim();
+        await UtforAsync(c => c.RegistreraExitSamtal(kommentar), "Exit-samtalet är registrerat.");
+        _exitKommentar = "";
+    }
+
+    private async Task SattReHire()
+    {
+        var eligible = _reHireEligible;
+        var kommentar = string.IsNullOrWhiteSpace(_reHireKommentar) ? null : _reHireKommentar.Trim();
+        await UtforAsync(c => c.SattReHireStatus(eligible, kommentar), "Återanställningsstatus sparad.");
+    }
+
+    private static string AnledningText(AvslutAnledning a) => a switch
+    {
+        AvslutAnledning.EgenBegaran => "Egen uppsägning",
+        AvslutAnledning.Uppsagning => "Uppsägning",
+        AvslutAnledning.Pension => "Pension",
+        AvslutAnledning.Vikariat_Slut => "Vikariat slut",
+        AvslutAnledning.Provanstallning_Avbruten => "Provanst. avbruten",
+        AvslutAnledning.Overgang => "Övergång",
+        AvslutAnledning.Dodsfall => "Dödsfall",
+        AvslutAnledning.Annat => "Annat",
+        _ => a.ToString()
+    };
+
+    private static Color StatusFarg(OffboardingStatus s) => s switch
+    {
+        OffboardingStatus.Skapad => Color.Info,
+        OffboardingStatus.Pagar => Color.Warning,
+        OffboardingStatus.Slutford => Color.Success,
+        _ => Color.Default
+    };
+
+    private static string StatusText(OffboardingStatus s) => s switch
+    {
+        OffboardingStatus.Skapad => "Skapad",
+        OffboardingStatus.Pagar => "Pågår",
+        OffboardingStatus.Slutford => "Slutförd",
+        _ => s.ToString()
+    };
+
+    private static Color ProgressFarg(int pct) => pct switch
+    {
+        100 => Color.Success,
+        >= 50 => Color.Warning,
+        _ => Color.Info
+    };
+}

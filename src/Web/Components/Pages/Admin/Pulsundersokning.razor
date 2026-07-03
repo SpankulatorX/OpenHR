@@ -178,14 +178,15 @@ else
     private async Task OppnaEnkat(PulseSurvey s)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { s.Oppna(); await db.SaveChangesAsync(); }
+        // s laddades i init-contexten — attacha före mutation för att persistera.
+        try { db.Attach(s); s.Oppna(); await db.SaveChangesAsync(); }
         catch (Exception ex) { _error = $"Kunde inte öppna: {ex.Message}"; }
     }
 
     private async Task StangEnkat(PulseSurvey s)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { s.Stang(); await db.SaveChangesAsync(); }
+        try { db.Attach(s); s.Stang(); await db.SaveChangesAsync(); }
         catch (Exception ex) { _error = $"Kunde inte stänga: {ex.Message}"; }
     }
 

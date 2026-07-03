@@ -1,13 +1,24 @@
 @page "/lon/statistik"
 @layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Text
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.Payroll.Domain
 @using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
 
 <PageTitle>OpenHR - Lönestatistik</PageTitle>
-<MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Lönestatistik</MudText>
+<div class="d-flex justify-space-between align-center mb-4" style="flex-wrap: wrap; gap: 0.5rem;">
+    <MudText Typo="Typo.h4" Style="font-weight: 700;">Lönestatistik</MudText>
+    @if (!_loading && _runs.Count > 0)
+    {
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Download" OnClick="LaddaNerCsv">
+            Ladda ner CSV
+        </MudButton>
+    }
+</div>
 
 @if (_loading) { <MudProgressCircular Color="Color.Primary" Indeterminate="true" /> }
 else if (_error != null) { <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert> }
@@ -66,5 +77,27 @@ else
     }
 
     private static string FormatKr(decimal v) => $"{v:N0} kr";
+
+    private async Task LaddaNerCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Period;Bruttolon;Arbetsgivaravgifter;Nettolon;Skatt;Antal anstallda");
+        foreach (var r in _runs)
+        {
+            sb.AppendLine(string.Join(';',
+                r.Period,
+                r.TotalBrutto.Amount.ToString("F2"),
+                r.TotalArbetsgivaravgifter.Amount.ToString("F2"),
+                r.TotalNetto.Amount.ToString("F2"),
+                r.TotalSkatt.Amount.ToString("F2"),
+                r.AntalAnstallda));
+        }
+
+        // UTF-8 med BOM så svenska tecken visas rätt i Excel.
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }.Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+        var base64 = Convert.ToBase64String(bytes);
+        await JS.InvokeVoidAsync("downloadFile",
+            $"lonestatistik-{DateTime.Today:yyyyMMdd}.csv", base64, "text/csv");
+    }
 }
 

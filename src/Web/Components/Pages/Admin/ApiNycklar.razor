@@ -137,7 +137,10 @@ else
     private async Task InaktiveraNyckel(RegionHR.Platform.Domain.ApiKey key)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        key.Inaktivera();
+        // key laddades i en annan (disposad) context — hämta spårad entitet här.
+        var tracked = await db.ApiKeys.FirstOrDefaultAsync(k => k.Id == key.Id);
+        if (tracked == null) return;
+        tracked.Inaktivera();
         await db.SaveChangesAsync();
         _success = $"API-nyckel '{key.Namn}' inaktiverad.";
         _newPlaintext = null;

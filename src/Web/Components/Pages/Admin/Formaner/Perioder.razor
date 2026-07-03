@@ -153,14 +153,15 @@ else
     private async Task OppnaPeriod(EnrollmentPeriod p)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { p.Oppna(); await db.SaveChangesAsync(); _success = $"Period '{p.Namn}' öppnad."; }
+        // p laddades i init-contexten — attacha före mutation för att persistera.
+        try { db.Attach(p); p.Oppna(); await db.SaveChangesAsync(); _success = $"Period '{p.Namn}' öppnad."; }
         catch (Exception ex) { _error = $"Fel: {ex.Message}"; }
     }
 
     private async Task StangPeriod(EnrollmentPeriod p)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { p.Stang(); await db.SaveChangesAsync(); _success = $"Period '{p.Namn}' stängd."; }
+        try { db.Attach(p); p.Stang(); await db.SaveChangesAsync(); _success = $"Period '{p.Namn}' stängd."; }
         catch (Exception ex) { _error = $"Fel: {ex.Message}"; }
     }
 

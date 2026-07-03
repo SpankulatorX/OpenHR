@@ -2,9 +2,11 @@
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.Competence.Domain
+@using RegionHR.Notifications.Domain
 @using RegionHR.Web.Components.Shared
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
 
 <PageTitle>OpenHR - Kompetensregister</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -37,6 +39,11 @@
     <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _skapadFel = null)">@_skapadFel</MudAlert>
 }
 
+@if (_actionMsg != null)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _actionMsg = null)">@_actionMsg</MudAlert>
+}
+
 @* --- Expiry alert banner --- *@
 @if (_expiringCount > 0)
 {
@@ -57,40 +64,43 @@
             { "boka", "Boka utbildning" },
             { "paminn", "Påminn anställd" }
         })"
-        OnActionClicked="@HandleExpiryAction" />
+        OnActionClicked="@(key => HandleExpiryAction(key, cert))" />
 }
 
-@* --- Obligatoriska utbildningar per enhet --- *@
+@* --- Obligatoriska utbildningar (kravkatalog per roll) --- *@
 <MudText Typo="Typo.h5" Class="mt-6 mb-3" Style="font-weight: 700;">Obligatoriska utbildningar</MudText>
 <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">
-    Genomförandegrad per enhet för lagstadgade och verksamhetskritiska utbildningar.
+    Kravkatalog: vilka utbildningar som är obligatoriska per roll och hur ofta de behöver förnyas.
 </MudText>
 
-<MudSimpleTable Hover="true" Elevation="2" Class="mb-6">
-    <thead>
-        <tr>
-            <th>Utbildning</th>
-            <th>Enhet</th>
-            <th>Genomförd</th>
-            <th>Andel</th>
-            <th>Status</th>
-        </tr>
-    </thead>
-    <tbody>
-        @foreach (var row in _mandatoryRows)
-        {
+@if (_mandatoryRows.Count == 0)
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mb-6">Inga obligatoriska utbildningar registrerade.</MudAlert>
+}
+else
+{
+    <MudSimpleTable Hover="true" Elevation="2" Class="mb-6">
+        <thead>
             <tr>
-                <td>@row.Utbildning</td>
-                <td>@row.Enhet</td>
-                <td>@row.Genomforda / @row.Totalt</td>
-                <td>
-                    <MudProgressLinear Color="@ProgressColor(row.Andel)" Value="@row.Andel" Class="my-1" Style="min-width: 100px;" />
-                </td>
-                <td><MudChip T="string" Size="Size.Small" Color="@ProgressColor(row.Andel)">@($"{row.Andel:0}%")</MudChip></td>
+                <th>Utbildning</th>
+                <th>Gäller roll</th>
+                <th>Giltighet</th>
+                <th>Beskrivning</th>
             </tr>
-        }
-    </tbody>
-</MudSimpleTable>
+        </thead>
+        <tbody>
+            @foreach (var row in _mandatoryRows)
+            {
+                <tr>
+                    <td><strong>@row.Utbildning</strong></td>
+                    <td>@row.Roll</td>
+                    <td>@GiltighetText(row.GiltighetManader)</td>
+                    <td>@(row.Beskrivning ?? "—")</td>
+                </tr>
+            }
+        </tbody>
+    </MudSimpleTable>
+}
 
 @* --- Full certification table --- *@
 <MudText Typo="Typo.h5" Class="mt-6 mb-3" Style="font-weight: 700;">Alla certifieringar</MudText>
@@ -245,23 +255,64 @@
             System.Diagnostics.Debug.WriteLine($"Kompetens cert load: {ex.Message}");
         }
 
-        // Mandatory training from DB
+        // Obligatoriska utbildningar (kravkatalog) från DB — genuin data, ingen påhittad genomförandegrad.
         var mandatoryTrainings = await db.MandatoryTrainings.ToListAsync();
-        _mandatoryRows = mandatoryTrainings.Select(m => new MandatoryRow(m.UtbildningNamn, m.RollNamn, 0, 0)).ToList();
+        _mandatoryRows = mandatoryTrainings
+            .OrderBy(m => m.RollNamn).ThenBy(m => m.UtbildningNamn)
+            .Select(m => new MandatoryRow(m.UtbildningNamn, m.RollNamn, m.GiltighetManader, m.Beskrivning))
+            .ToList();
     }
 
-    private void HandleExpiryAction(string actionKey)
+    private string? _actionMsg;
+
+    /// <summary>
+    /// Åtgärder på en utgående certifiering: "boka" navigerar till utbildningskatalogen,
+    /// "paminn" skapar en riktig InApp-notis till den berörda anställda (persisteras i DB).
+    /// </summary>
+    private async Task HandleExpiryAction(string actionKey, Certification cert)
     {
-        // Future: route to booking system or send reminder notification
+        _actionMsg = null;
+        _skapadFel = null;
+
+        if (actionKey == "boka")
+        {
+            Nav.NavigateTo("/utbildning/elearning");
+            return;
+        }
+
+        if (actionKey == "paminn")
+        {
+            try
+            {
+                using var db = DbFactory.CreateDbContext();
+                var notis = Notification.Create(
+                    cert.AnstallId,
+                    "Certifiering går ut",
+                    $"Din certifiering \"{cert.Namn}\" går ut {cert.GiltigTill:yyyy-MM-dd}. Boka förnyelse via utbildningskatalogen.",
+                    NotificationType.Reminder,
+                    NotificationChannel.InApp,
+                    actionUrl: "/utbildning/elearning",
+                    relatedEntityType: "Certification",
+                    relatedEntityId: cert.Id.ToString());
+                db.Notifications.Add(notis);
+                await db.SaveChangesAsync();
+                _actionMsg = $"Påminnelse skickad till anställd om \"{cert.Namn}\".";
+            }
+            catch (Exception ex)
+            {
+                _skapadFel = $"Kunde inte skapa påminnelse: {ex.Message}";
+            }
+        }
     }
 
-    // MandatoryRows now loaded from Db.MandatoryTrainings in OnInitializedAsync
-
-    private static Color ProgressColor(double pct) => pct switch
+    private static string GiltighetText(int manader) => manader switch
     {
-        >= 95 => Color.Success,
-        >= 80 => Color.Warning,
-        _ => Color.Error
+        <= 0 => "Engångskrav",
+        12 => "Årligen",
+        24 => "Vartannat år",
+        36 => "Vart tredje år",
+        _ when manader % 12 == 0 => $"Var {manader / 12}:e år",
+        _ => $"Var {manader}:e månad"
     };
 
     private Color CertFarg(Certification c)
@@ -302,9 +353,6 @@
         _ => t.ToString()
     };
 
-    private record MandatoryRow(string Utbildning, string Enhet, int Genomforda, int Totalt)
-    {
-        public double Andel => Totalt > 0 ? (double)Genomforda / Totalt * 100 : 0;
-    }
+    private record MandatoryRow(string Utbildning, string Roll, int GiltighetManader, string? Beskrivning);
 }
 

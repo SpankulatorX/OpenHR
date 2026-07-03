@@ -3,9 +3,13 @@
 @using RegionHR.Web.Services
 @using RegionHR.SharedKernel.Domain
 @using RegionHR.Infrastructure.Export
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Payroll.Domain
+@using RegionHR.Core.Domain
+@using Microsoft.EntityFrameworkCore
 @inject SelfServiceApiClient SelfService
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
 @inject AuthService Auth
-@inject PdfPayslipGenerator PdfGenerator
 @inject IJSRuntime JS
 
 <PageTitle>OpenHR - Min lön</PageTitle>
@@ -17,62 +21,84 @@
 
 <MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">💰 Min lön</MudText>
 
-<MudPaper Class="pa-6 mb-6" Elevation="2">
-    <MudText Typo="Typo.h6" Class="mb-3">@_senastePeriod</MudText>
-    <MudGrid Spacing="3">
-        <MudItem xs="6" sm="3">
-            <MudText Typo="Typo.caption">Bruttolön</MudText>
-            <MudText Typo="Typo.h5" Style="font-weight: 700;">@FormatKr(_senasteBrutto)</MudText>
-        </MudItem>
-        <MudItem xs="6" sm="3">
-            <MudText Typo="Typo.caption">Skatt</MudText>
-            <MudText Typo="Typo.h5" Style="font-weight: 700; color: var(--mud-palette-error);">-@FormatKr(_senasteSkatt)</MudText>
-        </MudItem>
-        <MudItem xs="6" sm="3">
-            <MudText Typo="Typo.caption">Tillägg</MudText>
-            <MudText Typo="Typo.h5" Style="font-weight: 700; color: var(--mud-palette-success);">+@FormatKr(_senasteTillagg)</MudText>
-        </MudItem>
-        <MudItem xs="6" sm="3">
-            <MudText Typo="Typo.caption">Nettolön</MudText>
-            <MudText Typo="Typo.h5" Color="Color.Primary" Style="font-weight: 700;">@FormatKr(_senasteNetto)</MudText>
-        </MudItem>
-    </MudGrid>
+@if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4" ShowCloseIcon="true" CloseIconClicked="@(() => _error = null)">@_error</MudAlert>
+}
 
-    <MudButton Variant="Variant.Outlined" Color="Color.Primary" Class="mt-4"
-               StartIcon="@Icons.Material.Filled.PictureAsPdf"
-               Size="Size.Large" Style="min-height: 48px;"
-               OnClick="@(() => LaddaNerPdf(_senastePeriod, _senasteBrutto, _senasteSkatt, _senasteNetto, _senasteTillagg))">
-        Ladda ner lönespecifikation (PDF)
-    </MudButton>
-</MudPaper>
+@if (string.IsNullOrEmpty(_senastePeriod))
+{
+    <MudAlert Severity="Severity.Info" Variant="Variant.Text">Ingen lönedata registrerad ännu.</MudAlert>
+}
+else
+{
+    <MudPaper Class="pa-6 mb-6" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">@_senastePeriod</MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Bruttolön</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700;">@FormatKr(_senasteBrutto)</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Skatt</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700; color: var(--mud-palette-error);">-@FormatKr(_senasteSkatt)</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Tillägg</MudText>
+                <MudText Typo="Typo.h5" Style="font-weight: 700; color: var(--mud-palette-success);">+@FormatKr(_senasteTillagg)</MudText>
+            </MudItem>
+            <MudItem xs="6" sm="3">
+                <MudText Typo="Typo.caption">Nettolön</MudText>
+                <MudText Typo="Typo.h5" Color="Color.Primary" Style="font-weight: 700;">@FormatKr(_senasteNetto)</MudText>
+            </MudItem>
+        </MudGrid>
 
-<MudText Typo="Typo.h6" Class="mb-3">Tidigare månader</MudText>
-<MudSimpleTable Hover="true" Elevation="1">
-    <thead>
-        <tr><th>Period</th><th>Brutto</th><th>Netto</th><th></th></tr>
-    </thead>
-    <tbody>
-        @foreach (var period in _historik)
-        {
-            <tr>
-                <td>@period.Period</td>
-                <td>@period.Brutto</td>
-                <td><strong>@period.Netto</strong></td>
-                <td>
-                    <MudIconButton Icon="@Icons.Material.Filled.PictureAsPdf"
-                                   Size="Size.Small" Color="Color.Primary"
-                                   aria-label="Ladda ner PDF"
-                                   OnClick="@(() => LaddaNerPdf(period.Period, period.BruttoDecimal, period.SkattDecimal, period.NettoDecimal, 0m))" />
-                </td>
-            </tr>
-        }
-    </tbody>
-</MudSimpleTable>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" Class="mt-4"
+                   StartIcon="@Icons.Material.Filled.PictureAsPdf"
+                   Size="Size.Large" Style="min-height: 48px;"
+                   Disabled="@_genererar"
+                   OnClick="@(() => LaddaNerPdf(_senastePeriod))">
+            Ladda ner lönespecifikation (PDF)
+        </MudButton>
+    </MudPaper>
+
+    <MudText Typo="Typo.h6" Class="mb-3">Tidigare månader</MudText>
+    @if (_historik.Count == 0)
+    {
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">Ingen tidigare historik.</MudText>
+    }
+    else
+    {
+        <MudSimpleTable Hover="true" Elevation="1">
+            <thead>
+                <tr><th>Period</th><th>Brutto</th><th>Netto</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var period in _historik)
+                {
+                    <tr>
+                        <td>@period.Period</td>
+                        <td>@period.Brutto</td>
+                        <td><strong>@period.Netto</strong></td>
+                        <td>
+                            <MudIconButton Icon="@Icons.Material.Filled.PictureAsPdf"
+                                           Size="Size.Small" Color="Color.Primary"
+                                           aria-label="Ladda ner PDF"
+                                           Disabled="@_genererar"
+                                           OnClick="@(() => LaddaNerPdf(period.Period))" />
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+    }
+}
 
 @code {
     private List<LonPeriod> _historik = [];
     private string _senastePeriod = "";
     private decimal _senasteBrutto, _senasteSkatt, _senasteTillagg, _senasteNetto;
+    private bool _genererar;
     private string? _error;
 
     protected override async Task OnInitializedAsync()
@@ -93,55 +119,61 @@
                 _senasteNetto = senaste.Netto;
 
                 _historik = data.Skip(1).Select(r => new LonPeriod(
-                    r.Period, FormatKr(r.Brutto), FormatKr(r.Netto),
-                    r.Brutto, r.Skatt, r.Netto)).ToList();
+                    r.Period, FormatKr(r.Brutto), FormatKr(r.Netto))).ToList();
             }
         }
         catch (Exception ex) { _error = $"Kunde inte hämta lönedata: {ex.Message}"; }
     }
 
-    private async Task LaddaNerPdf(string period, decimal brutto, decimal skatt, decimal netto, decimal tillagg)
+    private async Task LaddaNerPdf(string period)
     {
-        var payslipData = new PayslipData
-        {
-            AnstallNamn = "Anställd",
-            Personnummer = "XXXXXX-XXXX",
-            Period = period,
-            Enhet = "Min enhet",
-            Brutto = brutto,
-            Skatt = skatt,
-            Netto = netto,
-            OBTillagg = tillagg,
-            Rader = new List<PayslipLine>
-            {
-                new() { Loneart = "1010", Benamning = "Grundlön", Antal = 1, Sats = brutto, Belopp = brutto },
-            }
-        };
-
-        // Try to enrich with real employee data
+        if (Auth.EmployeeId is null || !TryParsePeriod(period, out var year, out var month)) return;
+        _genererar = true;
+        _error = null;
         try
         {
-            var profil = await SelfService.GetProfileAsync(EmployeeId.From(Auth.EmployeeId!.Value));
-            if (profil is not null)
-            {
-                payslipData.AnstallNamn = $"{profil.Fornamn} {profil.Efternamn}";
-                payslipData.Personnummer = profil.PersonnummerMaskerat;
-                payslipData.Enhet = profil.Enhet;
-            }
-        }
-        catch
-        {
-            // Use defaults
-        }
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var empId = EmployeeId.From(Auth.EmployeeId.Value);
 
-        var pdfBytes = PdfGenerator.Generate(payslipData);
-        var base64 = Convert.ToBase64String(pdfBytes);
-        var safeFilename = period.Replace(" ", "-").ToLowerInvariant();
-        await JS.InvokeVoidAsync("downloadFile", $"lonespec-{safeFilename}.pdf", base64, "application/pdf");
+            var result = await db.PayrollResults
+                .Include(r => r.Rader)
+                .FirstOrDefaultAsync(r => r.AnstallId == empId && r.Year == year && r.Month == month);
+
+            if (result is null)
+            {
+                _error = $"Ingen lönespecifikation hittades för {period}.";
+                return;
+            }
+
+            var emp = await db.Employees
+                .Include(e => e.Anstallningar)
+                .FirstOrDefaultAsync(e => e.Id == empId);
+
+            var namn = emp?.FulltNamn ?? "Anställd";
+            var pnr = emp is not null ? (string)emp.Personnummer : "";
+            var befattning = emp?.AktivAnstallning(DateOnly.FromDateTime(DateTime.Today))?.Befattningstitel ?? "";
+
+            var dokument = LonespecifikationDokument.FromPayrollResult(result, namn, pnr, befattning);
+            var pdf = new LonespecifikationPdfGenerator().Generate(dokument);
+            var base64 = Convert.ToBase64String(pdf);
+            await JS.InvokeVoidAsync("downloadFile",
+                $"lonespecifikation-{year}-{month:D2}.pdf", base64, "application/pdf");
+        }
+        catch (Exception ex) { _error = $"Kunde inte skapa PDF: {ex.Message}"; }
+        finally { _genererar = false; }
+    }
+
+    private static bool TryParsePeriod(string period, out int year, out int month)
+    {
+        year = 0; month = 0;
+        var parts = period.Split('-');
+        return parts.Length == 2
+               && int.TryParse(parts[0], out year)
+               && int.TryParse(parts[1], out month);
     }
 
     private static string FormatKr(decimal belopp) =>
         $"{belopp:N0} kr".Replace(",", " ");
 
-    private record LonPeriod(string Period, string Brutto, string Netto, decimal BruttoDecimal, decimal SkattDecimal, decimal NettoDecimal);
+    private record LonPeriod(string Period, string Brutto, string Netto);
 }

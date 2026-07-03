@@ -2,8 +2,10 @@
 @layout RegionHR.Web.Components.Layout.AdminLayout
 @using RegionHR.Infrastructure.Persistence
 @using RegionHR.Audit.Domain
+@using System.Text
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
 
 <PageTitle>OpenHR - Granskningslogg</PageTitle>
 <MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Granskningslogg</MudText>
@@ -25,7 +27,11 @@ else
         <MudItem xs="3"><MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-error);"><MudText Typo="Typo.h3" Color="Color.Error" Style="font-weight: 700;">@_deleteCount</MudText><MudText Typo="Typo.body2">Ta bort</MudText></MudPaper></MudItem>
     </MudGrid>
 
-    <MudText Typo="Typo.h6" Class="mb-3">Senaste händelser</MudText>
+    <div class="d-flex justify-space-between align-center mb-3">
+        <MudText Typo="Typo.h6">Senaste händelser</MudText>
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download"
+                   Disabled="@(_entries.Count == 0)" OnClick="ExporteraCsv">Ladda ner CSV</MudButton>
+    </div>
     @if (_entries.Count == 0)
     {
         <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga audit-händelser registrerade.</MudAlert>
@@ -90,15 +96,54 @@ else
         finally { _loading = false; }
     }
 
-    private static string FormatSummary(AuditEntry entry) => entry.Action switch
+    private async Task ExporteraCsv()
     {
-        AuditAction.Create => $"Nytt objekt skapat i {entry.EntityType}",
-        AuditAction.Update => entry.NewValues is not null ? $"Uppdaterad: {Truncate(entry.NewValues, 80)}" : $"{entry.EntityType} uppdaterad",
-        AuditAction.Delete => $"{entry.EntityType} borttagen",
-        _ => ""
-    };
+        var sb = new StringBuilder();
+        sb.AppendLine("Tidpunkt;Anvandare;Entitet;EntitetsId;Atgard;Sammanfattning");
+        foreach (var e in _entries)
+        {
+            var row = new[]
+            {
+                e.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                e.UserName ?? e.UserId,
+                e.EntityType,
+                e.EntityId,
+                e.Action.ToString(),
+                FormatSummary(e)
+            };
+            sb.AppendLine(string.Join(";", row.Select(EscapeCsv)));
+        }
 
-    private static string Truncate(string value, int maxLength) =>
-        value.Length <= maxLength ? value : value[..maxLength] + "...";
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }
+            .Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+        await JS.InvokeVoidAsync("downloadFile",
+            $"granskningslogg_{DateTime.Now:yyyyMMdd_HHmm}.csv",
+            Convert.ToBase64String(bytes), "text/csv");
+    }
+
+    private static string EscapeCsv(string value)
+    {
+        const char q = '\u0022';
+        if (value.Contains(';') || value.Contains(q) || value.Contains('\n'))
+            return q + value.Replace("\u0022", "\u0022\u0022") + q;
+        return value;
+    }
+
+    private static string FormatSummary(AuditEntry entry)
+    {
+        return entry.Action switch
+        {
+            AuditAction.Create => $"Nytt objekt skapat i {entry.EntityType}",
+            AuditAction.Update => entry.NewValues is not null ? $"Uppdaterad: {Truncate(entry.NewValues, 80)}" : $"{entry.EntityType} uppdaterad",
+            AuditAction.Delete => $"{entry.EntityType} borttagen",
+            _ => ""
+        };
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (maxLength >= value.Length) return value;
+        return value[..maxLength] + "...";
+    }
 }
 

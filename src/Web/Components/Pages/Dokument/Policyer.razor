@@ -182,14 +182,16 @@ else
     private async Task PubliceraPolicy(Policy p)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { p.Publicera(); await db.SaveChangesAsync(); }
+        // p är laddad i en tidigare (disposad) context — attacha i denna context
+        // så att statusändringen faktiskt spåras och persisteras.
+        try { db.Attach(p); p.Publicera(); await db.SaveChangesAsync(); _success = $"Policy \"{p.Titel}\" publicerad."; }
         catch (Exception ex) { _error = $"Kunde inte publicera: {ex.Message}"; }
     }
 
     private async Task ArkiveraPolicy(Policy p)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
-        try { p.Arkivera(); await db.SaveChangesAsync(); }
+        try { db.Attach(p); p.Arkivera(); await db.SaveChangesAsync(); _success = $"Policy \"{p.Titel}\" arkiverad."; }
         catch (Exception ex) { _error = $"Kunde inte arkivera: {ex.Message}"; }
     }
 

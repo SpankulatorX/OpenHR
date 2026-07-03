@@ -21,6 +21,101 @@ public sealed class RekryteringService
 
     public RekryteringService(IDbContextFactory<RegionHRDbContext> dbFactory) => _dbFactory = dbFactory;
 
+    /// <summary>Hämtar organisationsenheterna (id + namn) för vakansformulärets enhetsval.</summary>
+    public async Task<List<EnhetVal>> HamtaEnheterAsync(CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        return (await db.OrganizationUnits.ToListAsync(ct))
+            .OrderBy(e => e.Namn)
+            .Select(e => new EnhetVal(e.Id, e.Namn, e.Kostnadsstalle))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Skapar en ny vakans (status Utkast) via Recruitment-domänen och persisterar den.
+    /// Samma domänväg som REST-API:t använder — men anropad direkt utan HTTP.
+    /// </summary>
+    public async Task<Guid> SkapaVakansAsync(
+        OrganizationId enhetId, string titel, string beskrivning,
+        EmploymentType anstallningsform, DateOnly sistadag,
+        decimal? lonMin, decimal? lonMax, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(titel))
+            throw new ArgumentException("Titel måste anges.", nameof(titel));
+
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var vakans = Vacancy.Skapa(enhetId, titel.Trim(), (beskrivning ?? "").Trim(), anstallningsform, sistadag);
+        vakans.SattLonespann(
+            lonMin is { } min ? Money.SEK(min) : null,
+            lonMax is { } max ? Money.SEK(max) : null);
+
+        db.Vacancies.Add(vakans);
+        await db.SaveChangesAsync(ct);
+        return vakans.Id;
+    }
+
+    /// <summary>Publicerar en vakans internt/externt/på Platsbanken (Utkast → Publicerad).</summary>
+    public async Task PubliceraVakansAsync(Guid vakansId, bool externt, bool platsbanken, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var vakans = await db.Vacancies.FirstOrDefaultAsync(v => v.Id == vakansId, ct)
+            ?? throw new InvalidOperationException($"Vakans {vakansId} hittades inte.");
+        vakans.Publicera(externt, platsbanken);
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Stänger en publicerad vakans så att inga fler ansökningar kan tas emot.</summary>
+    public async Task StangVakansAsync(Guid vakansId, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var vakans = await db.Vacancies.FirstOrDefaultAsync(v => v.Id == vakansId, ct)
+            ?? throw new InvalidOperationException($"Vakans {vakansId} hittades inte.");
+        vakans.Stang();
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>Registrerar en inkommen ansökan på en publicerad vakans.</summary>
+    public async Task TaEmotAnsokanAsync(Guid vakansId, string namn, string epost, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(namn))
+            throw new ArgumentException("Sökandens namn måste anges.", nameof(namn));
+        if (string.IsNullOrWhiteSpace(epost))
+            throw new ArgumentException("Sökandens e-post måste anges.", nameof(epost));
+
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var vakans = await db.Vacancies
+            .Include(v => v.Ansokngar)
+            .FirstOrDefaultAsync(v => v.Id == vakansId, ct)
+            ?? throw new InvalidOperationException($"Vakans {vakansId} hittades inte.");
+        vakans.TaEmotAnsokan(namn.Trim(), epost.Trim());
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Flyttar en sökande till talangpoolen för framtida rekryteringar. Kopplar posten
+    /// till ursprungsansökan så spårbarheten bevaras. Typiskt använt för avslagna kandidater
+    /// som ändå är intressanta.
+    /// </summary>
+    public async Task FlyttaTillTalangpoolAsync(
+        Guid vakansId, Guid ansokanId, string? kompetensOmrade, string? anteckningar, CancellationToken ct = default)
+    {
+        await using var db = await _dbFactory.CreateDbContextAsync(ct);
+        var (_, ansokan) = await LaddaAsync(db, vakansId, ansokanId, ct);
+
+        var redanIPool = await db.TalentPoolEntries.AnyAsync(t => t.UrsprungsAnsokanId == ansokanId, ct);
+        if (redanIPool)
+            throw new InvalidOperationException("Kandidaten ligger redan i talangpoolen.");
+
+        var post = TalentPoolEntry.Skapa(
+            ansokan.Namn, ansokan.Epost,
+            string.IsNullOrWhiteSpace(kompetensOmrade) ? null : kompetensOmrade.Trim(),
+            string.IsNullOrWhiteSpace(anteckningar) ? null : anteckningar.Trim(),
+            ursprungsAnsokanId: ansokanId);
+
+        db.TalentPoolEntries.Add(post);
+        await db.SaveChangesAsync(ct);
+    }
+
     /// <summary>Hämtar vakanser med sina ansökningar för pipeline/tillsättnings-vyn.</summary>
     public async Task<List<VakansOversikt>> HamtaVakanserAsync(CancellationToken ct = default)
     {

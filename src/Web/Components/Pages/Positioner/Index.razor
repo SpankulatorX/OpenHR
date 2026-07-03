@@ -5,6 +5,7 @@
 @using RegionHR.SharedKernel.Domain
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject NavigationManager Nav
 
 <PageTitle>OpenHR - Positioner</PageTitle>
 <div class="d-flex justify-space-between align-center mb-4">
@@ -79,16 +80,17 @@ else
     else
     {
         <MudSimpleTable Hover="true" Elevation="2">
-            <thead><tr><th>Befattning</th><th>Enhet</th><th>Anställd</th><th>Sysselsättning</th><th>Status</th></tr></thead>
+            <thead><tr><th>Befattning</th><th>Enhet</th><th>Anställd</th><th>Sysselsättning</th><th>Status</th><th></th></tr></thead>
             <tbody>
                 @foreach (var r in _rader)
                 {
-                    <tr>
+                    <tr style="cursor: pointer;" @onclick="@(() => Nav.NavigateTo($"/positioner/{r.Id}"))">
                         <td><strong>@r.Titel</strong></td>
                         <td>@r.Enhet</td>
                         <td>@r.Anstalld</td>
                         <td>@($"{r.Sysselsattningsgrad:F0}%")</td>
                         <td><MudChip T="string" Size="Size.Small" Color="@StatusColor(r.Status)">@StatusText(r.Status)</MudChip></td>
+                        <td><MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => Nav.NavigateTo($"/positioner/{r.Id}"))">Öppna</MudButton></td>
                     </tr>
                 }
             </tbody>

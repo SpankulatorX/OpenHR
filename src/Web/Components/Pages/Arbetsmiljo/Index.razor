@@ -1,9 +1,11 @@
 @page "/arbetsmiljo"
 @layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Text
 @using RegionHR.Infrastructure.Arbetsmiljo
 @using RegionHR.Infrastructure.Persistence
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject IJSRuntime JS
 
 <PageTitle>OpenHR — Arbetsmiljö (SAM)</PageTitle>
 
@@ -26,7 +28,7 @@ else
         <MudItem xs="6" sm="3">
             <MudPaper Class="pa-4 text-center" Elevation="2" Style="border-top: 4px solid var(--mud-palette-error);">
                 <MudText Typo="Typo.h3" Color="Color.Error" Style="font-weight: 700;">@_incidents.Count(i => i.Status != IncidentStatus.Avslutad)</MudText>
-                <MudText Typo="Typo.body2">Öppna tillbud</MudText>
+                <MudText Typo="Typo.body2">Öppna ärenden</MudText>
             </MudPaper>
         </MudItem>
         <MudItem xs="6" sm="3">
@@ -50,13 +52,22 @@ else
     </MudGrid>
 
     <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" Class="mb-4">
-        @* === TILLBUD === *@
-        <MudTabPanel Text="@($"Tillbud ({_incidents.Count})")">
+        @* === TILLBUD / OLYCKOR / ARBETSSKADOR === *@
+        <MudTabPanel Text="@($"Tillbud & skador ({_incidents.Count})")">
             <div class="pa-4">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mb-3"
-                           OnClick="@(() => _showIncidentForm = !_showIncidentForm)">
-                    @(_showIncidentForm ? "Stäng" : "Rapportera tillbud")
-                </MudButton>
+                <div class="d-flex gap-2 mb-3">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               OnClick="@(() => _showIncidentForm = !_showIncidentForm)">
+                        @(_showIncidentForm ? "Stäng" : "Rapportera händelse")
+                    </MudButton>
+                    @if (_incidents.Count > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Secondary"
+                                   StartIcon="@Icons.Material.Filled.Download" OnClick="LaddaNerIncidenterCsv">
+                            Ladda ner CSV
+                        </MudButton>
+                    }
+                </div>
 
                 @if (_showIncidentForm)
                 {
@@ -68,6 +79,11 @@ else
                                     @foreach (var e in _enheter) { <MudSelectItem T="Guid" Value="@e.Key">@e.Value</MudSelectItem> }
                                 </MudSelect>
                             </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudSelect @bind-Value="_newIncTyp" Label="Typ av händelse" Variant="Variant.Outlined">
+                                    @foreach (var t in Enum.GetValues<IncidentTyp>()) { <MudSelectItem Value="@t">@TypText(t)</MudSelectItem> }
+                                </MudSelect>
+                            </MudItem>
                             <MudItem xs="12" sm="6"><MudTextField @bind-Value="_newIncPlats" Label="Plats" Variant="Variant.Outlined" /></MudItem>
                             <MudItem xs="12" sm="6">
                                 <MudSelect @bind-Value="_newIncAllvarlighet" Label="Allvarlighetsgrad" Variant="Variant.Outlined">
@@ -77,12 +93,13 @@ else
                             <MudItem xs="12"><MudTextField @bind-Value="_newIncBeskrivning" Label="Beskrivning" Variant="Variant.Outlined" Lines="2" /></MudItem>
                             <MudItem xs="12"><MudTextField @bind-Value="_newIncAtgard" Label="Åtgärdsförslag" Variant="Variant.Outlined" /></MudItem>
                         </MudGrid>
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaIncident">Spara</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaIncident"
+                                   Disabled="@(string.IsNullOrWhiteSpace(_newIncBeskrivning))">Spara</MudButton>
                     </MudPaper>
                 }
 
                 <MudSimpleTable Hover="true" Elevation="1">
-                    <thead><tr><th>Datum</th><th>Rapportör</th><th>Enhet</th><th>Plats</th><th>Allvarlighet</th><th>Typ</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Datum</th><th>Rapportör</th><th>Enhet</th><th>Plats</th><th>Allvarlighet</th><th>Typ</th><th>Status</th><th>Åtgärd</th></tr></thead>
                     <tbody>
                         @foreach (var i in _incidents.OrderByDescending(i => i.Datum))
                         {
@@ -92,8 +109,22 @@ else
                                 <td>@GetEnhetNamn(i.EnhetId)</td>
                                 <td>@i.Plats</td>
                                 <td><MudChip T="string" Size="Size.Small" Color="@AllvarlighetFarg(i.Allvarlighetsgrad)">@i.Allvarlighetsgrad</MudChip></td>
-                                <td>@i.Typ</td>
-                                <td><MudChip T="string" Size="Size.Small">@i.Status</MudChip></td>
+                                <td>@TypText(i.Typ)</td>
+                                <td><MudChip T="string" Size="Size.Small" Color="@IncidentStatusFarg(i.Status)">@StatusText(i.Status)</MudChip></td>
+                                <td>
+                                    @if (i.NastaStatus is { } nasta)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                   StartIcon="@Icons.Material.Filled.ArrowForward"
+                                                   OnClick="@(() => AvanceraIncident(i))">@StatusText(nasta)</MudButton>
+                                    }
+                                    else
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Default"
+                                                   StartIcon="@Icons.Material.Filled.Undo"
+                                                   OnClick="@(() => AteroppnaIncident(i))">Återöppna</MudButton>
+                                    }
+                                </td>
                             </tr>
                         }
                     </tbody>
@@ -121,12 +152,13 @@ else
                             </MudItem>
                             <MudItem xs="12" sm="4"><MudTextField @bind-Value="_newRoundDeltagare" Label="Deltagare" Variant="Variant.Outlined" /></MudItem>
                         </MudGrid>
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaRound">Spara</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaRound"
+                                   Disabled="@(string.IsNullOrWhiteSpace(_newRoundDeltagare))">Spara</MudButton>
                     </MudPaper>
                 }
 
                 <MudSimpleTable Hover="true" Elevation="1">
-                    <thead><tr><th>Datum</th><th>Enhet</th><th>Deltagare</th><th>Brister</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Datum</th><th>Enhet</th><th>Deltagare</th><th>Brister</th><th>Status</th><th>Åtgärd</th></tr></thead>
                     <tbody>
                         @foreach (var r in _rounds.OrderByDescending(r => r.Datum))
                         {
@@ -136,7 +168,43 @@ else
                                 <td>@r.Deltagare</td>
                                 <td>@r.AntalBrister</td>
                                 <td><MudChip T="string" Size="Size.Small" Color="@RondStatusFarg(r.Status)">@r.Status</MudChip></td>
+                                <td>
+                                    @if (r.Status == SafetyRoundStatus.Planerad)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                   StartIcon="@Icons.Material.Filled.FactCheck"
+                                                   OnClick="@(() => OppnaRondResultat(r))">Registrera resultat</MudButton>
+                                    }
+                                    else if (r.Status == SafetyRoundStatus.Genomford)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Success"
+                                                   StartIcon="@Icons.Material.Filled.Done"
+                                                   OnClick="@(() => AvslutaRound(r))">Avsluta</MudButton>
+                                    }
+                                </td>
                             </tr>
+                            @if (_roundBeingEdited?.Id == r.Id)
+                            {
+                                <tr>
+                                    <td colspan="6" style="padding: 0;">
+                                        <MudPaper Class="pa-4" Elevation="0" Style="border-left: 4px solid var(--mud-palette-primary); background: var(--mud-palette-background);">
+                                            <MudText Typo="Typo.subtitle2" Class="mb-2" Style="font-weight: 600;">Registrera resultat av skyddsronden</MudText>
+                                            <MudGrid Spacing="2">
+                                                <MudItem xs="12" sm="3">
+                                                    <MudNumericField T="int" @bind-Value="_editBrister" Label="Antal brister" Min="0" Variant="Variant.Outlined" />
+                                                </MudItem>
+                                                <MudItem xs="12" sm="9">
+                                                    <MudTextField @bind-Value="_editAnteckningar" Label="Anteckningar (upptäckta brister m.m.)" Variant="Variant.Outlined" Lines="2" />
+                                                </MudItem>
+                                            </MudGrid>
+                                            <div class="d-flex gap-2 mt-3">
+                                                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="GenomforRound">Spara resultat</MudButton>
+                                                <MudButton Variant="Variant.Text" OnClick="@(() => _roundBeingEdited = null)">Avbryt</MudButton>
+                                            </div>
+                                        </MudPaper>
+                                    </td>
+                                </tr>
+                            }
                         }
                     </tbody>
                 </MudSimpleTable>
@@ -146,10 +214,19 @@ else
         @* === RISKBEDÖMNINGAR === *@
         <MudTabPanel Text="@($"Riskbedömningar ({_risks.Count})")">
             <div class="pa-4">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mb-3"
-                           OnClick="@(() => _showRiskForm = !_showRiskForm)">
-                    @(_showRiskForm ? "Stäng" : "Ny riskbedömning")
-                </MudButton>
+                <div class="d-flex gap-2 mb-3">
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               OnClick="@(() => _showRiskForm = !_showRiskForm)">
+                        @(_showRiskForm ? "Stäng" : "Ny riskbedömning")
+                    </MudButton>
+                    @if (_risks.Count > 0)
+                    {
+                        <MudButton Variant="Variant.Outlined" Color="Color.Secondary"
+                                   StartIcon="@Icons.Material.Filled.Download" OnClick="LaddaNerRiskerCsv">
+                            Ladda ner CSV
+                        </MudButton>
+                    }
+                </div>
 
                 @if (_showRiskForm)
                 {
@@ -167,10 +244,15 @@ else
                                 </MudSelect>
                             </MudItem>
                             <MudItem xs="12"><MudTextField @bind-Value="_newRiskBeskrivning" Label="Beskrivning" Variant="Variant.Outlined" /></MudItem>
-                            <MudItem xs="12" sm="6"><MudTextField @bind-Value="_newRiskAtgard" Label="Åtgärd" Variant="Variant.Outlined" /></MudItem>
-                            <MudItem xs="12" sm="6"><MudTextField @bind-Value="_newRiskAnsvarig" Label="Ansvarig" Variant="Variant.Outlined" /></MudItem>
+                            <MudItem xs="12" sm="4"><MudTextField @bind-Value="_newRiskAtgard" Label="Åtgärd" Variant="Variant.Outlined" /></MudItem>
+                            <MudItem xs="12" sm="4"><MudTextField @bind-Value="_newRiskAnsvarig" Label="Ansvarig" Variant="Variant.Outlined" /></MudItem>
+                            <MudItem xs="12" sm="4">
+                                <MudDatePicker @bind-Date="_newRiskDeadline" Label="Deadline för åtgärd" Variant="Variant.Outlined"
+                                               HelperText="När åtgärden senast ska vara klar" />
+                            </MudItem>
                         </MudGrid>
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaRisk">Spara</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="SparaRisk"
+                                   Disabled="@(string.IsNullOrWhiteSpace(_newRiskNamn))">Spara</MudButton>
                     </MudPaper>
                 }
 
@@ -195,7 +277,7 @@ else
                 </div>
 
                 <MudSimpleTable Hover="true" Elevation="1">
-                    <thead><tr><th>Risk</th><th>S</th><th>K</th><th>Riskvärde</th><th>Åtgärd</th><th>Ansvarig</th><th>Deadline</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Risk</th><th>S</th><th>K</th><th>Riskvärde</th><th>Åtgärd</th><th>Ansvarig</th><th>Deadline</th><th>Status</th><th></th></tr></thead>
                     <tbody>
                         @foreach (var r in _risks.OrderByDescending(r => r.RiskVarde))
                         {
@@ -206,8 +288,16 @@ else
                                 <td><MudChip T="string" Size="Size.Small" Color="@RiskVardeFarg(r.RiskVarde)">@r.RiskVarde</MudChip></td>
                                 <td>@(r.Atgard ?? "—")</td>
                                 <td>@(r.Ansvarig ?? "—")</td>
-                                <td>@(r.Deadline?.ToString("yyyy-MM-dd") ?? "—")</td>
-                                <td><MudChip T="string" Size="Size.Small">@r.Status</MudChip></td>
+                                <td>@DeadlineText(r)</td>
+                                <td><MudChip T="string" Size="Size.Small" Color="@RiskStatusFarg(r.Status)">@RiskStatusText(r.Status)</MudChip></td>
+                                <td>
+                                    @if (r.NastaStatus is { } nasta)
+                                    {
+                                        <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary"
+                                                   StartIcon="@Icons.Material.Filled.ArrowForward"
+                                                   OnClick="@(() => AvanceraRisk(r))">@RiskStatusText(nasta)</MudButton>
+                                    }
+                                </td>
                             </tr>
                         }
                     </tbody>
@@ -230,11 +320,18 @@ else
     private string _newIncRapporterare = "", _newIncPlats = "", _newIncBeskrivning = "", _newIncAtgard = "";
     private Guid _newIncEnhetId;
     private IncidentAllvarlighetsgrad _newIncAllvarlighet = IncidentAllvarlighetsgrad.Medel;
+    private IncidentTyp _newIncTyp = IncidentTyp.Tillbud;
     private DateTime? _newRoundDatum = DateTime.Today;
     private Guid _newRoundEnhetId;
     private string _newRoundDeltagare = "";
     private string _newRiskNamn = "", _newRiskBeskrivning = "", _newRiskAtgard = "", _newRiskAnsvarig = "";
     private int _newRiskSannolikhet = 3, _newRiskKonsekvens = 3;
+    private DateTime? _newRiskDeadline;
+
+    // Skyddsrond-resultat (inline-redigering)
+    private SafetyRound? _roundBeingEdited;
+    private int _editBrister;
+    private string _editAnteckningar = "";
 
     protected override async Task OnInitializedAsync()
     {
@@ -261,42 +358,216 @@ else
 
     private async Task SparaIncident()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (string.IsNullOrWhiteSpace(_newIncBeskrivning)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
         var inc = Incident.Skapa(DateTime.UtcNow, _newIncRapporterare, _newIncEnhetId, _newIncPlats,
-            _newIncBeskrivning, _newIncAllvarlighet, IncidentTyp.Tillbud, _newIncAtgard);
+            _newIncBeskrivning, _newIncAllvarlighet, _newIncTyp, _newIncAtgard);
         db.Incidents.Add(inc);
         await db.SaveChangesAsync();
-        _incidents.Add(inc);
+        _incidents = await db.Incidents.ToListAsync();
         _showIncidentForm = false;
         _newIncRapporterare = ""; _newIncPlats = ""; _newIncBeskrivning = ""; _newIncAtgard = "";
+        _newIncTyp = IncidentTyp.Tillbud; _newIncAllvarlighet = IncidentAllvarlighetsgrad.Medel;
+    }
+
+    /// <summary>Flyttar ett ärende ett steg framåt i livscykeln och persisterar.</summary>
+    private async Task AvanceraIncident(Incident inc)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var e = await db.Incidents.FirstOrDefaultAsync(x => x.Id == inc.Id);
+        if (e is null) return;
+        e.FlyttaFram();
+        await db.SaveChangesAsync();
+        _incidents = await db.Incidents.ToListAsync();
+    }
+
+    /// <summary>Återöppnar ett avslutat ärende och persisterar.</summary>
+    private async Task AteroppnaIncident(Incident inc)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var e = await db.Incidents.FirstOrDefaultAsync(x => x.Id == inc.Id);
+        if (e is null) return;
+        e.Ateroppna();
+        await db.SaveChangesAsync();
+        _incidents = await db.Incidents.ToListAsync();
     }
 
     private async Task SparaRound()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (string.IsNullOrWhiteSpace(_newRoundDeltagare)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
         var round = SafetyRound.Skapa(_newRoundDatum?.ToUniversalTime() ?? DateTime.UtcNow, _newRoundEnhetId,
             _newRoundDeltagare, 0, SafetyRoundStatus.Planerad);
         db.SafetyRounds.Add(round);
         await db.SaveChangesAsync();
-        _rounds.Add(round);
+        _rounds = await db.SafetyRounds.ToListAsync();
         _showRoundForm = false;
         _newRoundDeltagare = "";
     }
 
-    private async Task SparaRisk()
+    private void OppnaRondResultat(SafetyRound r)
+    {
+        _roundBeingEdited = r;
+        _editBrister = r.AntalBrister;
+        _editAnteckningar = r.Anteckningar ?? "";
+    }
+
+    /// <summary>Registrerar rondens resultat (antal brister + anteckningar) och persisterar.</summary>
+    private async Task GenomforRound()
+    {
+        if (_roundBeingEdited is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var e = await db.SafetyRounds.FirstOrDefaultAsync(x => x.Id == _roundBeingEdited.Id);
+        if (e is null) return;
+        e.Genomfor(_editBrister, string.IsNullOrWhiteSpace(_editAnteckningar) ? null : _editAnteckningar);
+        await db.SaveChangesAsync();
+        _rounds = await db.SafetyRounds.ToListAsync();
+        _roundBeingEdited = null;
+    }
+
+    /// <summary>Stänger en genomförd rond och persisterar.</summary>
+    private async Task AvslutaRound(SafetyRound r)
     {
         await using var db = await DbFactory.CreateDbContextAsync();
+        var e = await db.SafetyRounds.FirstOrDefaultAsync(x => x.Id == r.Id);
+        if (e is null) return;
+        e.Avsluta();
+        await db.SaveChangesAsync();
+        _rounds = await db.SafetyRounds.ToListAsync();
+    }
+
+    private async Task SparaRisk()
+    {
         if (string.IsNullOrWhiteSpace(_newRiskNamn)) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var deadline = _newRiskDeadline.HasValue ? DateOnly.FromDateTime(_newRiskDeadline.Value) : (DateOnly?)null;
         var risk = RiskAssessment.Skapa(_newRiskNamn, _newRiskBeskrivning,
-            _newRiskSannolikhet, _newRiskKonsekvens, _newRiskAtgard, _newRiskAnsvarig, null);
+            _newRiskSannolikhet, _newRiskKonsekvens, _newRiskAtgard, _newRiskAnsvarig, deadline);
         db.RiskAssessments.Add(risk);
         await db.SaveChangesAsync();
-        _risks.Add(risk);
+        _risks = await db.RiskAssessments.ToListAsync();
         _showRiskForm = false;
         _newRiskNamn = ""; _newRiskBeskrivning = ""; _newRiskAtgard = ""; _newRiskAnsvarig = "";
+        _newRiskDeadline = null;
     }
+
+    /// <summary>Flyttar en riskbedömning ett steg framåt i åtgärdskedjan och persisterar.</summary>
+    private async Task AvanceraRisk(RiskAssessment r)
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var e = await db.RiskAssessments.FirstOrDefaultAsync(x => x.Id == r.Id);
+        if (e is null) return;
+        e.FlyttaFram();
+        await db.SaveChangesAsync();
+        _risks = await db.RiskAssessments.ToListAsync();
+    }
+
+    private async Task LaddaNerIncidenterCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Datum;Rapportör;Enhet;Plats;Allvarlighet;Typ;Status;Åtgärdsförslag");
+        foreach (var i in _incidents.OrderByDescending(i => i.Datum))
+        {
+            sb.AppendLine(string.Join(';', new[]
+            {
+                i.Datum.ToLocalTime().ToString("yyyy-MM-dd"),
+                CsvFalt(i.RapporterareNamn),
+                CsvFalt(GetEnhetNamn(i.EnhetId)),
+                CsvFalt(i.Plats),
+                i.Allvarlighetsgrad.ToString(),
+                TypText(i.Typ),
+                StatusText(i.Status),
+                CsvFalt(i.AtgardsForslag ?? "")
+            }));
+        }
+        await LaddaNerCsv("tillbud-skador.csv", sb.ToString());
+    }
+
+    private async Task LaddaNerRiskerCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Risk;Sannolikhet;Konsekvens;Riskvärde;Åtgärd;Ansvarig;Deadline;Status");
+        foreach (var r in _risks.OrderByDescending(r => r.RiskVarde))
+        {
+            sb.AppendLine(string.Join(';', new[]
+            {
+                CsvFalt(r.RiskNamn),
+                r.Sannolikhet.ToString(),
+                r.Konsekvens.ToString(),
+                r.RiskVarde.ToString(),
+                CsvFalt(r.Atgard ?? ""),
+                CsvFalt(r.Ansvarig ?? ""),
+                r.Deadline?.ToString("yyyy-MM-dd") ?? "",
+                RiskStatusText(r.Status)
+            }));
+        }
+        await LaddaNerCsv("riskbedomningar.csv", sb.ToString());
+    }
+
+    private async Task LaddaNerCsv(string filnamn, string innehall)
+    {
+        var bytes = new byte[] { 0xEF, 0xBB, 0xBF }
+            .Concat(Encoding.UTF8.GetBytes(innehall)).ToArray();
+        await JS.InvokeVoidAsync("downloadFile", filnamn, Convert.ToBase64String(bytes), "text/csv");
+    }
+
+    private static string CsvFalt(string v)
+    {
+        const char q = '\u0022';
+        if (v.Contains(';') || v.Contains(q) || v.Contains('\n'))
+            return q + v.Replace("\u0022", "\u0022\u0022") + q;
+        return v;
+    }
+
+    private static string DeadlineText(RiskAssessment r)
+    {
+        if (r.Deadline is not { } d) return "—";
+        var idag = DateOnly.FromDateTime(DateTime.Today);
+        var forsenad = idag > d && r.Status != RiskStatus.Atgardad;
+        return forsenad ? $"{d:yyyy-MM-dd} (försenad)" : d.ToString("yyyy-MM-dd");
+    }
+
+    private static string TypText(IncidentTyp t) => t switch
+    {
+        IncidentTyp.Tillbud => "Tillbud",
+        IncidentTyp.Olycka => "Olycka",
+        IncidentTyp.Arbetsskada => "Arbetsskada",
+        _ => t.ToString()
+    };
+
+    private static string StatusText(IncidentStatus s) => s switch
+    {
+        IncidentStatus.Rapporterad => "Rapporterad",
+        IncidentStatus.UnderUtredning => "Under utredning",
+        IncidentStatus.AtgardVidtagen => "Åtgärd vidtagen",
+        IncidentStatus.Avslutad => "Avslutad",
+        _ => s.ToString()
+    };
+
+    private static Color IncidentStatusFarg(IncidentStatus s) => s switch
+    {
+        IncidentStatus.Rapporterad => Color.Error,
+        IncidentStatus.UnderUtredning => Color.Warning,
+        IncidentStatus.AtgardVidtagen => Color.Info,
+        IncidentStatus.Avslutad => Color.Success,
+        _ => Color.Default
+    };
+
+    private static string RiskStatusText(RiskStatus s) => s switch
+    {
+        RiskStatus.Identifierad => "Identifierad",
+        RiskStatus.UnderBehandling => "Under behandling",
+        RiskStatus.Atgardad => "Åtgärdad",
+        _ => s.ToString()
+    };
+
+    private static Color RiskStatusFarg(RiskStatus s) => s switch
+    {
+        RiskStatus.Identifierad => Color.Error,
+        RiskStatus.UnderBehandling => Color.Warning,
+        RiskStatus.Atgardad => Color.Success,
+        _ => Color.Default
+    };
 
     private static Color AllvarlighetFarg(IncidentAllvarlighetsgrad a) => a switch
     {
@@ -321,4 +592,3 @@ else
         _ => Color.Success
     };
 }
-

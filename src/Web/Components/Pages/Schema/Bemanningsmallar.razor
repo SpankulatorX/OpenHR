@@ -1,0 +1,442 @@
+@page "/schema/bemanningsmallar"
+@layout RegionHR.Web.Components.Layout.AdminLayout
+@using RegionHR.Infrastructure.Persistence
+@using RegionHR.Scheduling.Domain
+@using RegionHR.Core.Domain
+@using RegionHR.SharedKernel.Domain
+@using Microsoft.EntityFrameworkCore
+@inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject ISnackbar Snackbar
+
+<PageTitle>OpenHR - Bemanningsmallar</PageTitle>
+
+<div class="d-flex justify-space-between align-center mb-2">
+    <MudText Typo="Typo.h4" Style="font-weight: 700;">Bemanningsmallar</MudText>
+    <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/schema/automatik"
+               StartIcon="@Icons.Material.Filled.AutoAwesome">Till behovsstyrd automatik</MudButton>
+</div>
+<MudText Typo="Typo.body1" Class="mb-5" Style="color: var(--mud-palette-text-secondary);">
+    En bemanningsmall beskriver det återkommande behovet per veckodag och pass (min- och optimalbemanning
+    samt eventuella kompetenskrav). Mallen används av den behovsstyrda schemaautomatiken för att auto-generera
+    ett lagenligt schema.
+</MudText>
+
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_error != null)
+{
+    <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert>
+}
+else
+{
+    @* ── Skapa ny mall ─────────────────────────────────────────────── *@
+    <MudPaper Class="pa-4 mb-6" Elevation="2">
+        <MudText Typo="Typo.h6" Class="mb-3">Ny bemanningsmall</MudText>
+        <MudGrid Spacing="3">
+            <MudItem xs="12" sm="4">
+                <MudSelect T="Guid" Label="Enhet" @bind-Value="_valdEnhet" Variant="Variant.Outlined">
+                    @foreach (var enhet in _enheter)
+                    {
+                        <MudSelectItem T="Guid" Value="@enhet.Id.Value">@enhet.Namn</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudTextField @bind-Value="_nyNamn" Label="Namn på mall" Variant="Variant.Outlined"
+                              Placeholder="T.ex. Avd 3 grundbemanning" />
+            </MudItem>
+            <MudItem xs="6" sm="2">
+                <MudDatePicker Label="Giltig från" @bind-Date="_giltigFran" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="6" sm="2">
+                <MudDatePicker Label="Giltig till (valfritt)" @bind-Date="_giltigTom" Variant="Variant.Outlined" Clearable="true" />
+            </MudItem>
+        </MudGrid>
+
+        <MudDivider Class="my-4" />
+
+        <MudText Typo="Typo.subtitle1" Class="mb-2" Style="font-weight: 600;">Lägg till bemanningsrader</MudText>
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="4">
+                <MudSelect T="DayOfWeek" Label="Veckodagar" MultiSelection="true"
+                           SelectedValues="_valdaVeckodagar"
+                           SelectedValuesChanged="@(v => _valdaVeckodagar = v)"
+                           MultiSelectionTextFunc="@(_ => string.Join(", ", _valdaVeckodagar.Select(VeckodagKort)))"
+                           Variant="Variant.Outlined">
+                    @foreach (var d in _veckodagarOrder)
+                    {
+                        <MudSelectItem T="DayOfWeek" Value="@d">@VeckodagNamn(d)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="6" sm="2">
+                <MudSelect T="ShiftType" Label="Passtyp" @bind-Value="_addPassTyp" Variant="Variant.Outlined"
+                           @bind-Value:after="OnAddPassTypChanged">
+                    <MudSelectItem T="ShiftType" Value="ShiftType.Dag">Dag</MudSelectItem>
+                    <MudSelectItem T="ShiftType" Value="ShiftType.Kvall">Kväll</MudSelectItem>
+                    <MudSelectItem T="ShiftType" Value="ShiftType.Natt">Natt</MudSelectItem>
+                    <MudSelectItem T="ShiftType" Value="ShiftType.Jour">Jour</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="6" sm="2">
+                <MudTimePicker Label="Start" @bind-Time="_addStart" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="6" sm="2">
+                <MudTimePicker Label="Slut" @bind-Time="_addSlut" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="6" sm="2">
+                <MudNumericField T="int" @bind-Value="_addRast" Label="Rast (min)" Min="0" Max="180" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="6" sm="2">
+                <MudNumericField T="int" @bind-Value="_addMin" Label="Min antal" Min="0" Max="99" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="6" sm="2">
+                <MudNumericField T="int" @bind-Value="_addOptimal" Label="Optimalt antal" Min="0" Max="99" Variant="Variant.Outlined" />
+            </MudItem>
+            <MudItem xs="12" sm="4">
+                <MudTextField @bind-Value="_addKompetenser" Label="Kompetenskrav (kommaseparerat, valfritt)"
+                              Variant="Variant.Outlined" Placeholder="Sjuksköterska, HLR" />
+            </MudItem>
+            <MudItem xs="12" sm="4" Class="d-flex align-center gap-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="LaggTillRader"
+                           StartIcon="@Icons.Material.Filled.Add">Lägg till rad(er)</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="SnabbfyllDygnetRunt"
+                           StartIcon="@Icons.Material.Filled.Bolt">Fyll dygnet-runt-mall</MudButton>
+            </MudItem>
+        </MudGrid>
+
+        @if (_draftRader.Count > 0)
+        {
+            <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2" Style="font-weight: 600;">Rader i mallen (@_draftRader.Count)</MudText>
+            <MudSimpleTable Dense="true" Hover="true" Elevation="1" Class="mb-3">
+                <thead>
+                    <tr><th>Veckodag</th><th>Pass</th><th>Tid</th><th>Rast</th><th>Timmar</th><th>Min</th><th>Optimal</th><th>Kompetens</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @for (var i = 0; i < _draftRader.Count; i++)
+                    {
+                        var index = i;
+                        var r = _draftRader[index];
+                        <tr>
+                            <td>@VeckodagNamn(r.Veckodag)</td>
+                            <td><MudChip T="string" Size="Size.Small" Color="@PassColor(r.PassTyp)">@r.PassTyp</MudChip></td>
+                            <td>@r.Start.ToString("HH:mm")–@r.Slut.ToString("HH:mm")</td>
+                            <td>@r.Rast.TotalMinutes min</td>
+                            <td>@r.PlaneradeTimmar.ToString("0.#") h</td>
+                            <td>@r.MinAntal</td>
+                            <td>@r.OptimalAntal</td>
+                            <td>@(r.KravdaKompetenser.Count == 0 ? "—" : string.Join(", ", r.KravdaKompetenser))</td>
+                            <td><MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" Color="Color.Error"
+                                               OnClick="@(() => TaBortDraftRad(index))" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+
+        <MudButton Variant="Variant.Filled" Color="Color.Success" Size="Size.Large" Class="mt-2"
+                   OnClick="SparaMall" Disabled="@(_sparar || !KanSpara)"
+                   StartIcon="@Icons.Material.Filled.Save">
+            @if (_sparar)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Color="Color.Surface" Class="mr-2" />
+            }
+            Spara bemanningsmall
+        </MudButton>
+    </MudPaper>
+
+    @* ── Befintliga mallar ─────────────────────────────────────────── *@
+    <MudText Typo="Typo.h6" Class="mb-3">Befintliga mallar</MudText>
+    @if (_mallar.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">Inga bemanningsmallar skapade ännu.</MudAlert>
+    }
+    else
+    {
+        @foreach (var mall in _mallar)
+        {
+            <MudPaper Class="pa-4 mb-3" Elevation="1">
+                <div class="d-flex justify-space-between align-center mb-2">
+                    <div>
+                        <MudText Typo="Typo.subtitle1" Style="font-weight: 600;">@mall.Namn</MudText>
+                        <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary);">
+                            @_enhetNamn.GetValueOrDefault(mall.EnhetId.Value, "Okänd enhet") •
+                            @mall.Rader.Count rader •
+                            giltig @mall.Giltighet.Start.ToString("yyyy-MM-dd")@(mall.Giltighet.End is { } slut ? $" – {slut:yyyy-MM-dd}" : " och tillsvidare")
+                        </MudText>
+                    </div>
+                    <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                               OnClick="@(() => TaBortMall(mall.Id))" StartIcon="@Icons.Material.Filled.Delete">Ta bort</MudButton>
+                </div>
+                @if (mall.Rader.Count > 0)
+                {
+                    <MudSimpleTable Dense="true" Hover="true" Elevation="0">
+                        <thead>
+                            <tr><th>Veckodag</th><th>Pass</th><th>Tid</th><th>Timmar</th><th>Min</th><th>Optimal</th><th>Kompetens</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in mall.Rader.OrderBy(x => ((int)x.Veckodag + 6) % 7).ThenBy(x => x.Start))
+                            {
+                                <tr>
+                                    <td>@VeckodagNamn(r.Veckodag)</td>
+                                    <td><MudChip T="string" Size="Size.Small" Color="@PassColor(r.PassTyp)">@r.PassTyp</MudChip></td>
+                                    <td>@r.Start.ToString("HH:mm")–@r.Slut.ToString("HH:mm")</td>
+                                    <td>@r.PlaneradeTimmar.ToString("0.#") h</td>
+                                    <td>@r.MinAntal</td>
+                                    <td>@r.OptimalAntal</td>
+                                    <td>@(r.KravdaKompetenser.Count == 0 ? "—" : string.Join(", ", r.KravdaKompetenser))</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                }
+            </MudPaper>
+        }
+    }
+}
+
+@code {
+    private static readonly DayOfWeek[] _veckodagarOrder =
+    [
+        DayOfWeek.Monday, DayOfWeek.Tuesday, DayOfWeek.Wednesday, DayOfWeek.Thursday,
+        DayOfWeek.Friday, DayOfWeek.Saturday, DayOfWeek.Sunday
+    ];
+
+    private List<OrganizationUnit> _enheter = [];
+    private Dictionary<Guid, string> _enhetNamn = [];
+    private List<StaffingTemplate> _mallar = [];
+    private bool _loading = true, _sparar;
+    private string? _error;
+
+    // Ny mall
+    private Guid _valdEnhet;
+    private string _nyNamn = "";
+    private DateTime? _giltigFran = DateTime.Today;
+    private DateTime? _giltigTom;
+
+    // Rad-formulär
+    private IReadOnlyCollection<DayOfWeek> _valdaVeckodagar = new HashSet<DayOfWeek>();
+    private ShiftType _addPassTyp = ShiftType.Dag;
+    private TimeSpan? _addStart = new(7, 0, 0);
+    private TimeSpan? _addSlut = new(16, 0, 0);
+    private int _addRast = 60;
+    private int _addMin = 1;
+    private int _addOptimal = 2;
+    private string _addKompetenser = "";
+
+    private readonly List<StaffingRequirementLine> _draftRader = [];
+
+    private bool KanSpara =>
+        _valdEnhet != Guid.Empty &&
+        !string.IsNullOrWhiteSpace(_nyNamn) &&
+        _giltigFran is not null &&
+        _draftRader.Count > 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _enheter = await db.OrganizationUnits.OrderBy(e => e.Namn).ToListAsync();
+            _enhetNamn = _enheter.ToDictionary(e => e.Id.Value, e => e.Namn);
+            if (_enheter.Count > 0) _valdEnhet = _enheter[0].Id.Value;
+
+            _mallar = await db.StaffingTemplates.ToListAsync();
+        }
+        catch (Exception ex) { _error = $"Kunde inte ladda data: {ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private void OnAddPassTypChanged()
+    {
+        (_addStart, _addSlut, _addRast) = _addPassTyp switch
+        {
+            ShiftType.Dag => (new TimeSpan(7, 0, 0), new TimeSpan(16, 0, 0), 60),
+            ShiftType.Kvall => (new TimeSpan(15, 0, 0), new TimeSpan(22, 0, 0), 30),
+            ShiftType.Natt => (new TimeSpan(21, 0, 0), new TimeSpan(7, 0, 0), 45),
+            ShiftType.Jour => (new TimeSpan(8, 0, 0), new TimeSpan(20, 0, 0), 60),
+            _ => (_addStart, _addSlut, _addRast)
+        };
+    }
+
+    private void LaggTillRader()
+    {
+        var dagar = _valdaVeckodagar?.ToList() ?? [];
+        if (dagar.Count == 0)
+        {
+            Snackbar.Add("Välj minst en veckodag.", Severity.Warning);
+            return;
+        }
+        if (_addStart is null || _addSlut is null)
+        {
+            Snackbar.Add("Ange start- och sluttid.", Severity.Warning);
+            return;
+        }
+        if (_addMin < 0 || _addOptimal < _addMin)
+        {
+            Snackbar.Add("Optimalt antal måste vara minst lika stort som minimiantalet.", Severity.Error);
+            return;
+        }
+
+        var kompetenser = _addKompetenser
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        foreach (var dag in dagar)
+        {
+            _draftRader.Add(new StaffingRequirementLine
+            {
+                Veckodag = dag,
+                PassTyp = _addPassTyp,
+                Start = TimeOnly.FromTimeSpan(_addStart.Value),
+                Slut = TimeOnly.FromTimeSpan(_addSlut.Value),
+                Rast = TimeSpan.FromMinutes(_addRast),
+                MinAntal = _addMin,
+                OptimalAntal = _addOptimal,
+                KravdaKompetenser = [.. kompetenser]
+            });
+        }
+
+        Snackbar.Add($"{dagar.Count} rad(er) tillagda.", Severity.Success);
+        _valdaVeckodagar = new HashSet<DayOfWeek>();
+        _addKompetenser = "";
+    }
+
+    /// <summary>Fyller utkastet med en typisk dygnet-runt-mall: dag, kväll och natt alla 7 dagar.</summary>
+    private void SnabbfyllDygnetRunt()
+    {
+        _draftRader.Clear();
+        foreach (var dag in _veckodagarOrder)
+        {
+            _draftRader.Add(NyRad(dag, ShiftType.Dag, new TimeOnly(7, 0), new TimeOnly(15, 30), 30, 1, 2));
+            _draftRader.Add(NyRad(dag, ShiftType.Kvall, new TimeOnly(14, 0), new TimeOnly(22, 0), 30, 1, 1));
+            _draftRader.Add(NyRad(dag, ShiftType.Natt, new TimeOnly(21, 30), new TimeOnly(7, 30), 60, 1, 1));
+        }
+        Snackbar.Add("Dygnet-runt-mall ifylld (21 rader). Justera vid behov innan du sparar.", Severity.Info);
+    }
+
+    private static StaffingRequirementLine NyRad(
+        DayOfWeek dag, ShiftType typ, TimeOnly start, TimeOnly slut, int rastMin, int min, int optimal) => new()
+    {
+        Veckodag = dag,
+        PassTyp = typ,
+        Start = start,
+        Slut = slut,
+        Rast = TimeSpan.FromMinutes(rastMin),
+        MinAntal = min,
+        OptimalAntal = optimal,
+        KravdaKompetenser = []
+    };
+
+    private void TaBortDraftRad(int index)
+    {
+        if (index >= 0 && index < _draftRader.Count)
+            _draftRader.RemoveAt(index);
+    }
+
+    private async Task SparaMall()
+    {
+        if (!KanSpara) return;
+        _sparar = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var enhet = OrganizationId.From(_valdEnhet);
+            var giltigFran = DateOnly.FromDateTime(_giltigFran!.Value);
+
+            StaffingTemplate mall;
+            if (_giltigTom is { } tom)
+            {
+                var giltigTom = DateOnly.FromDateTime(tom);
+                if (giltigTom < giltigFran)
+                {
+                    Snackbar.Add("Giltig till kan inte vara före giltig från.", Severity.Error);
+                    _sparar = false;
+                    return;
+                }
+                mall = StaffingTemplate.Skapa(enhet, _nyNamn.Trim(), giltigFran, giltigTom);
+            }
+            else
+            {
+                mall = StaffingTemplate.Skapa(enhet, _nyNamn.Trim(), giltigFran);
+            }
+
+            foreach (var rad in _draftRader)
+                mall.LaggTillRad(rad);
+
+            db.StaffingTemplates.Add(mall);
+            await db.SaveChangesAsync();
+
+            Snackbar.Add($"Bemanningsmall \"{mall.Namn}\" sparad med {mall.Rader.Count} rader.", Severity.Success);
+
+            // Återställ formuläret och ladda om listan.
+            _nyNamn = "";
+            _giltigTom = null;
+            _draftRader.Clear();
+            _mallar = await db.StaffingTemplates.ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte spara mallen: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _sparar = false;
+        }
+    }
+
+    private async Task TaBortMall(StaffingTemplateId id)
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var mall = await db.StaffingTemplates.FirstOrDefaultAsync(m => m.Id == id);
+            if (mall is not null)
+            {
+                db.StaffingTemplates.Remove(mall);
+                await db.SaveChangesAsync();
+            }
+            _mallar = await db.StaffingTemplates.ToListAsync();
+            Snackbar.Add("Bemanningsmall borttagen.", Severity.Info);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Kunde inte ta bort mallen: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private static string VeckodagNamn(DayOfWeek d) => d switch
+    {
+        DayOfWeek.Monday => "Måndag",
+        DayOfWeek.Tuesday => "Tisdag",
+        DayOfWeek.Wednesday => "Onsdag",
+        DayOfWeek.Thursday => "Torsdag",
+        DayOfWeek.Friday => "Fredag",
+        DayOfWeek.Saturday => "Lördag",
+        DayOfWeek.Sunday => "Söndag",
+        _ => d.ToString()
+    };
+
+    private static string VeckodagKort(DayOfWeek d) => d switch
+    {
+        DayOfWeek.Monday => "Mån",
+        DayOfWeek.Tuesday => "Tis",
+        DayOfWeek.Wednesday => "Ons",
+        DayOfWeek.Thursday => "Tor",
+        DayOfWeek.Friday => "Fre",
+        DayOfWeek.Saturday => "Lör",
+        DayOfWeek.Sunday => "Sön",
+        _ => d.ToString()
+    };
+
+    private static Color PassColor(ShiftType typ) => typ switch
+    {
+        ShiftType.Dag => Color.Success,
+        ShiftType.Kvall => Color.Warning,
+        ShiftType.Natt => Color.Info,
+        ShiftType.Jour => Color.Secondary,
+        _ => Color.Default
+    };
+}

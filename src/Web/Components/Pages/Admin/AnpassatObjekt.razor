@@ -213,8 +213,19 @@ else
 
         if (_editRecord != null)
         {
-            _editRecord.UppdateraData(data);
+            // _editRecord laddades i en annan (nu disposad) DbContext — hämta den spårade
+            // posten i denna context innan mutation, annars persisteras inget.
+            var tracked = await db.CustomObjectRecords.FirstOrDefaultAsync(r => r.Id == _editRecord.Id);
+            if (tracked == null)
+            {
+                _error = "Posten kunde inte hittas i databasen.";
+                _showForm = false;
+                return;
+            }
+            tracked.UppdateraData(data);
             await db.SaveChangesAsync();
+            var idx = _records.FindIndex(r => r.Id == _editRecord.Id);
+            if (idx >= 0) _records[idx] = tracked;
             _success = "Post uppdaterad";
         }
         else
