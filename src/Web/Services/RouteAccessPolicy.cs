@@ -10,6 +10,10 @@ namespace RegionHR.Web.Services;
 /// (IsChef/IsHR) så att direkt-URL beter sig som menyn: en Anställd når aldrig
 /// lön, audit, GDPR eller admin; en Chef når team/schema/rapporter men inte lön.
 /// Roller i systemet: "Admin", "HR", "Chef", "Anställd".
+///
+/// Policyn är fail-closed: en rutt som inte matchar någon regel nekas för ALLA
+/// roller. Varje ny sida måste därför registreras i <see cref="Rules"/> (eller
+/// specialfallen i <see cref="AllowedRolesFor"/>) för att bli nåbar.
 /// </summary>
 public static class RouteAccessPolicy
 {
@@ -22,6 +26,7 @@ public static class RouteAccessPolicy
     private static readonly string[] HrAdmin = { HR, Admin };
     private static readonly string[] ChefHrAdmin = { Chef, HR, Admin };
     private static readonly string[] AllaInloggade = { Anstalld, Chef, HR, Admin };
+    private static readonly string[] Ingen = Array.Empty<string>();
 
     /// <summary>
     /// Öppna rutter (även oinloggade). Endast dessa nås utan session.
@@ -50,6 +55,8 @@ public static class RouteAccessPolicy
             ("/integrationer", HrAdmin),
             ("/offboarding", HrAdmin),
             ("/helpdesk/agent", HrAdmin),
+            ("/las", HrAdmin),
+            ("/anpassat", HrAdmin),
 
             // ── Chefsfunktioner (Chef/HR/Admin) ──
             ("/chef", ChefHrAdmin),
@@ -143,8 +150,11 @@ public static class RouteAccessPolicy
                 return roles;
         }
 
-        // Fail-safe: okänd rutt kräver minst inloggning (any authenticated).
-        return AllaInloggade;
+        // Fail-closed: okänd rutt NEKAS för alla tills en regel uttryckligen
+        // tillåter den. En ny sida måste alltså registreras i Rules ovan för
+        // att bli nåbar — hellre ett synligt "saknar behörighet" än att en
+        // oskyddad rutt läcker till fel roll.
+        return Ingen;
     }
 
     private static string Normalize(string path)

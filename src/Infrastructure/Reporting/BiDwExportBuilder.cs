@@ -128,9 +128,14 @@ public static class BiDwExportBuilder
         }
 
         // ── Fakta: frånvaro ───────────────────────────────────────────────────
+        // Endast godkänd (eller inskickad, ännu ej behandlad) frånvaro är faktagrundande —
+        // Utkast/Avslagen/Återkallad ska inte in i DW:t.
         var faktaFranvaro = new List<BiFaktaFranvaro>();
         foreach (var lr in leaveRequests)
         {
+            if (lr.Status is not (LeaveRequestStatus.Godkand or LeaveRequestStatus.Inskickad))
+                continue;
+
             var tid = TidId(lr.FranDatum.Year, lr.FranDatum.Month);
             tidIds.Add(tid);
 

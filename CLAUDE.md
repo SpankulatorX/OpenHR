@@ -80,8 +80,8 @@ Login: http://localhost:5076/login (SITHS/BankID-simulering)
 ## Infrastrukturtjänster
 
 ### Löneberäkning & Kollektivavtal
-- `SwedishTaxCalculator` — Kommunalskatt (32.13%), statlig skatt (>51 158 kr/mån), arbetsgivaravgift (31.42%), reducerad avgift (66+)
-- `KollektivavtalEngine` — OB-tillägg (kväll 46 kr/h, natt 113, helg 55, storhelg 130), viloRegler (11h), övertid (180%/240%), semester per ålder
+- `SwedishTaxCalculator` — Kommunalskatt per kommun via `KommunSkattesatser` (default Örebro 2026: 33,65%), statlig skatt 20% över skiktgränsen 643 000 kr/år (≈53 583 kr/mån), arbetsgivaravgift 31,42% (äldre endast ålderspensionsavgift 10,21%, född 1937 eller tidigare 0%) via `Arbetsgivaravgift`-domänen
+- `KollektivavtalEngine` — legacy-hjälpare som delegerar till de kanoniska, årsversionerade AB-tabellerna (`ABOTillaggSatser`, `ABOvertidSatser`, `ABSemesterRegler`): OB enligt AB § 21 (fr.o.m. 2026-04-01: kväll 26,40 kr/h, natt 58,40, helg 68,10, storhelg 130,70; förhöjd nattsats kl 22–06 för helg 78,30 och storhelg 156,90; fr.o.m. 2025-04-01: 25,60/56,70/66,10/126,90), viloRegler (11h), övertid (180%/240%), semester per ålder
 
 ### Schemaoptimering
 - `SchemaOptimizer` — Round-robin tilldelning med balansindex, per-person timmespårning

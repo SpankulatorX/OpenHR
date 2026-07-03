@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.Identity.Web;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.HttpOverrides;
 
 // Npgsql 6+ mappar timestamptz strikt till UTC. Domänen sätter på många ställen
 // DateTime med Kind=Unspecified (utvecklat mot InMemory som saknar denna kontroll).
@@ -99,6 +100,11 @@ builder.Services.AddScoped<ArendeService>();
 builder.Services.AddScoped<SelfServiceApiClient>();
 builder.Services.AddScoped<UserRoleService>();
 builder.Services.AddScoped<AuthService>();
+// Granskningslogg: AuditInterceptor (scoped, se Infrastructure.DependencyInjection)
+// stämplar poster med den faktiska användaren via ICurrentUser —
+// HttpContext-claims vid OIDC, AuthService-fallback vid demo-login.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUser, HttpContextCurrentUser>();
 builder.Services.AddScoped<UnitScopeService>();
 builder.Services.AddScoped<StamplingService>();
 builder.Services.AddScoped<FlexService>();
@@ -140,17 +146,43 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 
-// Seed database (auto-migrate + seed on startup)
+// Skapa schema + (valfritt) demo-seed vid uppstart.
 using (var scope = app.Services.CreateScope())
 {
     try
     {
         var db = scope.ServiceProvider.GetRequiredService<RegionHRDbContext>();
+        // OBS: EnsureCreatedAsync skapar schemat från NUVARANDE modell på en TOM databas
+        // men uppdaterar ALDRIG en befintlig — efter modelländringar måste demo-DB:n
+        // (pgdata-volymen) återskapas vid deploy. Migrations-mappen släpar efter
+        // modellen, så Database.Migrate() är inte säkert att byta till förrän en
+        // ny migration genererats (dotnet ef migrations add) och verifierats.
         await db.Database.EnsureCreatedAsync();
-        await SeedData.SeedAsync(db);
+
+        // Demo-seed-vakt: en produktionsdatabas får aldrig fyllas med demodata av
+        // misstag. Sätt SeedDemoData=true (env/appsettings) i demo-/utvecklingsmiljöer
+        // — docker-compose.yml gör det för demon.
+        if (app.Configuration.GetValue<bool>("SeedDemoData"))
+        {
+            await SeedData.SeedAsync(db);
+        }
     }
     catch (Exception ex) { var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>(); logger.LogError(ex, "Database seed failed"); }
 }
+
+// Bakom cloudflared/reverse proxy: skriv om Connection.RemoteIpAddress från
+// X-Forwarded-For INNAN rate-limitern (och loggningen) läser den — annars hamnar
+// alla besökare i proxyns/tunnelns partition (en gemensam bucket → godtycklig 429).
+// Betrodda proxyer = loopback (default) + privata nät (dockerbroar/cloudflared);
+// klienter ute på internet kan inte spoofa XFF den vägen.
+var forwardedOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+};
+forwardedOptions.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("10.0.0.0"), 8));
+forwardedOptions.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("172.16.0.0"), 12));
+forwardedOptions.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(System.Net.IPAddress.Parse("192.168.0.0"), 16));
+app.UseForwardedHeaders(forwardedOptions);
 
 if (!app.Environment.IsDevelopment())
 {

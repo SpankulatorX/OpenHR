@@ -1,21 +1,245 @@
 @page "/anstallda/{Id:guid}/lonehistorik"
 @layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Text.Json
+@using Microsoft.EntityFrameworkCore
+@using RegionHR.Audit.Domain
+@using RegionHR.SalaryReview.Domain
+@inject IDbContextFactory<RegionHR.Infrastructure.Persistence.RegionHRDbContext> DbFactory
 
 <PageTitle>OpenHR - Lönehistorik</PageTitle>
 <MudButton StartIcon="@Icons.Material.Filled.ArrowBack" Variant="Variant.Text" Color="Color.Primary" Href="@($"/anstallda/{Id}")" Style="margin-bottom: 1rem;">Tillbaka</MudButton>
 
-<MudText Typo="Typo.h4" Class="mb-4" Style="font-weight: 700;">Lönehistorik</MudText>
+@if (_loading)
+{
+    <MudProgressCircular Color="Color.Primary" Indeterminate="true" />
+}
+else if (_emp is null)
+{
+    <MudAlert Severity="Severity.Error">Anställd hittades inte.</MudAlert>
+}
+else
+{
+    <MudText Typo="Typo.h4" Style="font-weight: 700;">Lönehistorik</MudText>
+    <MudText Typo="Typo.body1" Class="mb-4" Style="color: var(--mud-palette-text-secondary);">@_emp.FulltNamn (@_emp.Personnummer.ToMaskedString())</MudText>
 
-<MudSimpleTable Hover="true" Elevation="2">
-    <thead><tr><th>Datum</th><th>Tidigare lön</th><th>Ny lön</th><th>Förändring</th><th>Anledning</th><th>Godkänd av</th></tr></thead>
-    <tbody>
-        <tr><td>2026-01-01</td><td>28 500 kr</td><td>30 000 kr</td><td style="color: green;">+1 500 kr (+5,3%)</td><td>Löneöversyn 2026</td><td>Anna HR</td></tr>
-        <tr><td>2025-01-01</td><td>27 000 kr</td><td>28 500 kr</td><td style="color: green;">+1 500 kr (+5,6%)</td><td>Löneöversyn 2025</td><td>Anna HR</td></tr>
-        <tr><td>2023-06-01</td><td>25 500 kr</td><td>27 000 kr</td><td style="color: green;">+1 500 kr (+5,9%)</td><td>Befordran till Ssk</td><td>Erik Chef</td></tr>
-        <tr><td>2015-08-01</td><td>—</td><td>25 500 kr</td><td>—</td><td>Nyanställning</td><td>—</td></tr>
-    </tbody>
-</MudSimpleTable>
+    @if (_aktivAnstallning is not null)
+    {
+        <MudPaper Class="pa-4 mb-4" Elevation="2">
+            <MudText Typo="Typo.overline" Style="color: var(--mud-palette-text-secondary);">Nuvarande månadslön</MudText>
+            <MudText Typo="Typo.h5" Style="font-weight: 700;">@($"{_aktivAnstallning.Manadslon.Amount:N0} kr")</MudText>
+            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary);">
+                @(_aktivAnstallning.Befattningstitel ?? "—") · @($"{_aktivAnstallning.Sysselsattningsgrad.Value:0.##}") % · anställd sedan @_aktivAnstallning.Giltighetsperiod.Start.ToString("yyyy-MM-dd")
+            </MudText>
+        </MudPaper>
+    }
+
+    @if (_rader.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info" Variant="Variant.Text">Ingen lönehistorik registrerad för denna anställd.</MudAlert>
+    }
+    else
+    {
+        <MudSimpleTable Hover="true" Elevation="2">
+            <thead><tr><th>Datum</th><th>Tidigare lön</th><th>Ny lön</th><th>Förändring</th><th>Anledning</th><th>Ändrad/godkänd av</th></tr></thead>
+            <tbody>
+                @foreach (var r in _rader)
+                {
+                    <tr>
+                        <td>@r.Datum.ToString("yyyy-MM-dd")</td>
+                        <td>@(r.TidigareLon.HasValue ? $"{r.TidigareLon.Value:N0} kr" : "—")</td>
+                        <td>@($"{r.NyLon:N0} kr")</td>
+                        @if (r.TidigareLon.HasValue)
+                        {
+                            var tidigare = r.TidigareLon.Value;
+                            var diff = r.NyLon - tidigare;
+                            var procent = tidigare > 0 ? diff / tidigare * 100m : 0m;
+                            var tecken = diff >= 0 ? "+" : "-";
+                            <td style="color: @(diff >= 0 ? "green" : "#c62828");">@($"{tecken}{Math.Abs(diff):N0} kr ({tecken}{Math.Abs(procent):0.0}%)")</td>
+                        }
+                        else
+                        {
+                            <td>—</td>
+                        }
+                        <td>@r.Anledning</td>
+                        <td>@r.GodkandAv</td>
+                    </tr>
+                }
+            </tbody>
+        </MudSimpleTable>
+        <MudText Typo="Typo.caption" Class="mt-2" Style="color: var(--mud-palette-text-secondary);">
+            Historiken härleds ur granskningsloggen och genomförda löneöversyner.
+        </MudText>
+    }
+}
 
 @code {
     [Parameter] public Guid Id { get; set; }
+
+    private Employee? _emp;
+    private Employment? _aktivAnstallning;
+    private bool _loading = true;
+    private List<LonRad> _rader = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var empId = EmployeeId.From(Id);
+
+            _emp = await db.Employees
+                .Include(e => e.Anstallningar)
+                .FirstOrDefaultAsync(e => e.Id == empId);
+            if (_emp is null)
+            {
+                _loading = false;
+                return;
+            }
+            var emp = _emp;
+
+            var idag = DateOnly.FromDateTime(DateTime.Today);
+            _aktivAnstallning = emp.AktivAnstallning(idag)
+                ?? emp.Anstallningar.OrderByDescending(a => a.Giltighetsperiod.Start).FirstOrDefault();
+
+            // 1) Verkliga löneändringar ur granskningsloggen (Employment.Manadslon ändrad)
+            var anstallningsIds = emp.Anstallningar.Select(a => a.Id.ToString()).ToList();
+            var auditEntries = await db.AuditEntries
+                .Where(e => e.EntityType == "Employment"
+                    && anstallningsIds.Contains(e.EntityId)
+                    && e.Action == AuditAction.Update)
+                .OrderBy(e => e.Timestamp)
+                .ToListAsync();
+
+            foreach (var entry in auditEntries)
+            {
+                var tidigare = LasLonebelopp(entry.OldValues);
+                var ny = LasLonebelopp(entry.NewValues);
+                if (tidigare is null || ny is null || tidigare == ny) continue;
+
+                _rader.Add(new LonRad
+                {
+                    Datum = DateOnly.FromDateTime(entry.Timestamp.ToLocalTime()),
+                    TidigareLon = tidigare,
+                    NyLon = ny.Value,
+                    Anledning = "Löneändring",
+                    GodkandAv = LasAndradAv(entry),
+                    AnstallningId = Guid.TryParse(entry.EntityId, out var aid) ? aid : null
+                });
+            }
+
+            // 2) Genomförda löneöversynsposter för personen
+            var rundor = await db.SalaryReviewRounds
+                .Include(r => r.Forslag)
+                .Where(r => r.Status == SalaryReviewStatus.Genomford)
+                .ToListAsync();
+
+            foreach (var runda in rundor)
+            {
+                foreach (var forslag in runda.Forslag.Where(f =>
+                    f.AnstallId == empId && f.Status == SalaryProposalStatus.Godkand))
+                {
+                    var anledning = $"Löneöversyn {runda.Ar}" + (string.IsNullOrWhiteSpace(runda.Namn) ? "" : $" ({runda.Namn})");
+
+                    // Samma ändring kan redan finnas som löneändring i granskningsloggen —
+                    // berika den raden i stället för att visa en dublett.
+                    var dublett = _rader.FirstOrDefault(r =>
+                        r.TidigareLon == forslag.NuvarandeLon.Amount && r.NyLon == forslag.ForeslagenLon.Amount);
+                    if (dublett is not null)
+                    {
+                        dublett.Anledning = anledning;
+                        if (!string.IsNullOrWhiteSpace(runda.FackligRepresentant))
+                            dublett.GodkandAv = runda.FackligRepresentant;
+                        continue;
+                    }
+
+                    _rader.Add(new LonRad
+                    {
+                        Datum = runda.IkrafttradandeDatum,
+                        TidigareLon = forslag.NuvarandeLon.Amount,
+                        NyLon = forslag.ForeslagenLon.Amount,
+                        Anledning = anledning,
+                        GodkandAv = string.IsNullOrWhiteSpace(runda.FackligRepresentant) ? "—" : runda.FackligRepresentant,
+                        AnstallningId = forslag.AnstallningId?.Value
+                    });
+                }
+            }
+
+            // 3) En rad per anställning (nyanställning). Ingångslönen tas från den äldsta
+            //    kända "tidigare lön" för anställningen; saknas ändringar används nuvarande lön.
+            foreach (var a in emp.Anstallningar)
+            {
+                var aldstaKanda = _rader
+                    .Where(r => r.AnstallningId == a.Id.Value
+                        || (r.AnstallningId is null && emp.Anstallningar.Count == 1))
+                    .OrderBy(r => r.Datum)
+                    .FirstOrDefault();
+
+                _rader.Add(new LonRad
+                {
+                    Datum = a.Giltighetsperiod.Start,
+                    TidigareLon = null,
+                    NyLon = aldstaKanda?.TidigareLon ?? a.Manadslon.Amount,
+                    Anledning = a.Befattningstitel is null ? "Nyanställning" : $"Nyanställning — {a.Befattningstitel}",
+                    GodkandAv = "—",
+                    AnstallningId = a.Id.Value
+                });
+            }
+
+            _rader = _rader.OrderByDescending(r => r.Datum).ThenBy(r => r.TidigareLon is null).ToList();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Lonehistorik load error: {ex.Message}");
+        }
+        _loading = false;
+    }
+
+    /// <summary>Läser ut månadslönebeloppet ur granskningsloggens JSON (Money serialiseras som objekt med amount).</summary>
+    private static decimal? LasLonebelopp(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("manadslon", out var lon)) return null;
+            return lon.ValueKind switch
+            {
+                JsonValueKind.Object when lon.TryGetProperty("amount", out var belopp) => belopp.GetDecimal(),
+                JsonValueKind.Number => lon.GetDecimal(),
+                _ => null
+            };
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string LasAndradAv(AuditEntry entry)
+    {
+        if (!string.IsNullOrWhiteSpace(entry.NewValues))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(entry.NewValues);
+                if (doc.RootElement.TryGetProperty("updatedBy", out var av) && av.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(av.GetString()))
+                {
+                    return av.GetString()!;
+                }
+            }
+            catch (JsonException) { /* fall tillbaka på loggens användare */ }
+        }
+        return entry.UserName ?? entry.UserId;
+    }
+
+    private sealed class LonRad
+    {
+        public DateOnly Datum { get; init; }
+        public decimal? TidigareLon { get; init; }
+        public decimal NyLon { get; init; }
+        public string Anledning { get; set; } = "";
+        public string GodkandAv { get; set; } = "—";
+        public Guid? AnstallningId { get; init; }
+    }
 }

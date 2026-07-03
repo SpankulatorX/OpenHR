@@ -164,6 +164,90 @@ public class PayrollCalculationEngineTests
         Assert.Equal(10 * expectedRate, result.OBTillagg.Amount);
     }
 
+    [Fact]
+    public async Task CalculateAsync_OBHelgMedNattTimmar_AnvanderNatthojdSats()
+    {
+        // AB § 21 anm.: O-tillägg B (helg) höjs kl. 22–06. Natt-timmarna ska prissättas
+        // med den kanoniska natthöjda satsen (2025: 76,00 kr/h), inte grundsatsen.
+        SetupStandardEmployee();
+        var input = new PayrollInput
+        {
+            ArbetadeDagar = 21,
+            ArbetsdagarIManadens = 21,
+            OBTimmar = [new OBInput { Kategori = OBCategory.Helg, Timmar = 10, NattTimmar = 4 }]
+        };
+
+        var result = await _engine.CalculateAsync(
+            _runId, _employeeId, _employmentId, 2025, 6, input);
+
+        // Dagdel: 6 h × grundsats (mock: 89,00). Nattdel: 4 h × kanonisk natthöjd B-sats.
+        var nattsats = ABOTillaggSatser.Nattsats(OBCategory.Helg, new DateOnly(2025, 6, 1));
+        var expected = 6 * 89.00m + 4 * nattsats;
+        Assert.Equal(expected, result.OBTillagg.Amount);
+
+        var nattRad = result.Rader.First(r => r.Benamning == "OB-tillägg Helg natt");
+        Assert.Equal(4m, nattRad.Antal);
+        Assert.Equal(nattsats, nattRad.Sats.Amount);
+    }
+
+    [Fact]
+    public async Task CalculateAsync_OBVardagNatt_NattTimmarAndrarInteSatsen()
+    {
+        // Vardagsnatt (C) saknar natthöjning — hela beloppet prissätts med grundsatsen
+        // från regelverket även om timmarna ligger kl. 22–06.
+        SetupStandardEmployee();
+        var input = new PayrollInput
+        {
+            ArbetadeDagar = 21,
+            ArbetsdagarIManadens = 21,
+            OBTimmar = [new OBInput { Kategori = OBCategory.VardagNatt, Timmar = 8, NattTimmar = 8 }]
+        };
+
+        var result = await _engine.CalculateAsync(
+            _runId, _employeeId, _employmentId, 2025, 1, input);
+
+        Assert.Equal(8 * 152.00m, result.OBTillagg.Amount); // mock-grundsats
+    }
+
+    #endregion
+
+    #region Resersättning (resekrav)
+
+    [Fact]
+    public async Task CalculateAsync_MedResersattning_SkattefriIngarIBruttoMenEjSkatteunderlag()
+    {
+        SetupStandardEmployee(manadslon: 35000m);
+        var input = new PayrollInput
+        {
+            ArbetadeDagar = 21,
+            ArbetsdagarIManadens = 21,
+            ReseTraktamente = Money.SEK(600m),
+            ReseMilersattning = Money.SEK(250m),
+            ReseUtlagg = Money.SEK(150m)
+        };
+
+        var result = await _engine.CalculateAsync(
+            _runId, _employeeId, _employmentId, 2025, 1, input);
+
+        // Utbetalningen (brutto) inkluderar ersättningarna, skatteunderlaget gör det inte.
+        Assert.Equal(36000m, result.Brutto.Amount);
+        Assert.Equal(35000m, result.SkattepliktBrutto.Amount);
+
+        var traktamenteRad = result.Rader.First(r => r.LoneartKod == "5100");
+        Assert.Equal(600m, traktamenteRad.Belopp.Amount);
+        Assert.Equal(TaxCategory.Traktamente, traktamenteRad.Skattekategori);
+        Assert.False(traktamenteRad.ArPensionsgrundande);
+        Assert.False(traktamenteRad.ArSemestergrundande);
+
+        Assert.Equal(250m, result.Rader.First(r => r.LoneartKod == "5200").Belopp.Amount);
+        Assert.Equal(150m, result.Rader.First(r => r.LoneartKod == "5300").Belopp.Amount);
+
+        // Arbetsgivaravgifter beräknas på det avgiftspliktiga underlaget — inte på
+        // skattefria kostnadsersättningar.
+        var expectedAG = Math.Round(35000m * 0.3142m, 0, MidpointRounding.ToEven);
+        Assert.Equal(expectedAG, result.Arbetsgivaravgifter.Amount);
+    }
+
     #endregion
 
     #region Övertid
@@ -183,10 +267,10 @@ public class PayrollCalculationEngineTests
         var result = await _engine.CalculateAsync(
             _runId, _employeeId, _employmentId, 2025, 1, input);
 
-        // Timlön = 35000 / (38.25 * 52 / 12) = 35000 / 165.75
-        // AB 25: Enkel övertid tillägg = 0.8x timlön (180% total minus 100% bas)
-        var timlon = 35000m / (38.25m * 52m / 12m);
-        var expected = 10 * timlon * 0.8m;
+        // AB § 20 mom. 3: timlön = månadslön / 165, enkel övertid = 180 % av timlönen
+        // per övertidstimme (hela beloppet — övertidstimmen ligger utanför månadslönen)
+        var timlon = 35000m / 165m;
+        var expected = 10 * (timlon * 1.8m);
         Assert.Equal(expected, result.Overtidstillagg.Amount);
 
         var overtidRad = result.Rader.First(r => r.LoneartKod == "1410");
@@ -208,9 +292,9 @@ public class PayrollCalculationEngineTests
         var result = await _engine.CalculateAsync(
             _runId, _employeeId, _employmentId, 2025, 1, input);
 
-        // AB 25: Kvalificerad övertid tillägg = 1.4x timlön (240% total minus 100% bas)
-        var timlon = 35000m / (38.25m * 52m / 12m);
-        var expected = 5 * timlon * 1.4m;
+        // AB § 20 mom. 3: kvalificerad övertid = 240 % av timlönen (månadslön / 165)
+        var timlon = 35000m / 165m;
+        var expected = 5 * (timlon * 2.4m);
         Assert.Equal(expected, result.Overtidstillagg.Amount);
 
         var overtidRad = result.Rader.First(r => r.LoneartKod == "1420");
@@ -235,9 +319,9 @@ public class PayrollCalculationEngineTests
         var result = await _engine.CalculateAsync(
             _runId, _employeeId, _employmentId, 2025, 1, input);
 
-        // Jour = timlön * 0.40 * 16
+        // Jour = timlön * 0.40 * 16, med AB-timlön = månadslön / 165
         // Motorn beräknar: jourSats = timlon * 0.40, sedan jourTillagg = timmar * jourSats
-        var timlon = 35000m / (38.25m * 52m / 12m);
+        var timlon = 35000m / 165m;
         var jourSats = timlon * 0.40m;
         var expected = 16 * jourSats;
         Assert.Equal(expected, result.JourTillagg.Amount);
@@ -262,9 +346,9 @@ public class PayrollCalculationEngineTests
         var result = await _engine.CalculateAsync(
             _runId, _employeeId, _employmentId, 2025, 1, input);
 
-        // Beredskap = timlön * 0.20 * 24
-        var timlon = 35000m / (38.25m * 52m / 12m);
-        var expected = 24 * timlon * 0.20m;
+        // Beredskap = timlön * 0.20 * 24, med AB-timlön = månadslön / 165
+        var timlon = 35000m / 165m;
+        var expected = 24 * (timlon * 0.20m);
         Assert.Equal(expected, result.BeredskapsTillagg.Amount);
 
         var beredskapsRad = result.Rader.First(r => r.LoneartKod == "1510");
@@ -304,6 +388,71 @@ public class PayrollCalculationEngineTests
         var karensRad = result.Rader.First(r => r.LoneartKod == "3001");
         Assert.True(karensRad.ArAvdrag);
         Assert.True(karensRad.Belopp.Amount < 0);
+
+        // Sjukavdrag: full daglön dras för varje sjukdag (AB § 28) — utan detta skulle
+        // sjukfrånvaro HÖJA bruttot (full månadslön + sjuklön ovanpå).
+        var expectedSjukavdrag = daglon * 5;
+        var sjukavdragRad = result.Rader.First(r => r.LoneartKod == "3005");
+        Assert.True(sjukavdragRad.ArAvdrag);
+        Assert.Equal(-expectedSjukavdrag, sjukavdragRad.Belopp.Amount);
+
+        // Brutto = grundlön − sjukavdrag + sjuklön − karensavdrag → alltid LÄGRE än frisk månad
+        var expectedBrutto = 35000m - expectedSjukavdrag + expectedSjuklon - expectedKarens;
+        Assert.Equal(Math.Round(expectedBrutto, 2), Math.Round(result.Brutto.Amount, 2));
+        Assert.True(result.Brutto.Amount < 35000m,
+            "En sjukmånad ska ge lägre brutto än full månadslön");
+    }
+
+    [Fact]
+    public async Task CalculateAsync_34500Med5Sjukdagar_GerLagreBruttoAn34500()
+    {
+        // Handräknat exempel: 34 500 kr månadslön, 21 arbetsdagar, 5 sjukdagar.
+        // Daglön = 34 500 / 21 = 1 642,857...
+        // Sjukavdrag = 5 × daglön = 8 214,286
+        // Sjuklön    = 5 × daglön × 80 % = 6 571,429
+        // Karens     = (34 500 × 12 / 52) × 80 % × 20 % = 1 273,846
+        // Brutto     = 34 500 − 8 214,286 + 6 571,429 − 1 273,846 ≈ 31 583,30 < 34 500
+        SetupStandardEmployee(manadslon: 34500m);
+        var input = new PayrollInput
+        {
+            ArbetadeDagar = 21,
+            ArbetsdagarIManadens = 21,
+            SjukdagarMedLon = 5
+        };
+
+        var result = await _engine.CalculateAsync(
+            _runId, _employeeId, _employmentId, 2025, 1, input);
+
+        var daglon = 34500m / 21m;
+        var expectedBrutto = 34500m - daglon * 5 + daglon * 0.80m * 5
+                             - 34500m * 12m / 52m * 0.80m * 0.20m;
+        Assert.Equal(Math.Round(expectedBrutto, 2), Math.Round(result.Brutto.Amount, 2));
+        Assert.True(result.Brutto.Amount < 34500m,
+            "34 500 kr + 5 sjukdagar ska ge LÄGRE brutto än 34 500 kr");
+    }
+
+    [Fact]
+    public async Task CalculateAsync_SjukdagarUtanLon_DrasUtanSjuklon()
+    {
+        // Dag 15+ ersätts av Försäkringskassan: fullt löneavdrag men ingen sjuklön.
+        SetupStandardEmployee(manadslon: 35000m);
+        var input = new PayrollInput
+        {
+            ArbetadeDagar = 21,
+            ArbetsdagarIManadens = 21,
+            SjukdagarMedLon = 14,
+            SjukdagarUtanLon = 7
+        };
+
+        var result = await _engine.CalculateAsync(
+            _runId, _employeeId, _employmentId, 2025, 1, input);
+
+        var daglon = 35000m / 21m;
+        var sjukavdragRad = result.Rader.First(r => r.LoneartKod == "3005");
+        Assert.Equal(21m, sjukavdragRad.Antal);             // avdrag för alla 21 sjukdagar
+        Assert.Equal(-(daglon * 21), sjukavdragRad.Belopp.Amount);
+        Assert.Equal(daglon * 0.80m * 14, result.Sjuklon.Amount); // sjuklön endast dag 2–14
+        Assert.True(result.Brutto.Amount < 35000m);
     }
 
     #endregion
@@ -530,6 +679,19 @@ public class PayrollCalculationEngineTests
         Assert.Equal("Föräldralöneutfyllnad", rad.Benamning);
         Assert.True(rad.ArSemestergrundande);
         Assert.True(rad.ArPensionsgrundande);
+
+        // Löneavdrag för den föräldralediga tiden (full daglön per dag) — utan detta
+        // skulle föräldraledighet HÖJA bruttot i stället för att sänka det.
+        var avdragRad = result.Rader.First(r => r.LoneartKod == "3210");
+        Assert.True(avdragRad.ArAvdrag);
+        Assert.Equal(-(daglon * 10), avdragRad.Belopp.Amount);
+
+        // Brutto = grundlön − avdrag + utfyllnad < full månadslön
+        Assert.Equal(
+            Math.Round(35000m - daglon * 10 + expected, 2),
+            Math.Round(result.Brutto.Amount, 2));
+        Assert.True(result.Brutto.Amount < 35000m,
+            "En föräldraledig månad ska ge lägre brutto än full månadslön");
     }
 
     #endregion
@@ -556,9 +718,9 @@ public class PayrollCalculationEngineTests
 
         // Grundlön = 35000
         // OB = 10 * 126.50 = 1265
-        // Övertid = 5 * timlön * 0.8 (AB 25 supplement)
-        var timlon = 35000m / (38.25m * 52m / 12m);
-        var overtid = 5 * timlon * 0.8m;
+        // Övertid = 5 * timlön * 1.8 (AB § 20 mom. 3: hela beloppet, timlön = månadslön / 165)
+        var timlon = 35000m / 165m;
+        var overtid = 5 * (timlon * 1.8m);
         // Semestertillägg = 35000 * 100/100 * 0.00605 * 3 (AB §27 mom 15)
         var semestertillagg = 35000m * 100m / 100m * 0.00605m * 3;
 

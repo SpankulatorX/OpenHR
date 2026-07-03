@@ -1,8 +1,14 @@
 @page "/dokument/mall/generera"
 @layout RegionHR.Web.Components.Layout.AdminLayout
+@using System.Globalization
+@using Microsoft.EntityFrameworkCore
 @using RegionHR.Web.Components.Shared
 @using RegionHR.Infrastructure.Documents
+@using RegionHR.Infrastructure.Export
 @inject DocumentTemplateEngine TemplateEngine
+@inject PdfGenerator PdfGen
+@inject RegionHR.Web.Services.AnstallningService AnstallningService
+@inject IDbContextFactory<RegionHR.Infrastructure.Persistence.RegionHRDbContext> DbFactory
 @inject IJSRuntime JS
 
 <PageTitle>OpenHR - Generera dokument</PageTitle>
@@ -22,7 +28,13 @@
 
         case 1:
             <MudText Typo="Typo.h5" Class="mb-4" Style="font-weight: 600;">Fyll i uppgifter — @_mallNamn</MudText>
-            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">Systemet har fyllt i det vi kan automatiskt. Komplettera resten.</MudText>
+            <MudText Typo="Typo.body2" Class="mb-3" Style="color: var(--mud-palette-text-secondary);">Välj en anställd så fyller systemet i uppgifterna automatiskt ur personalregistret. Komplettera resten.</MudText>
+            <MudSelect T="Guid?" Value="_valdAnstalldId" ValueChanged="ValjAnstalld" ToStringFunc="@VisaAnstalld" Label="Hämta uppgifter från anställd" Variant="Variant.Outlined" Clearable="true" Class="mb-3">
+                @foreach (var a in _anstallda)
+                {
+                    <MudSelectItem T="Guid?" Value="@((Guid?)a.Id.Value)">@a.Efternamn, @a.Fornamn — @a.Befattning</MudSelectItem>
+                }
+            </MudSelect>
             @foreach (var field in _fields)
             {
                 <MudTextField @bind-Value="_fieldValues[field]" Label="@field" Variant="Variant.Outlined" Class="mb-2" />
@@ -35,11 +47,8 @@
             <MudPaper Class="pa-6" Elevation="1" Style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 0.85rem; background: #fdfdfd; border: 1px solid #d0d0d0; line-height: 1.7; border-radius: 8px;">
                 @_pdfPreview
             </MudPaper>
-            <MudAlert Severity="Severity.Info" Variant="Variant.Text" Class="mt-2" Dense="true">
-                PDF-generering kräver QuestPDF-paketet. Installera med: dotnet add package QuestPDF
-            </MudAlert>
             <div class="d-flex gap-3 mt-4">
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" StartIcon="@Icons.Material.Filled.Download" Style="min-height: 48px;" OnClick="LaddaNer">Ladda ner</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Size="Size.Large" StartIcon="@Icons.Material.Filled.Download" Style="min-height: 48px;" OnClick="LaddaNer">Ladda ner PDF</MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary" Size="Size.Large" StartIcon="@Icons.Material.Filled.Print" Style="min-height: 48px;" OnClick="SkrivUt">Skriv ut</MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Default" Size="Size.Large" Style="min-height: 48px;" OnClick="@(() => _step = 1)">Redigera</MudButton>
             </div>
@@ -55,6 +64,24 @@
     private Dictionary<string, string> _fieldValues = new();
     private string _preview = "";
     private string _pdfPreview = "";
+    private byte[] _pdfBytes = [];
+
+    private List<RegionHR.Web.Services.EmployeeListItem> _anstallda = [];
+    private Guid? _valdAnstalldId;
+    private Employee? _valdAnstalld;
+    private Employment? _valdAnstallning;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _anstallda = await AnstallningService.HamtaAllaAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"MallGenerator load error: {ex.Message}");
+        }
+    }
 
     private void ValjMall(string id, string namn)
     {
@@ -62,61 +89,181 @@
         _mallNamn = namn;
         _fields = TemplateEngine.GetFieldNames(id);
         _fieldValues = _fields.ToDictionary(f => f, f => GetDefaultValue(f));
+        if (_valdAnstalldId is not null)
+            FyllFaltFranAnstalld();
         _step = 1;
     }
 
     private string GetDefaultValue(string field) => field switch
     {
-        "Arbetsgivare" => "Västra Götalandsregionen",
-        "OrgNummer" => "232100-0131",
+        "Arbetsgivare" => PdfGenerator.ArbetsgivareNamn,
+        "OrgNummer" => PdfGenerator.ArbetsgivareOrgnr,
         "Datum" => DateTime.Today.ToString("yyyy-MM-dd"),
         "Kollektivavtal" => "AB",
         _ => ""
     };
 
+    private async Task ValjAnstalld(Guid? id)
+    {
+        _valdAnstalldId = id;
+        _valdAnstalld = null;
+        _valdAnstallning = null;
+        if (id is null) return;
+
+        try
+        {
+            _valdAnstalld = await AnstallningService.HamtaAsync(EmployeeId.From(id.Value));
+            if (_valdAnstalld is null) return;
+
+            var idag = DateOnly.FromDateTime(DateTime.Today);
+            _valdAnstallning = _valdAnstalld.AktivAnstallning(idag)
+                ?? _valdAnstalld.Anstallningar.OrderByDescending(a => a.Giltighetsperiod.Start).FirstOrDefault();
+
+            FyllFaltFranAnstalld();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"MallGenerator ValjAnstalld error: {ex.Message}");
+        }
+    }
+
+    /// <summary>Fyller mallens fält automatiskt ur personalregistret — användaren kompletterar bara det som saknas.</summary>
+    private void FyllFaltFranAnstalld()
+    {
+        if (_valdAnstalld is null) return;
+
+        SattFalt("Fornamn", _valdAnstalld.Fornamn);
+        SattFalt("Efternamn", _valdAnstalld.Efternamn);
+        SattFalt("Personnummer", _valdAnstalld.Personnummer.ToMaskedString());
+
+        if (_valdAnstallning is null) return;
+
+        SattFalt("Befattning", _valdAnstallning.Befattningstitel);
+        SattFalt("Enhet", HamtaEnhetsNamn(_valdAnstallning.EnhetId));
+        SattFalt("Anstallningsform", _valdAnstallning.Anstallningsform.ToString());
+        SattFalt("Sysselsattningsgrad", _valdAnstallning.Sysselsattningsgrad.Value.ToString("0.##", CultureInfo.InvariantCulture));
+        SattFalt("Manadslon", _valdAnstallning.Manadslon.Amount.ToString("0", CultureInfo.InvariantCulture));
+        SattFalt("Kollektivavtal", _valdAnstallning.Kollektivavtal.ToString());
+        SattFalt("Startdatum", _valdAnstallning.Giltighetsperiod.Start.ToString("yyyy-MM-dd"));
+        SattFalt("Slutdatum", _valdAnstallning.Giltighetsperiod.End?.ToString("yyyy-MM-dd"));
+        SattFalt("TidigareLon", _valdAnstallning.Manadslon.Amount.ToString("0", CultureInfo.InvariantCulture));
+    }
+
+    private void SattFalt(string falt, string? varde)
+    {
+        if (varde is not null && _fieldValues.ContainsKey(falt))
+            _fieldValues[falt] = varde;
+    }
+
+    private string HamtaEnhetsNamn(OrganizationId enhetId)
+    {
+        try
+        {
+            using var db = DbFactory.CreateDbContext();
+            return db.OrganizationUnits.AsEnumerable().FirstOrDefault(o => o.Id == enhetId)?.Namn ?? "";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
     private void Generera()
     {
         _preview = TemplateEngine.Generate(_mallId, _fieldValues);
 
-        // Generate PDF preview using PdfGenerator
-        var pdfGen = new RegionHR.Infrastructure.Export.PdfGenerator();
-        byte[] pdfBytes;
-        if (_mallId == "tjanstgoringsbevis")
+        if (_mallId == "anstallningsavtal")
         {
-            pdfBytes = pdfGen.GenerateTjanstgoringsintyg(new RegionHR.Infrastructure.Export.TjanstgoringsintyData(
-                _fieldValues.GetValueOrDefault("Namn", "—"),
-                _fieldValues.GetValueOrDefault("Personnummer", "—"),
-                _fieldValues.GetValueOrDefault("Arbetsgivare", "Västra Götalandsregionen"),
-                _fieldValues.GetValueOrDefault("Startdatum", "—"),
-                _fieldValues.GetValueOrDefault("Slutdatum", "—"),
-                _fieldValues.GetValueOrDefault("Befattning", "—"),
-                _fieldValues.GetValueOrDefault("Anställningsform", "Tillsvidare"),
-                _fieldValues.GetValueOrDefault("Sysselsättningsgrad", "100%")
-            ));
+            // LAS 6c §: bygg avtalet på den kompletta avtalsgeneratorn i Core
+            var uppgifter = ByggAvtalsUppgifter();
+            _pdfBytes = PdfGen.GenerateAnstallningsavtal(uppgifter);
+            _pdfPreview = "ANSTÄLLNINGSAVTAL\nSkriftlig information enligt LAS 6 c §\n\n"
+                + AnstallningsavtalGenerator.Skapa6cText(uppgifter);
         }
-        else if (_mallId == "anstallningsavtal")
+        else if (_mallId == "tjanstgoringsbevis")
         {
-            _ = int.TryParse(_fieldValues.GetValueOrDefault("Sysselsättningsgrad", "100").Replace("%", ""), out var grad);
-            _ = decimal.TryParse(_fieldValues.GetValueOrDefault("Månadslön", "0").Replace(" ", ""), out var lon);
-            pdfBytes = pdfGen.GenerateAnstallningsavtal(new RegionHR.Infrastructure.Export.AnstallningsavtalData(
-                _fieldValues.GetValueOrDefault("Namn", "—"),
-                _fieldValues.GetValueOrDefault("Personnummer", "—"),
-                _fieldValues.GetValueOrDefault("Arbetsgivare", "Västra Götalandsregionen"),
-                _fieldValues.GetValueOrDefault("Befattning", "—"),
-                _fieldValues.GetValueOrDefault("Tillträdesdatum", DateTime.Today.ToString("yyyy-MM-dd")),
-                _fieldValues.GetValueOrDefault("Anställningsform", "Tillsvidare"),
-                grad == 0 ? 100 : grad,
-                lon,
-                _fieldValues.GetValueOrDefault("Kollektivavtal", "AB")
-            ));
+            _pdfBytes = PdfGen.GenerateTjanstgoringsintyg(new TjanstgoringsintyData(
+                FulltNamnFranFalt(),
+                Falt("Personnummer", "—"),
+                Falt("Arbetsgivare", PdfGenerator.ArbetsgivareNamn),
+                Falt("Startdatum", "—"),
+                Falt("Slutdatum", "—"),
+                Falt("Befattning", "—"),
+                _valdAnstallning?.Anstallningsform.ToString() ?? "Tillsvidare",
+                $"{Falt("Sysselsattningsgrad", "100")}%"));
+            _pdfPreview = _preview;
         }
         else
         {
-            pdfBytes = System.Text.Encoding.UTF8.GetBytes(_preview);
+            _pdfBytes = PdfGen.GenerateEnkeltDokument(_mallNamn, _preview);
+            _pdfPreview = _preview;
         }
-        _pdfPreview = System.Text.Encoding.UTF8.GetString(pdfBytes);
         _step = 2;
     }
+
+    private string Falt(string namn, string standard) =>
+        _fieldValues.TryGetValue(namn, out var v) && !string.IsNullOrWhiteSpace(v) ? v : standard;
+
+    private string VisaAnstalld(Guid? id)
+    {
+        if (id is null) return "";
+        var a = _anstallda.FirstOrDefault(x => x.Id.Value == id.Value);
+        return a is null ? "" : $"{a.Efternamn}, {a.Fornamn}";
+    }
+
+    private string FulltNamnFranFalt() =>
+        $"{Falt("Fornamn", "")} {Falt("Efternamn", "")}".Trim() is { Length: > 0 } namn ? namn : "—";
+
+    private AnstallningsavtalUppgifter ByggAvtalsUppgifter()
+    {
+        // Fältvärdet (ev. redigerat av användaren) har företräde; annars den valda anställningen.
+        var anstallningsform = Enum.TryParse<EmploymentType>(Falt("Anstallningsform", "").Trim(), true, out var form)
+            ? form
+            : _valdAnstallning?.Anstallningsform ?? EmploymentType.Tillsvidare;
+        var kollektivavtal = Enum.TryParse<CollectiveAgreementType>(Falt("Kollektivavtal", "AB").Trim(), true, out var avtal)
+            ? avtal
+            : _valdAnstallning?.Kollektivavtal ?? CollectiveAgreementType.AB;
+
+        if (!decimal.TryParse(Falt("Manadslon", "0").Replace(" ", "").Replace("kr", ""),
+                NumberStyles.Number, CultureInfo.InvariantCulture, out var manadslon) || manadslon <= 0)
+            manadslon = _valdAnstallning?.Manadslon.Amount ?? 0m;
+
+        if (!decimal.TryParse(Falt("Sysselsattningsgrad", "100").Replace("%", "").Replace(",", "."),
+                NumberStyles.Number, CultureInfo.InvariantCulture, out var grad) || grad <= 0)
+            grad = _valdAnstallning?.Sysselsattningsgrad.Value ?? 100m;
+
+        var tilltrade = DateOnly.TryParse(Falt("Startdatum", ""), out var start)
+            ? start
+            : _valdAnstallning?.Giltighetsperiod.Start ?? DateOnly.FromDateTime(DateTime.Today);
+        DateOnly? slutdatum = DateOnly.TryParse(Falt("Slutdatum", ""), out var slut)
+            ? slut
+            : _valdAnstallning?.Giltighetsperiod.End;
+
+        return new AnstallningsavtalUppgifter(
+            ArbetsgivareNamn: Falt("Arbetsgivare", PdfGenerator.ArbetsgivareNamn),
+            ArbetsgivareAdress: PdfGenerator.ArbetsgivareAdress,
+            ArbetstagareNamn: FulltNamnFranFalt(),
+            ArbetstagarePersonnummerMaskerat: _valdAnstalld?.Personnummer.ToMaskedString() ?? Falt("Personnummer", "—"),
+            EnhetNamn: Falt("Enhet", "—"),
+            Arbetsplats: Falt("Arbetsgivare", PdfGenerator.ArbetsgivareNamn),
+            Befattningstitel: _fieldValues.GetValueOrDefault("Befattning") is { Length: > 0 } b ? b : null,
+            Anstallningsform: anstallningsform,
+            Manadslon: manadslon,
+            Sysselsattningsgrad: grad,
+            Tilltradesdag: tilltrade,
+            Slutdatum: slutdatum,
+            Kollektivavtal: kollektivavtal,
+            KollektivavtalNamn: KollektivavtalNamn(kollektivavtal));
+    }
+
+    private static string? KollektivavtalNamn(CollectiveAgreementType avtal) => avtal switch
+    {
+        CollectiveAgreementType.AB => "Allmänna bestämmelser (AB)",
+        CollectiveAgreementType.HOK => "Huvudöverenskommelse om lön och villkor (HÖK)",
+        CollectiveAgreementType.MBA => "Medbestämmandeavtal (MBA)",
+        CollectiveAgreementType.PAN => "PAN",
+        _ => null
+    };
 
     private async Task SkrivUt()
     {
@@ -125,8 +272,8 @@
 
     private async Task LaddaNer()
     {
-        var bytes = System.Text.Encoding.UTF8.GetBytes(_pdfPreview);
-        var base64 = Convert.ToBase64String(bytes);
-        await JS.InvokeVoidAsync("downloadFile", $"{_mallNamn}.txt", base64, "text/plain");
+        if (_pdfBytes.Length == 0) return;
+        var base64 = Convert.ToBase64String(_pdfBytes);
+        await JS.InvokeVoidAsync("downloadFile", $"{_mallNamn}.pdf", base64, "application/pdf");
     }
 }

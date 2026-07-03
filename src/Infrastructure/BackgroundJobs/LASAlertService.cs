@@ -3,8 +3,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using RegionHR.Infrastructure.Persistence;
+using RegionHR.LAS.Domain;
 using RegionHR.LAS.Services;
 using RegionHR.Notifications.Domain;
+using RegionHR.SharedKernel.Domain;
 
 namespace RegionHR.Infrastructure.BackgroundJobs;
 
@@ -12,6 +14,10 @@ namespace RegionHR.Infrastructure.BackgroundJobs;
 /// Bakgrundsjobb som var 12:e timme bevakar LAS-ackumuleringar mot konverteringsgränsen
 /// (SAVA 365 / vikariat 730 dagar) och skapar notifieringar till HR och den anställdes chef
 /// när trösklarna 300/330/350/360 dagar (SAVA) passeras.
+///
+/// Varje omgång börjar med att ackumuleringarna räknas OM mot dagens datum
+/// (LASService.KorDagligKontrollAsync) så att dagarna växer av tidens gång och
+/// auto-konvertering triggar även utan att någon period registreras eller ändras.
 ///
 /// Larmet går ALDRIG till den anställde själv — det är HR/chef som ska agera på en
 /// annalkande konvertering (formbyte till tillsvidare). Notifieringar avdupliceras per
@@ -38,7 +44,8 @@ public class LASAlertService : BackgroundService
                 _logger.LogInformation("LASAlertService: kontrollerar LAS-trösklar");
                 using var scope = _scopeFactory.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<RegionHRDbContext>();
-                var skapade = await KontrolleraTrosklarAsync(db, stoppingToken);
+                var lasService = scope.ServiceProvider.GetRequiredService<LASService>();
+                var skapade = await KontrolleraTrosklarAsync(db, lasService, stoppingToken);
                 _logger.LogInformation("LASAlertService: {Count} LAS-notifieringar skapade", skapade);
             }
             catch (Exception ex)
@@ -54,10 +61,15 @@ public class LASAlertService : BackgroundService
     /// Kör en bevakningsomgång mot en given DbContext. Intern för testbarhet.
     /// Returnerar antalet skapade notifieringar.
     /// </summary>
-    internal async Task<int> KontrolleraTrosklarAsync(RegionHRDbContext db, CancellationToken ct)
+    internal async Task<int> KontrolleraTrosklarAsync(RegionHRDbContext db, LASService lasService, CancellationToken ct)
     {
         var idag = DateOnly.FromDateTime(DateTime.Today);
         var cutoff = DateTime.UtcNow.AddHours(-20);
+
+        // Omberäkna FÖRST alla ackumuleringar mot dagens datum. Utan detta skulle
+        // lagrade AckumuleradeDagar aldrig växa av tidens gång — larm och
+        // auto-konvertering skulle bara trigga när en period registreras/ändras.
+        await lasService.KorDagligKontrollAsync(ct);
 
         var ackumuleringar = await db.LASAccumulations.AsNoTracking().ToListAsync(ct);
 
@@ -72,7 +84,9 @@ public class LASAlertService : BackgroundService
 
         foreach (var acc in ackumuleringar)
         {
-            var bedomning = LASAlertRegler.Bedom(acc.Anstallningsform, acc.AckumuleradeDagar);
+            // SAVA- och vikariatstid ackumuleras separat — bedöm varje form mot sin
+            // egen gräns (365 resp. 730) och larma på den allvarligaste nivån.
+            var (bedomning, dagarForForm) = BedomVarstaForm(acc);
             if (bedomning.Niva == LASAlertNiva.Ingen)
                 continue;
 
@@ -103,7 +117,7 @@ public class LASAlertService : BackgroundService
             var namn = anstalld is null ? "okänd anställd" : $"{anstalld.Fornamn} {anstalld.Efternamn}";
             var relType = $"LAS-HRAlert-{bedomning.Niva}-{bedomning.TroskelDagar}";
             var relId = acc.Id.ToString();
-            var (titel, meddelande, typ) = ByggMeddelande(bedomning, namn, acc.AckumuleradeDagar);
+            var (titel, meddelande, typ) = ByggMeddelande(bedomning, namn, dagarForForm);
 
             foreach (var userId in mottagare)
             {
@@ -132,6 +146,19 @@ public class LASAlertService : BackgroundService
             await db.SaveChangesAsync(ct);
 
         return skapade;
+    }
+
+    /// <summary>
+    /// Bedöm SAVA- och vikariatsdagarna var för sig mot respektive gräns och
+    /// returnera den allvarligaste bedömningen tillsammans med formens dagantal.
+    /// </summary>
+    private static (LASAlertBedomning Bedomning, int Dagar) BedomVarstaForm(LASAccumulation acc)
+    {
+        var sava = LASAlertRegler.Bedom(EmploymentType.SAVA, acc.AckumuleradeSavaDagar);
+        var vikariat = LASAlertRegler.Bedom(EmploymentType.Vikariat, acc.AckumuleradeVikariatDagar);
+        return sava.Niva >= vikariat.Niva
+            ? (sava, acc.AckumuleradeSavaDagar)
+            : (vikariat, acc.AckumuleradeVikariatDagar);
     }
 
     private static (string Titel, string Meddelande, NotificationType Typ) ByggMeddelande(

@@ -185,12 +185,21 @@ public sealed class SCBLonestatistikGenerator
         return Math.Round(varde, 0, MidpointRounding.AwayFromZero);
     }
 
-    /// <summary>Normaliserar könsangivelse till "K" (kvinna) eller "M" (man).</summary>
+    /// <summary>
+    /// Normaliserar könsangivelse till "K" (kvinna) eller "M" (man).
+    /// Tom eller okänd angivelse ger "Okänt" och bildar en egen grupp i stället för
+    /// att snedvrida statistiken genom att felaktigt räknas som man. Individer med
+    /// okänt kön ingår inte i kvinnors löneandel (<see cref="KvinnorsLoneandel"/>).
+    /// </summary>
     internal static string NormaliseraKon(string? kon)
     {
-        if (string.IsNullOrWhiteSpace(kon)) return "M";
-        var k = kon.Trim();
-        return k[0] is 'K' or 'k' or '2' ? "K" : "M";
+        if (string.IsNullOrWhiteSpace(kon)) return "Okänt";
+        return kon.Trim()[0] switch
+        {
+            'K' or 'k' or '2' => "K",
+            'M' or 'm' or '1' => "M",
+            _ => "Okänt"
+        };
     }
 
     private static string Rensa(string s) =>

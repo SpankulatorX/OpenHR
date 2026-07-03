@@ -5,6 +5,7 @@ using RegionHR.Infrastructure.Persistence;
 using RegionHR.Leave.Domain;
 using RegionHR.Scheduling.Domain;
 using RegionHR.SharedKernel.Domain;
+using RegionHR.Travel.Domain;
 using Xunit;
 
 namespace RegionHR.Infrastructure.Tests.Payroll;
@@ -49,7 +50,23 @@ public sealed class PayrollInputBuilderTests : IDisposable
         Assert.Equal(0, input.SemesterdagarUttagna);
         Assert.Equal(Money.Zero, input.Loneutmatning);
         Assert.Equal(Money.Zero, input.Fackavgift);
-        Assert.Equal(employment.EnhetId.Value.ToString(), input.Kostnadsstalle);
+        // Enheten finns inte i organisationsregistret → inget kostnadsställe
+        // (tidigare skrevs enhetens GUID, 36 tecken, som sprängde varchar(20)-kolumnen).
+        Assert.Null(input.Kostnadsstalle);
+    }
+
+    [Fact]
+    public async Task BuildAsync_KostnadsstalleHamtasFranOrganisationsregistret()
+    {
+        var enhet = OrganizationUnit.Skapa(
+            "Avdelning 32", OrganizationUnitType.Avdelning, "20032", new DateOnly(2015, 1, 1));
+        _db.OrganizationUnits.Add(enhet);
+        var (_, employment) = await SeedEmployeeAsync(enhetId: enhet.Id);
+
+        var input = await _builder.BuildAsync(_db, employment, Ar, Manad);
+
+        // Kort kostnadsställeskod ur registret — ryms i payroll_result_lines.kostnadsstalle (varchar(20)).
+        Assert.Equal("20032", input.Kostnadsstalle);
     }
 
     [Fact]
@@ -151,6 +168,55 @@ public sealed class PayrollInputBuilderTests : IDisposable
         Assert.True(input.KvalificeradOvertid);
     }
 
+    [Fact]
+    public async Task BuildAsync_HelgpassOverMidnatt_SeparerarNattTimmar()
+    {
+        var (emp, employment) = await SeedEmployeeAsync();
+        // Lördag 5 sep 2026, 20:00–02:00 utan rast = 6 h, varav 4 h inom kl. 22–06
+        // (22–24 + 00–02). Natt-timmarna behövs för den natthöjda O-satsen (AB § 21 anm.).
+        AddShift(emp.Id, new DateOnly(Ar, Manad, 5), ShiftType.Kvall, OBCategory.Helg,
+            new TimeOnly(20, 0), new TimeOnly(2, 0), rastMin: 0, faktisk: true);
+        await _db.SaveChangesAsync();
+
+        var input = await _builder.BuildAsync(_db, employment, Ar, Manad);
+
+        var ob = Assert.Single(input.OBTimmar);
+        Assert.Equal(OBCategory.Helg, ob.Kategori);
+        Assert.Equal(6m, ob.Timmar);
+        Assert.Equal(4m, ob.NattTimmar);
+    }
+
+    // === Resekrav ===
+
+    [Fact]
+    public async Task BuildAsync_AttesteradeResekrav_LaggsTillSomResersattning()
+    {
+        var (emp, employment) = await SeedEmployeeAsync();
+
+        // Attesterat (godkänt) krav: 2 hela dagar traktamente (600), 10 mil (250), utlägg 120.
+        var godkant = TravelClaim.Skapa(emp.Id, "Konferens Stockholm", new DateOnly(Ar, Manad, 10));
+        godkant.SattTraktamente(helaDagar: 2, halvaDagar: 0);
+        godkant.SattMilersattning(10m);
+        godkant.LaggTillUtlagg("Parkering", Money.SEK(120m));
+        godkant.SkickaIn();
+        godkant.Attestera("Eva Chef");
+        _db.TravelClaims.Add(godkant);
+
+        // Endast inskickat (ej attesterat) krav ska INTE betalas ut.
+        var inskickat = TravelClaim.Skapa(emp.Id, "Kursresa", new DateOnly(Ar, Manad, 12));
+        inskickat.SattMilersattning(5m);
+        inskickat.SkickaIn();
+        _db.TravelClaims.Add(inskickat);
+
+        await _db.SaveChangesAsync();
+
+        var input = await _builder.BuildAsync(_db, employment, Ar, Manad);
+
+        Assert.Equal(600m, input.ReseTraktamente.Amount);
+        Assert.Equal(250m, input.ReseMilersattning.Amount);
+        Assert.Equal(120m, input.ReseUtlagg.Amount);
+    }
+
     // === Frånvaro ===
 
     [Fact]
@@ -187,8 +253,11 @@ public sealed class PayrollInputBuilderTests : IDisposable
 
         var input = await _builder.BuildAsync(_db, employment, Ar, Manad);
 
-        Assert.True(WorkingDays(new DateOnly(Ar, Manad, 1), new DateOnly(Ar, Manad, 30)) > 14);
+        var sjukdagar = WorkingDays(new DateOnly(Ar, Manad, 1), new DateOnly(Ar, Manad, 30));
+        Assert.True(sjukdagar > 14);
         Assert.Equal(14, input.SjukdagarMedLon);
+        // Dag 15+ ger inget sjuklöneunderlag men fullt löneavdrag → redovisas separat.
+        Assert.Equal(sjukdagar - 14, input.SjukdagarUtanLon);
     }
 
     [Fact]
@@ -207,10 +276,11 @@ public sealed class PayrollInputBuilderTests : IDisposable
 
     // === Hjälpmetoder ===
 
-    private async Task<(Employee Employee, Employment Employment)> SeedEmployeeAsync(DateOnly? start = null)
+    private async Task<(Employee Employee, Employment Employment)> SeedEmployeeAsync(
+        DateOnly? start = null, OrganizationId? enhetId = null)
     {
         var employee = Employee.Skapa(new Personnummer("198112289874"), "Test", "Testsson");
-        var enhet = new OrganizationId(Guid.NewGuid());
+        var enhet = enhetId ?? new OrganizationId(Guid.NewGuid());
         var employment = employee.LaggTillAnstallning(
             enhet, EmploymentType.Tillsvidare, CollectiveAgreementType.AB,
             Money.SEK(35000m), Percentage.FullTime, start ?? new DateOnly(2020, 1, 1));

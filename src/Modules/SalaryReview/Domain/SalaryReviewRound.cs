@@ -56,6 +56,11 @@ public sealed class SalaryReviewRound : AggregateRoot<Guid>
             throw new InvalidOperationException("Motivering måste anges för löneförslaget.");
 
         var okning = foreslagenLon - nuvarandeLon;
+        // Spärr mot oavsiktlig lönesänkning: en negativ ökning skulle dessutom tyst
+        // "frigöra" budget (FordeladBudget minskar) och snedvrida rundans utrymme.
+        if (okning.Amount < 0)
+            throw new InvalidOperationException(
+                "Föreslagen lön är lägre än nuvarande lön — lönesänkning kan inte hanteras i en löneöversynsrunda.");
         if (FordeladBudget + okning > TotalBudget)
             throw new InvalidOperationException("Budget överskriden");
 

@@ -139,12 +139,20 @@ public sealed class SKRNovemberstatistikGenerator
 /// <summary>Könsnormalisering för SKR-statistiken.</summary>
 internal static class SKRKon
 {
-    /// <summary>Normaliserar könsangivelse till "K" (kvinna) eller "M" (man).</summary>
+    /// <summary>
+    /// Normaliserar könsangivelse till "K" (kvinna) eller "M" (man).
+    /// Tom eller okänd angivelse ger "Okänt" och bildar en egen grupp i stället för
+    /// att snedvrida statistiken genom att felaktigt räknas som man.
+    /// </summary>
     public static string Normalisera(string? kon)
     {
-        if (string.IsNullOrWhiteSpace(kon)) return "M";
-        var k = kon.Trim();
-        return k[0] is 'K' or 'k' or '2' ? "K" : "M";
+        if (string.IsNullOrWhiteSpace(kon)) return "Okänt";
+        return kon.Trim()[0] switch
+        {
+            'K' or 'k' or '2' => "K",
+            'M' or 'm' or '1' => "M",
+            _ => "Okänt"
+        };
     }
 }
 

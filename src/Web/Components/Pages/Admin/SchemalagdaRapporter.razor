@@ -127,6 +127,14 @@ else
         if (!KanSkapa) return;
         var scheduled = ScheduledReport.Skapa(_nyReportTemplateId, _nyFrekvens, _nyMottagare!, _nyFormat);
         await db.ScheduledReports.AddAsync(scheduled);
+
+        // Markera rapportdefinitionen som schemalagd — ScheduledReportService filtrerar på
+        // ArSchemalagd + CronExpression, så utan detta körs rapporten aldrig.
+        // Frekvensnyckelorden (Daily/Weekly/Monthly) tolkas direkt av CronSchedule.TryParse.
+        var definition = await db.ReportDefinitions
+            .FirstOrDefaultAsync(r => r.Id == _nyReportTemplateId);
+        definition?.SattSchemalagd(_nyFrekvens, _nyMottagare!);
+
         await db.SaveChangesAsync();
         _schemalagda.Add(scheduled);
         Snackbar.Add("Schemalagd rapport skapad!", Severity.Success);

@@ -260,6 +260,32 @@ public class LASServiceTests
     }
 
     [Fact]
+    public async Task RegistreraPeriod_MedAnnanForm_AckumulerarSeparat()
+    {
+        // En anställd med både SAVA- och vikariatsperioder: dagarna ska räknas
+        // separat mot respektive gräns (365 resp. 730) — inte blandas ihop.
+        var anstallId = EmployeeId.New();
+
+        await _service.RegistreraPeriodAsync(
+            anstallId, EmploymentType.SAVA,
+            DateOnly.FromDateTime(DateTime.Today.AddDays(-400)),
+            DateOnly.FromDateTime(DateTime.Today.AddDays(-201))); // 200 SAVA-dagar
+
+        await _service.RegistreraPeriodAsync(
+            anstallId, EmploymentType.Vikariat,
+            DateOnly.FromDateTime(DateTime.Today.AddDays(-200)),
+            DateOnly.FromDateTime(DateTime.Today.AddDays(-1)));   // 200 vikariatsdagar
+
+        var acc = await _repository.GetByEmployeeAsync(anstallId, CancellationToken.None);
+        Assert.NotNull(acc);
+        Assert.Equal(200, acc.AckumuleradeSavaDagar);
+        Assert.Equal(200, acc.AckumuleradeVikariatDagar);
+        Assert.Equal(400, acc.AckumuleradeDagar);
+        // 400 blandade dagar passerar INTE SAVA-gränsen 365 — ingen felaktig konvertering.
+        Assert.NotEqual(LASStatus.KonverteradTillTillsvidare, acc.Status);
+    }
+
+    [Fact]
     public async Task HamtaForetradesrattsinnehavare_ReturnerarAktiva()
     {
         // Arrange: SAVA med 280 dagar (~9+ månader) → berättigad till företrädesrätt

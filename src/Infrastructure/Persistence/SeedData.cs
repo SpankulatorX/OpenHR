@@ -773,10 +773,12 @@ public static class SeedData
                 runMars.Id, emp.Id, empl.Id, 2026, 3,
                 lon, 100m, RegionHR.SharedKernel.Domain.CollectiveAgreementType.AB);
             var brutto = lon.Amount;
-            // Anna Svensson (i=0): 3 nattpass OB
+            // Anna Svensson (i=0): 3 nattpass à 8 h vardagsnatt-OB
             if (i == 0)
             {
-                result.OBTillagg = Money.SEK(3 * 113m); // natt-OB 113 kr/h * 3
+                // AB § 21 O-tilläggstid C (vardagsnatt), sats fr.o.m. 2025-04-01 = 56,70 kr/h
+                // (mars 2026 ligger före uppräkningen 2026-04-01).
+                result.OBTillagg = Money.SEK(3 * 8 * 56.70m);
                 brutto += result.OBTillagg.Amount;
             }
             // Erik Johansson (i=1): övertid
@@ -1467,21 +1469,25 @@ Om du har en sjukdom som leder till många korta sjukperioder kan du ansöka om 
                 "Vad är OB-tillägg?",
                 @"## OB-tillägg (Obekväm arbetstid)
 
-OB-tillägg är extra ersättning för arbete på obekväma tider. Enligt **kollektivavtal AB 2025** gäller:
+OB-tillägg (O-tillägg) är extra ersättning för arbete på obekväm arbetstid enligt **AB § 21** (Allmänna bestämmelser). Satserna räknas upp per avtalsår och gäller fr.o.m. 1 april respektive år.
 
-### Belopp per timme
-| Tid | Belopp |
-|-----|--------|
-| Vardag kväll (19–22) | 126,50 kr/h |
-| Vardag natt (22–06) | 152,00 kr/h |
-| Helg (fre 19 – sön 22) | 89,00 kr/h |
-| Storhelg (julafton, nyår etc) | 195,00 kr/h |
+### Belopp per timme (AB 25 § 21)
+| O-tilläggstid | Fr.o.m. 2025-04-01 | Fr.o.m. 2026-04-01 |
+|-----|--------|--------|
+| Vardag kväll (19–22, fredag från 17) | 25,60 kr/h | 26,40 kr/h |
+| Vardag natt (22–06) | 56,70 kr/h | 58,40 kr/h |
+| Helg (lördag, söndag, helgdag) | 66,10 kr/h | 68,10 kr/h |
+| Helg, natt 22–06 (förhöjd sats) | 76,00 kr/h | 78,30 kr/h |
+| Storhelg | 126,90 kr/h | 130,70 kr/h |
+| Storhelg, natt 22–06 (förhöjd sats) | 152,30 kr/h | 156,90 kr/h |
+
+För helg och storhelg gäller alltså en förhöjd nattsats kl. 22–06 (natt mot lör-/sön-/helgdag).
 
 ### Beräkning
 OB beräknas automatiskt utifrån ditt schema i OpenHR. Du ser OB-tillägget specificerat på din lönespecifikation.
 
 ### Storhelger
-Med storhelger avses bl.a. julafton, juldagen, annandag jul, nyårsafton, nyårsdagen, påskafton, påskdagen, annandag påsk, Kristi himmelsfärdsdag och midsommarafton.",
+Med storhelg avses påskhelgen (påskafton–annandag påsk), midsommarhelgen (midsommarafton–midsommardagen), julhelgen (julafton–annandag jul) samt nyårshelgen (nyårsafton–nyårsdagen). Kristi himmelsfärdsdag är en vanlig helgdag och ger helg-OB, inte storhelgs-OB.",
                 catSchema.Id, ["OB", "obekväm", "tillägg", "kväll", "natt", "helg", "storhelg"]);
             art3.Publicera();
 

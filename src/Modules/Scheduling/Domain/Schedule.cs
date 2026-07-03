@@ -1,3 +1,4 @@
+using RegionHR.Payroll.Domain;
 using RegionHR.SharedKernel.Abstractions;
 using RegionHR.SharedKernel.Domain;
 
@@ -63,11 +64,47 @@ public sealed class Schedule : AggregateRoot<ScheduleId>
             PlaneradStart = start,
             PlaneradSlut = slut,
             Rast = rast,
-            Status = ShiftStatus.Planerad
+            Status = ShiftStatus.Planerad,
+            OBKategori = BeraknaOBKategoriForPass(datum, start, slut)
         };
         _pass.Add(shift);
         return shift;
     }
+
+    /// <summary>
+    /// Bestäm passets OB-kategori utifrån planerad tid. Går igenom passet i
+    /// 15-minutersintervall (samma upplösning som SchedulePayrollBridge) och väljer
+    /// den högst prioriterade kategori som förekommer: storhelg > helg > natt > kväll.
+    /// Hanterar nattpass som korsar midnatt. Ett vardagspass utan OB-tid får
+    /// <see cref="OBCategory.Ingen"/>.
+    /// </summary>
+    private static OBCategory BeraknaOBKategoriForPass(DateOnly datum, TimeOnly start, TimeOnly slut)
+    {
+        var startDT = datum.ToDateTime(start);
+        var slutDT = datum.ToDateTime(slut);
+        if (slutDT <= startDT)
+            slutDT = slutDT.AddDays(1); // Nattpass som korsar midnatt
+
+        var kategori = OBCategory.Ingen;
+        for (var current = startDT; current < slutDT; current = current.AddMinutes(15))
+        {
+            var punktKategori = SvenskaHelgdagar.BeraknaOBKategori(
+                DateOnly.FromDateTime(current), TimeOnly.FromDateTime(current));
+            if (OBPrioritet(punktKategori) > OBPrioritet(kategori))
+                kategori = punktKategori;
+        }
+
+        return kategori;
+    }
+
+    private static int OBPrioritet(OBCategory kategori) => kategori switch
+    {
+        OBCategory.Storhelg => 4,
+        OBCategory.Helg => 3,
+        OBCategory.VardagNatt => 2,
+        OBCategory.VardagKvall => 1,
+        _ => 0
+    };
 
     /// <summary>
     /// Ta bort ett planerat pass ur schemat. Returnerar true om passet fanns och togs bort.

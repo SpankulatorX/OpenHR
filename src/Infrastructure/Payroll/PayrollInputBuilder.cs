@@ -6,14 +6,15 @@ using RegionHR.Payroll.Domain;
 using RegionHR.Payroll.Engine;
 using RegionHR.Scheduling.Domain;
 using RegionHR.SharedKernel.Domain;
+using RegionHR.Travel.Domain;
 
 namespace RegionHR.Infrastructure.Payroll;
 
 /// <summary>
 /// Bygger ett riktigt <see cref="PayrollInput"/> per anställd och period ur databasen.
-/// Systemet är experten: underlaget härleds ur schema (OB, övertid, jour, beredskap),
-/// frånvaroregister (sjuk, semester, föräldraledighet) och anställningens giltighetsperiod —
-/// inte ur handmatade schabloner.
+/// Systemet är experten: underlaget härleds ur schema (OB inkl. natt-timmar, övertid, jour,
+/// beredskap), frånvaroregister (sjuk, semester, föräldraledighet), attesterade resekrav
+/// och anställningens giltighetsperiod — inte ur handmatade schabloner.
 ///
 /// Aggregeringen sker i minnet eftersom <see cref="ScheduledShift.PlaneradeTimmar"/> och
 /// <see cref="ScheduledShift.FaktiskaTimmar"/> är beräknade egenskaper som EF inte kan översätta.
@@ -54,7 +55,7 @@ public sealed class PayrollInputBuilder
         {
             ArbetadeDagar = arbetadeDagar,
             ArbetsdagarIManadens = arbetsdagarIManaden,
-            Kostnadsstalle = employment.EnhetId.Value.ToString()
+            Kostnadsstalle = await HamtaKostnadsstalleAsync(db, employment, ct)
         };
 
         // === Schema: OB, övertid, jour, beredskap ===
@@ -92,6 +93,29 @@ public sealed class PayrollInputBuilder
             .ToListAsync(ct);
 
         AggregeraFranvaro(leave, firstDay, lastDay, input);
+
+        // === Resekrav: attesterade (klara för utbetalning) krav t.o.m. periodens slut ===
+        // Betalas ut som skattefria ersättningar på lönespecifikationen. Kravet ska
+        // markeras som utbetalt (MarkeraSomUtbetald) när lönekörningen betalas ut —
+        // annars följer det med igen i nästa körning.
+        var resekrav = await db.TravelClaims
+            .Where(t => t.AnstallId == anstallId
+                        && t.Status == TravelClaimStatus.Godkand
+                        && t.ReseDatum <= lastDay)
+            .ToListAsync(ct);
+
+        foreach (var krav in resekrav)
+        {
+            var traktamente = krav.Traktamente ?? Money.Zero;
+            var milersattning = krav.Milersattning ?? Money.Zero;
+            // Utläggsdelen härleds ur totalbeloppet så att utläggsraderna inte behöver laddas.
+            var utlagg = krav.TotalBelopp - traktamente - milersattning;
+
+            input.ReseTraktamente += traktamente;
+            input.ReseMilersattning += milersattning;
+            if (utlagg > Money.Zero)
+                input.ReseUtlagg += utlagg;
+        }
 
         // === Nettolöneavdrag: löneutmätning (Kronofogden) + fackavgift ur registren ===
         // Systemet är experten: beloppen härleds ur utmätnings-/fackavgiftsregistren per anställd
@@ -213,11 +237,35 @@ public sealed class PayrollInputBuilder
     }
 
     /// <summary>
-    /// Aggregera OB-timmar per kategori, övertid, jour- och beredskapstimmar ur passen.
+    /// Enhetens kostnadsställe (kort kod, t.ex. "20032") ur organisationsregistret.
+    /// Tidigare användes enhetens GUID (36 tecken) vilket sprängde kolumnen
+    /// payroll_result_lines.kostnadsstalle (varchar(20)) och fick hela lönekörningens
+    /// SaveChanges att krascha med "An error occurred while saving the entity changes".
+    /// Saknas enheten i registret lämnas kostnadsstället tomt.
+    /// </summary>
+    private static async Task<string?> HamtaKostnadsstalleAsync(
+        RegionHRDbContext db, Employment employment, CancellationToken ct)
+    {
+        var kostnadsstalle = await db.OrganizationUnits
+            .Where(o => o.Id == employment.EnhetId)
+            .Select(o => o.Kostnadsstalle)
+            .FirstOrDefaultAsync(ct);
+
+        if (string.IsNullOrWhiteSpace(kostnadsstalle))
+            return null;
+
+        // Hård vakt mot kolumnens varchar(20) — koden ska normalt vara kort.
+        return kostnadsstalle.Length <= 20 ? kostnadsstalle : kostnadsstalle[..20];
+    }
+
+    /// <summary>
+    /// Aggregera OB-timmar per kategori (inkl. natt-timmar kl. 22–06 för den natthöjda
+    /// O-satsen), övertid, jour- och beredskapstimmar ur passen.
     /// </summary>
     private static void AggregeraSchema(IReadOnlyList<ScheduledShift> shifts, PayrollInput input)
     {
         var obPerKategori = new Dictionary<OBCategory, decimal>();
+        var obNattPerKategori = new Dictionary<OBCategory, decimal>();
         var overtid = 0m;
         var kvalificerad = false;
         var jour = 0m;
@@ -241,6 +289,17 @@ public sealed class PayrollInputBuilder
             {
                 obPerKategori.TryGetValue(pass.OBKategori, out var befintlig);
                 obPerKategori[pass.OBKategori] = befintlig + timmar;
+
+                // Natt-timmar (kl. 22–06) för natthöjd O-sats (helg/storhelg, AB § 21 anm.)
+                var (startTid, slutTid) = pass.FaktiskStart is not null && pass.FaktiskSlut is not null
+                    ? (pass.FaktiskStart.Value, pass.FaktiskSlut.Value)
+                    : (pass.PlaneradStart, pass.PlaneradSlut);
+                var natt = Math.Min(timmar, BeraknaNattTimmar(startTid, slutTid));
+                if (natt > 0m)
+                {
+                    obNattPerKategori.TryGetValue(pass.OBKategori, out var befintligNatt);
+                    obNattPerKategori[pass.OBKategori] = befintligNatt + natt;
+                }
             }
 
             if (pass.OvertidTimmar is { } ot && ot > 0m)
@@ -251,13 +310,37 @@ public sealed class PayrollInputBuilder
         }
 
         input.OBTimmar = obPerKategori
-            .Select(kv => new OBInput { Kategori = kv.Key, Timmar = kv.Value })
+            .Select(kv => new OBInput
+            {
+                Kategori = kv.Key,
+                Timmar = kv.Value,
+                NattTimmar = obNattPerKategori.GetValueOrDefault(kv.Key)
+            })
             .OrderBy(o => o.Kategori)
             .ToList();
         input.OvertidTimmar = overtid;
         input.KvalificeradOvertid = kvalificerad;
         input.JourTimmar = jour;
         input.BeredskapsTimmar = beredskap;
+    }
+
+    /// <summary>
+    /// Antal timmar av ett pass som ligger inom nattfönstret kl. 22.00–06.00.
+    /// Hanterar pass som korsar midnatt. Rasten antas ligga utanför natten
+    /// (försiktig överskattning kapas mot passets totala timmar av anroparen).
+    /// </summary>
+    private static decimal BeraknaNattTimmar(TimeOnly start, TimeOnly slut)
+    {
+        var s = (decimal)start.ToTimeSpan().TotalHours;
+        var e = (decimal)slut.ToTimeSpan().TotalHours;
+        if (e <= s) e += 24m; // Korsar midnatt
+
+        // Nattfönstren på en 48-timmarsaxel: 00–06, 22–30 (= 22–24 + 00–06 nästa dygn)
+        // och 46–54 (= 22–24 andra dygnet, för extremt långa pass).
+        var natt = 0m;
+        foreach (var (ws, we) in new[] { (0m, 6m), (22m, 30m), (46m, 54m) })
+            natt += Math.Max(0m, Math.Min(e, we) - Math.Max(s, ws));
+        return natt;
     }
 
     /// <summary>
@@ -292,7 +375,10 @@ public sealed class PayrollInputBuilder
         }
 
         // Sjuklön betalas endast dag 2–14; övriga sjukdagar ligger hos Försäkringskassan.
+        // Löneavdraget görs dock för ALLA sjukdagar — dag 15+ redovisas separat så att
+        // motorn kan dra full daglön utan att generera sjuklön.
         input.SjukdagarMedLon = Math.Min(sjuk, MaxSjuklonedagar);
+        input.SjukdagarUtanLon = Math.Max(0, sjuk - MaxSjuklonedagar);
         input.SemesterdagarUttagna = semester;
         input.ForaldraledigaDagar = foraldra;
     }

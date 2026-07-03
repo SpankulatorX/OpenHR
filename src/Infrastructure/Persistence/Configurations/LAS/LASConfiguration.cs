@@ -18,6 +18,9 @@ public class LASAccumulationConfiguration : IEntityTypeConfiguration<LASAccumula
             .HasColumnName("anstalld_id");
         builder.Property(e => e.Anstallningsform).HasConversion<string>().HasColumnName("anstallningsform").HasMaxLength(30);
         builder.Property(e => e.AckumuleradeDagar).HasColumnName("ackumulerade_dagar");
+        // Per-form-räknare (SAVA/vikariat räknas mot varsin LAS-gräns) — våg: LAS-buggfix
+        builder.Property(e => e.AckumuleradeSavaDagar).HasColumnName("ackumulerade_sava_dagar");
+        builder.Property(e => e.AckumuleradeVikariatDagar).HasColumnName("ackumulerade_vikariat_dagar");
         builder.Property(e => e.ReferensfonsterStart).HasColumnName("referensfonster_start");
         builder.Property(e => e.ReferensfonsterSlut).HasColumnName("referensfonster_slut");
         builder.Property(e => e.Status).HasConversion<string>().HasColumnName("status").HasMaxLength(30);
@@ -49,6 +52,8 @@ public class LASPeriodConfiguration : IEntityTypeConfiguration<LASPeriod>
         builder.Property(e => e.SlutDatum).HasColumnName("slut_datum");
         builder.Property(e => e.AntalDagar).HasColumnName("antal_dagar");
         builder.Property(e => e.AnstallningsId).HasColumnName("anstallnings_id").HasMaxLength(100);
+        // Periodens anställningsform avgör vilken LAS-gräns dagarna räknas mot — våg: LAS-buggfix
+        builder.Property(e => e.Anstallningsform).HasConversion<string>().HasColumnName("anstallningsform").HasMaxLength(30);
     }
 }
 

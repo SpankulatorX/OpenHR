@@ -34,10 +34,12 @@ public static class ABOTillaggSatser
     // Ordnad fallande på GiltigFran så att första posten med GiltigFran <= datum gäller.
     private static readonly ABOTillaggSats[] Tabell =
     [
-        // AB § 21 mom. 1 — gäller fr.o.m. 2026-04-01
+        // AB § 21 mom. 1 — gäller fr.o.m. 2026-04-01.
+        // HelgBNatt enligt AB 25 § 21 anm. 1: O-tillägg B höjs med 30 % kl. 22.00–06.00
+        // natt mot lör/sön/helgdag → 78,30 × 1,30 = 101,80 kr/tim.
         new(new DateOnly(2026, 4, 1),
             StorhelgA: 130.70m, StorhelgANatt: 156.90m,
-            HelgB: 68.10m, HelgBNatt: 78.30m,
+            HelgB: 68.10m, HelgBNatt: 101.80m,
             VardagNattC: 58.40m, VardagKvallD: 26.40m),
 
         // AB § 21 mom. 1 — gäller fr.o.m. 2025-04-01

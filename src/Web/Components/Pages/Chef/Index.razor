@@ -174,20 +174,20 @@ else if (!_loading)
     }
 
     [Inject] private RegionHR.Web.Services.AuthService Auth { get; set; } = default!;
+    [Inject] private RegionHR.Web.Services.LedighetService Ledighet { get; set; } = default!;
     private bool _canApprove => Auth.EmployeeId.HasValue;
 
     private async Task Godkann(ApprovalItem item)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) { _error = "Godkännande kräver kopplad anställd."; return; }
+        _error = null;
         try
         {
             if (item.EntityType == "LeaveRequest")
             {
-                var req = await db.LeaveRequests.FirstOrDefaultAsync(r => r.Id == item.Id);
-                if (req == null) return;
-                req.Godkann(Auth.EmployeeId.Value, null);
-                await db.SaveChangesAsync();
+                // Samma väg som Ledighet/Index: tjänsten drar semestersaldo,
+                // avbokar överlappande schemapass och notifierar den anställde.
+                await Ledighet.GodkannAsync(item.Id, Auth.EmployeeId.Value, null);
             }
             _approvals.Remove(item);
         }
@@ -196,16 +196,13 @@ else if (!_loading)
 
     private async Task Neka(ApprovalItem item)
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (!Auth.EmployeeId.HasValue) { _error = "Avslag kräver kopplad anställd."; return; }
+        _error = null;
         try
         {
             if (item.EntityType == "LeaveRequest")
             {
-                var req = await db.LeaveRequests.FirstOrDefaultAsync(r => r.Id == item.Id);
-                if (req == null) return;
-                req.Avvisa(Auth.EmployeeId.Value, "Nekad av chef");
-                await db.SaveChangesAsync();
+                await Ledighet.AvslaAsync(item.Id, Auth.EmployeeId.Value, "Nekad av chef");
             }
             _approvals.Remove(item);
         }
@@ -217,8 +214,14 @@ else if (!_loading)
         await using var db = await DbFactory.CreateDbContextAsync();
         try
         {
-            nudge.MarkeraSomLast();
-            await db.SaveChangesAsync();
+            // Hämta om entiteten i samma context som SaveChanges — den listade
+            // instansen kommer från init-contexten och trackas inte här.
+            var sparad = await db.CoachingNudges.FirstOrDefaultAsync(n => n.Id == nudge.Id);
+            if (sparad != null)
+            {
+                sparad.MarkeraSomLast();
+                await db.SaveChangesAsync();
+            }
             _nudges.Remove(nudge);
         }
         catch (Exception ex) { _error = ex.Message; }

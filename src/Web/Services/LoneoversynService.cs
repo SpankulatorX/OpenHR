@@ -2,6 +2,7 @@ using System.Text;
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using RegionHR.Core.Domain;
+using RegionHR.Infrastructure.Payroll;
 using RegionHR.Infrastructure.Persistence;
 using RegionHR.SalaryReview.Domain;
 using RegionHR.SalaryReview.Services;
@@ -21,9 +22,21 @@ public sealed class LoneoversynService
 {
     private readonly IDbContextFactory<RegionHRDbContext> _dbFactory;
     private readonly SalaryReviewExecutionEngine _engine = new();
+    private readonly PayrollBatchService? _payrollBatch;
 
-    public LoneoversynService(IDbContextFactory<RegionHRDbContext> dbFactory)
-        => _dbFactory = dbFactory;
+    /// <param name="dbFactory">Databasfabrik (samma mönster som övriga Web-tjänster).</param>
+    /// <param name="payrollBatch">
+    /// Lönekörningstjänsten som skapar den retroaktiva lönekörningen vid genomförande.
+    /// Valfri: utan den appliceras ny lön fortfarande, men ingen retro-körning skapas
+    /// (t.ex. i importflödet som aldrig genomför rundan).
+    /// </param>
+    public LoneoversynService(
+        IDbContextFactory<RegionHRDbContext> dbFactory,
+        PayrollBatchService? payrollBatch = null)
+    {
+        _dbFactory = dbFactory;
+        _payrollBatch = payrollBatch;
+    }
 
     public async Task<List<SalaryReviewRound>> HamtaRundorAsync(CancellationToken ct = default)
     {
@@ -125,9 +138,11 @@ public sealed class LoneoversynService
 
     /// <summary>
     /// Genomför rundan: applicerar varje godkänt förslag som ny lön på anställningen,
-    /// beräknar retroaktivt belopp och sparar allt i samma transaktion.
+    /// beräknar retroaktivt belopp och sparar allt i samma transaktion. Därefter skapas
+    /// en retroaktiv lönekörning per månad i fönstret [ikraftträdande, genomförande) så
+    /// att differensen faktiskt betalas ut — inte bara visas i UI:t.
     /// </summary>
-    public async Task<SalaryReviewExecutionResult> GenomforAsync(
+    public async Task<LoneoversynGenomforandeResultat> GenomforAsync(
         Guid rundaId, string genomfordAv, DateOnly? genomforandeDatum = null, CancellationToken ct = default)
     {
         await using var db = await _dbFactory.CreateDbContextAsync(ct);
@@ -155,7 +170,35 @@ public sealed class LoneoversynService
         // En SaveChanges persisterar både rundans status/retro och de nya lönerna
         // (alla aggregat spåras av samma DbContext).
         await db.SaveChangesAsync(ct);
-        return resultat;
+
+        // Skapa retroaktiva lönekörningar för varje månad mellan ikraftträdande och
+        // genomförande. Körs EFTER SaveChanges så att omräkningen ser de nya lönerna.
+        // Fel per period (t.ex. ingen ursprunglig körning för månaden) stoppar inte
+        // genomförandet — lönerna är redan applicerade — utan rapporteras till anroparen.
+        var retroKorningar = new List<string>();
+        var retroFel = new List<string>();
+        if (_payrollBatch is not null)
+        {
+            var period = new DateOnly(runda.IkrafttradandeDatum.Year, runda.IkrafttradandeDatum.Month, 1);
+            var genomforandeManad = new DateOnly(datum.Year, datum.Month, 1);
+            while (period < genomforandeManad)
+            {
+                var retroPeriod = $"{period.Year:D4}-{period.Month:D2}";
+                try
+                {
+                    await _payrollBatch.ExecuteRetroactiveRunAsync(
+                        datum.Year, datum.Month, retroPeriod, genomfordAv, ct);
+                    retroKorningar.Add(retroPeriod);
+                }
+                catch (Exception ex)
+                {
+                    retroFel.Add($"{retroPeriod}: {ex.Message}");
+                }
+                period = period.AddMonths(1);
+            }
+        }
+
+        return new LoneoversynGenomforandeResultat(resultat, retroKorningar, retroFel);
     }
 
     /// <summary>Namnuppslag EmployeeId → fullständigt namn för att visa förslag/ändringar.</summary>
@@ -228,6 +271,10 @@ public sealed class LoneoversynService
 
             decimal? nuvarande = anstallning?.Manadslon.Amount;
             decimal? okning = (anstallning is not null && parsad.NyLon is { } ny) ? ny - anstallning.Manadslon.Amount : null;
+
+            // Speglar aggregatets spärr: lönesänkning avvisas redan i förhandsgranskningen.
+            if (okning is < 0)
+                fel.Add("Föreslagen lön är lägre än nuvarande lön — lönesänkning kan inte importeras.");
 
             // Budgetkontroll i filordning, speglar aggregatets sekventiella kontroll.
             if (fel.Count == 0 && okning is { } o)
@@ -404,6 +451,19 @@ public sealed class LoneoversynService
         RegionHRDbContext db, Guid rundaId, CancellationToken ct) =>
         await db.SalaryReviewRounds.Include(r => r.Forslag).FirstOrDefaultAsync(r => r.Id == rundaId, ct)
         ?? throw new InvalidOperationException($"Löneöversynsrunda {rundaId} hittades inte.");
+}
+
+/// <summary>
+/// Utfallet av ett genomförande: själva löneappliceringen plus vilka retroaktiva
+/// lönekörningar som skapades (en per månad i retrofönstret) respektive misslyckades.
+/// </summary>
+public sealed record LoneoversynGenomforandeResultat(
+    SalaryReviewExecutionResult Genomforande,
+    IReadOnlyList<string> RetroaktivaKorningar,
+    IReadOnlyList<string> RetroaktivaFel)
+{
+    public int AntalAnstallda => Genomforande.AntalAnstallda;
+    public Money TotalRetroaktivt => Genomforande.TotalRetroaktivt;
 }
 
 /// <summary>En anställd som kan få ett löneförslag i en runda.</summary>

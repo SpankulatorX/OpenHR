@@ -8,7 +8,7 @@ namespace RegionHR.Agreements.Tests;
 /// Verifierar de årsversionerade O-tilläggssatserna mot AB § 21 mom. 1.
 /// KÄLLA: SKR "Allmänna Bestämmelser (AB) 25 i lydelse 2025-04-01", § 21.
 /// Satser fr.o.m. 2025-04-01: A=126,90 (natt 152,30), B=66,10 (natt 76,00), C=56,70, D=25,60.
-/// Satser fr.o.m. 2026-04-01: A=130,70 (natt 156,90), B=68,10 (natt 78,30), C=58,40, D=26,40.
+/// Satser fr.o.m. 2026-04-01: A=130,70 (natt 156,90), B=68,10 (natt 101,80 per anm. 1: +30 %), C=58,40, D=26,40.
 /// </summary>
 public class ABOTillaggSatserTests
 {
@@ -40,7 +40,8 @@ public class ABOTillaggSatserTests
         Assert.Equal(152.30m, ABOTillaggSatser.Nattsats(OBCategory.Storhelg, Ar2025));
         Assert.Equal(76.00m, ABOTillaggSatser.Nattsats(OBCategory.Helg, Ar2025));
         Assert.Equal(156.90m, ABOTillaggSatser.Nattsats(OBCategory.Storhelg, Ar2026));
-        Assert.Equal(78.30m, ABOTillaggSatser.Nattsats(OBCategory.Helg, Ar2026));
+        // AB 25 § 21 anm. 1: B-satsen höjd med 30 % nattetid → 78,30 × 1,30 = 101,80.
+        Assert.Equal(101.80m, ABOTillaggSatser.Nattsats(OBCategory.Helg, Ar2026));
     }
 
     [Fact]

@@ -130,7 +130,9 @@ else
             _ts = await db.Timesheets.FirstOrDefaultAsync(t => t.Id == Id);
             if (_ts != null)
             {
-                var emp = await db.Employees.FirstOrDefaultAsync(e => e.Id.Value == _ts.AnstallId);
+                // Jämför på det starkt typade Id:t — '.Id.Value' kan inte översättas av EF Core.
+                var anstallId = EmployeeId.From(_ts.AnstallId);
+                var emp = await db.Employees.FirstOrDefaultAsync(e => e.Id == anstallId);
                 _empName = emp != null ? $"{emp.Fornamn} {emp.Efternamn}" : "Okänd";
             }
         }

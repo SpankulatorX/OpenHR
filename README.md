@@ -4,15 +4,26 @@
 
 OpenHR är ett personalhanteringssystem byggt för att ersätta HEROMA och andra proprietära HR-system inom svensk offentlig sektor. Byggt med öppen källkod (AGPL-3.0), svensk arbetsrätt, kollektivavtal och GDPR.
 
-> **OpenHR 2.2** — 38 moduler, 214 sidor, 240 domänfiler, **2 165 tester (alla gröna)**, 329/330 i18n-nycklar (sv+en). Bygg: `dotnet test RegionHR.sln`.
+> **OpenHR 2.2** — 38 moduler, 214 sidor, 240 domänfiler, **2 219 tester (alla gröna)**, 329/330 i18n-nycklar (sv+en). Bygg: `dotnet test RegionHR.sln`.
+
+## Oberoende granskning & rättningar (2026-07-02)
+
+En oberoende, kritisk granskning gjordes mot Region Örebro läns upphandlingsunderlag (dnr 25RS1678), följt av en rättningsomgång. Granskningen bekräftade en genuin, domänmodellerad kärna och en stor testsvit — men fann också att flera UI-flöden såg ut att lyckas utan att spara, att lönemotorn räknade fel i vissa fall, och att denna README tidigare översålde. Rättningsomgången (bygge grönt, **2 219 tester**) åtgärdade bl.a.:
+
+- **Lön:** frånvaroavdrag saknades (sjukdom/föräldraledighet höjde bruttolönen) — nu korrekt; övertid enligt AB §20 (180/240 % av mån.lön/165); O-tillägg natt mot helg 2026 rättad till 101,80 kr/h (+30 %, AB §21 anm. 1); OB-tidsklassificering/storhelg mot AB §21; natthöjda satser tillämpas nu i kedjan schema→lön; godkända resekrav når lönekörningen.
+- **Två live-krascher:** att skapa en lönekörning och att granska en tidrapport kraschade — nu åtgärdade (rotorsak: kostnadsställe-GUID mot `varchar(20)`-kolumn resp. value-object i en LINQ-`Where`).
+- **Behörighet & spårbarhet:** åtkomstpolicyn är nu fail-closed (okänd rutt nekas; `/las`, `/anpassat` regelsatta); granskningsloggen loggar den faktiska användaren (inte "system").
+- **Övrigt:** OB-default-bugg på manuellt inlagda pass, fem "sparar-aldrig"-buggar (passbyte, öppet pass, chef-ledighet, friskvård, kompetens/utbildning), LAS-dagar räknas upp löpande + SÄVA/vikariat separat, riktig PDF (QuestPDF), rätt arbetsgivare (Region Örebro län) i dokument, schemalagda rapporter körs, m.m.
+
+**Fortfarande en demonstrator — inte produktionsklar.** Medvetet ej åtgärdat (kräver avtal eller större omskrivning): effektivdaterad lönehistorik-versionering, riktig EF-migrationsstrategi (kör i dag `EnsureCreated`), lasttest/utskalning för 11 000 användare, komplett A-tidsmodell för alla storhelgskanter, och de avtalsbundna live-integrationerna (BankID/SITHS, bank, FK, KPA, Navet, Inera, Health Connect). Se granskningsrapporten för exakt status per delprojekt och integration.
 
 ## Status & begränsningar (läs först)
 
 OpenHR är en **fungerande, testad demonstrator** — inte en skarp driftsatt Heroma-ersättare än, men täcker nu regionens nio funktionella delprojekt OCH större delen av integrationslandskapet (IT-arkitektur "Personalstöd v7"). Vad som är på riktigt vs demo:
 
-- **På riktigt:** löneberäkning med korrekta 2026-värden (skattetabell, AB O-tillägg, arbetsgivaravgift, traktamente); hela HR-livscykeln (anställa→schema→tid→lön→utbetalningsfil); rollbaserad URL-behörighet (Anställd når aldrig lön/audit/admin); löneflöden (utmätning/fackavgift, tolkersättning, ersättning förtroendevalda); AKAP-KR-pension; LAS auto-kedja; behovsstyrd vårdschema-automatik; e-arkiv (arkivlagen); SCORM/e-learning; web push; BI/DW-export + realtids-beslutsstöd; KLASSA-informationsklassning; **integrationsramverk** (register + SFTP-transport + jobb-runner + körningslogg + övervakning) med filgeneratorer/adaptrar för AGI, pain.001, KPA-pension, FK-anmälan, SIE/Raindance-kontering, folkbokföring-import, KOLL-export, SCB/SKR-statistik. 2 165 gröna tester.
+- **På riktigt:** löneberäkning med korrekta 2026-värden (skattetabell, AB O-tillägg, arbetsgivaravgift, traktamente); hela HR-livscykeln (anställa→schema→tid→lön→utbetalningsfil); rollbaserad URL-behörighet (Anställd når aldrig lön/audit/admin); löneflöden (utmätning/fackavgift, tolkersättning, ersättning förtroendevalda); AKAP-KR-pension; LAS auto-kedja; behovsstyrd vårdschema-automatik; e-arkiv (arkivlagen); SCORM/e-learning; web push; BI/DW-export + realtids-beslutsstöd; KLASSA-informationsklassning; **integrationsramverk** (register + SFTP-transport + jobb-runner + körningslogg + övervakning) med filgeneratorer/adaptrar för AGI, pain.001, KPA-pension, FK-anmälan, SIE/Raindance-kontering, folkbokföring-import, KOLL-export, SCB/SKR-statistik. 2 219 gröna tester.
 - **Demo/simulering (kräver externa avtal för skarp drift):** inloggning (BankID/SITHS simulerad; Entra/OIDC är config-ready via `appsettings` "Oidc"); HSA-katalogen (sandbox); skarp nätverkstransport till bank/Försäkringskassan/KPA/Skatteverket-Navet/Inera/Health Connect — filformaten är byggda + config-ready, bara den avtalsbundna kopplingen fattas. Se `docs/drift-reservloneplan.md`.
-- **Återstår för produktion:** horisontell skalning för 11 000 användare (lasttest: ~1,1 MiB/circuit, median 14 ms → en 2 GB-instans klarar ~1 500 samtidiga; 11k = 2–4 instanser bakom lastbalanserare), skarpa integrationer (avtal), formell KLASSA-riskanalys, drift-SLA. Se [gap-analys](docs/gap-analysis-enterprise-hr.md).
+- **Återstår för produktion:** horisontell skalning för 11 000 användare kräver **lasttest och utskalning bakom lastbalanserare** — flera en-instans-beroenden (delade Data Protection-nycklar, SignalR-backplane, delad fillagring, jobb-koordinering) återstår att adressera innan repliker kan läggas till; riktig EF-migrationsstrategi (kör i dag `EnsureCreated`); skarpa integrationer (avtal); formell KLASSA-riskanalys; drift-SLA. Se [gap-analys](docs/gap-analysis-enterprise-hr.md).
 
 ## Funktionsstatus
 
@@ -20,7 +31,7 @@ OpenHR är en **fungerande, testad demonstrator** — inte en skarp driftsatt He
 Riktiga beräkningar med svensk lagstiftning, anropade direkt från lönekörningen:
 
 - **PayrollCalculationEngine** — brutto→netto via seedad **skattetabell** (Skatteverket tabell 34); arbetsgivaravgift 31,42 % (äldre 10,21 % för födda ≤1958; 1937− = 0 %; temporär ungdomsnedsättning 20,81 %); statlig skatt över skiktgräns 643 000 kr/år
-- **CollectiveAgreementRulesEngine** — AB §21 O-tillägg (kväll 25,60 / natt 56,70 / helg 66,10 / storhelg 126,90 kr/h), övertid §20, semester §27 per ålder; årsversionerat
+- **CollectiveAgreementRulesEngine** — AB §21 O-tillägg, årsversionerat (fr.o.m. 2026-04-01: kväll 26,40 / natt 58,40 / helg 68,10 / storhelg 130,70 kr/h; natthöjt 22–06 mot helg 101,80 / storhelg 156,90); övertid §20 (180/240 % av mån.lön/165), semester §27 per ålder
 - **TraktamentsCalculator** — inrikes 300/150 kr + måltidsavdrag enligt Skatteverket 2026 (SKV 354); årsversionerat
 - **ConstraintScheduleSolver + ArbetstidslagenValidator** — schemaoptimering med ATL-kontroll (dygnsvila 11h, veckovila 36h)
 - **Integrationsformat** — AGI-XML (Skatteverket SKV 269, fältkod + specifikationsnummer), pain.001.001.03 (ISO 20022, riktiga person-/bankuppgifter), nedladdas via /lon/export
@@ -104,7 +115,7 @@ Alla rapportvyer läser från verklig DB-data:
 - **EU Pay Transparency** — lönetransparensrapportering enligt EU-direktivet 2023/970, pay gap-analys per kohort
 
 ### Auth & personalisering
-- **Rollbaserad session** (ClaimsPrincipal via AuthenticationStateProvider) med central path→roll-policy — Anställd når aldrig lön/audit/admin ens via direkt-URL
+- **Rollbaserad session** (ClaimsPrincipal via AuthenticationStateProvider) med central path→roll-policy, **fail-closed** (okänd rutt nekas tills en regel uttryckligen tillåter) — Anställd når aldrig lön/audit/admin ens via direkt-URL
 - **Demo-inloggning** med profilval (Anna/Anställd, Eva/Chef, Karl/HR, Admin); **Entra/OIDC config-ready** för skarp federation
 - **MinSida** — schema, lön, ledighet, ärenden, profil, lönespecifikationer, stämpling, saldon
 - **Chefsportal** — teamvy filtrerad på chefens enhet (org-scoping), frånvarokalender, godkännanden
@@ -130,7 +141,7 @@ Dessa kräver betalda avtal eller livekopplingar som regionen tecknar — filfor
 - Riktig BankID/SITHS-legitimation (nuvarande inloggning är demo-simulering; Entra/OIDC är config-ready)
 - Skarp nätverkstransport till bank, Försäkringskassan, KPA, Skatteverket/Navet, Inera/HSA och RÖL:s Health Connect
 - Native mobilapp (PWA med offline-stöd och push-notiser används i stället)
-- Horisontell skalning för 11 000 samtidiga användare (driftbeslut: 2–4 instanser bakom lastbalanserare)
+- Horisontell skalning för 11 000 samtidiga användare (kräver lasttest + utskalning bakom lastbalanserare; en-instans-beroenden återstår att adressera)
 
 ## Tech Stack
 
@@ -184,7 +195,7 @@ Nyckelentities (urval): Employee, Employment, OrganizationUnit, PayrollRun, Payr
 
 ```bash
 dotnet build RegionHR.sln       # 0 errors
-dotnet test RegionHR.sln        # 2 165 tester, 0 failures
+dotnet test RegionHR.sln        # 2 219 tester, 0 failures
 dotnet run --project src/Web/RegionHR.Web.csproj
 ```
 

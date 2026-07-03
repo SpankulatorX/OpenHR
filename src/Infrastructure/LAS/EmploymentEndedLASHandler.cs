@@ -11,6 +11,12 @@ namespace RegionHR.Infrastructure.LAS;
 /// Registreras i DI som <see cref="IDomainEventHandler{TEvent}"/> och löses ut av
 /// <c>DomainEventDispatcher</c> efter att avslutet sparats.
 ///
+/// KÄND BEGRÄNSNING (§25 LAS): företrädesrätt gäller bara när anställningen upphört
+/// på grund av arbetsbrist eller att en tidsbegränsad anställning löpt ut — inte vid
+/// t.ex. egen uppsägning. <c>EmploymentEndedEvent</c> bär i dag ingen avslutsorsak,
+/// så bedömningen görs för ALLA avslut. När Core exponerar ett orsaksfält ska
+/// hanteraren filtrera på det innan auto-kedjan anropas.
+///
 /// Fel i LAS-bokföringen får inte fälla själva avslutet — undantag fångas och loggas.
 /// </summary>
 public sealed class EmploymentEndedLASHandler : IDomainEventHandler<EmploymentEndedEvent>

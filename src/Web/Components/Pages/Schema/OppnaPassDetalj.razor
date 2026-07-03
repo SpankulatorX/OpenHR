@@ -147,12 +147,20 @@ else
 
     private async Task TilldelaPass()
     {
-        await using var db = await DbFactory.CreateDbContextAsync();
         if (_shift == null) return;
 
         try
         {
-            var bud = _shift.Bud.Where(b => b.Status == ShiftBidStatus.Pending).ToList();
+            // Ladda passet i SAMMA context som SaveChanges — det fält-cachade _shift
+            // laddades i en redan disposad context och är detached, så ändringar på
+            // det persisteras aldrig.
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var shift = await db.OpenShifts
+                .Include(s => s.Bud)
+                .FirstOrDefaultAsync(s => s.Id == Id);
+            if (shift == null) { _actionMsg = "Passet hittades inte."; _actionSev = Severity.Error; return; }
+
+            var bud = shift.Bud.Where(b => b.Status == ShiftBidStatus.Pending).ToList();
             var anstallIds = bud.Select(b => b.AnstallId).ToList();
 
             var employments = await db.Employments
@@ -164,7 +172,7 @@ else
                 .ToListAsync();
 
             var scheduledShifts = await db.ScheduledShifts
-                .Where(s => anstallIds.Contains(s.AnstallId) && s.Datum == _shift.Datum)
+                .Where(s => anstallIds.Contains(s.AnstallId) && s.Datum == shift.Datum)
                 .ToListAsync();
 
             var anstallda = anstallIds.Select(aId =>
@@ -186,7 +194,7 @@ else
             }).ToList();
 
             var assigner = new ShiftBidAssigner();
-            var result = assigner.Tilldela(_shift, bud, _valdMetod, anstallda);
+            var result = assigner.Tilldela(shift, bud, _valdMetod, anstallda);
 
             if (!result.Success)
             {
@@ -197,8 +205,35 @@ else
             if (result.BidResult is not null)
                 await db.ShiftBidResults.AddAsync(result.BidResult);
 
+            // Skapa schemapass för vinnaren i det schema på enheten som täcker datumet.
+            var schemaPassSkapat = false;
+            if (result.VinnareId.HasValue)
+            {
+                var enhetsScheman = await db.Schedules
+                    .Where(s => s.EnhetId == shift.EnhetId)
+                    .ToListAsync();
+                var schema = enhetsScheman
+                    .Where(s => s.Status != ScheduleStatus.Arkiverad && s.Period.Contains(shift.Datum))
+                    .OrderByDescending(s => s.Status == ScheduleStatus.Publicerad)
+                    .ThenByDescending(s => s.CreatedAt)
+                    .FirstOrDefault();
+
+                if (schema is not null)
+                {
+                    var passTyp = Enum.TryParse<ShiftType>(shift.PassTyp, ignoreCase: true, out var typ)
+                        ? typ : ShiftType.Dag;
+                    schema.LaggTillPass(
+                        result.VinnareId.Value, shift.Datum, passTyp,
+                        shift.StartTid, shift.SlutTid, TimeSpan.Zero);
+                    schemaPassSkapat = true;
+                }
+            }
+
             await db.SaveChangesAsync();
-            _actionMsg = $"Pass tilldelat! Metod: {result.Metod}. {result.Motivering}";
+            _actionMsg = $"Pass tilldelat! Metod: {result.Metod}. {result.Motivering}"
+                + (schemaPassSkapat
+                    ? " Schemapass skapat för vinnaren."
+                    : " Obs: inget aktivt schema på enheten täcker datumet — schemapass kunde inte skapas.");
             _actionSev = Severity.Success;
 
             // Refresh

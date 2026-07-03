@@ -62,6 +62,15 @@ public class EmploymentConfiguration : IEntityTypeConfiguration<Employment>
         builder.Property(e => e.CreatedBy).HasColumnName("created_by").HasMaxLength(100);
         builder.Property(e => e.UpdatedBy).HasColumnName("updated_by").HasMaxLength(100);
 
+        // Optimistisk låsning: PostgreSQL:s systemkolumn xmin som samtidighetstoken
+        // (shadow property — Npgsql utelämnar systemkolumnen ur CREATE TABLE;
+        // InMemory-providern behandlar den som vanlig token → tester opåverkade).
+        // Samtidiga skrivningar mot samma anställning ger DbUpdateConcurrencyException
+        // i stället för tyst "last write wins".
+        builder.Property<uint>("xmin")
+            .IsRowVersion()
+            .HasColumnName("xmin");
+
         builder.Ignore(e => e.DomainEvents);
         builder.Ignore(e => e.ArTillsvidareanstallning);
         builder.Ignore(e => e.ArTidsbegransad);

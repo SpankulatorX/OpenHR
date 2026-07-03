@@ -4,6 +4,7 @@
 @using RegionHR.Infrastructure.Persistence
 @using Microsoft.EntityFrameworkCore
 @inject IDbContextFactory<RegionHRDbContext> DbFactory
+@inject RegionHR.Web.Services.UnitScopeService Scope
 
 <PageTitle>OpenHR — HälsoSAM</PageTitle>
 
@@ -197,6 +198,19 @@ else
         try
         {
             _cases = await db.RehabCases.Include(c => c.Uppfoljningar).ToListAsync();
+
+            // Enhets-scoping (samma mönster som Chef/Index.razor): en chef ser
+            // bara sin egen enhets rehabärenden; HR/Admin ser allt. Fail-closed:
+            // kan enheten inte härledas för en chef visas inga ärenden i stället
+            // för hela organisationen (rehabdata är extra känslig persondata).
+            if (Scope.IsUnitScoped)
+            {
+                var scopeIds = await Scope.GetEmployeeIdsInScopeAsync();
+                _cases = scopeIds is null
+                    ? []
+                    : _cases.Where(c => scopeIds.Contains(c.AnstallId.Value)).ToList();
+            }
+
             var employees = await db.Employees.ToListAsync();
             _empNames = employees.ToDictionary(
                 e => e.Id,
